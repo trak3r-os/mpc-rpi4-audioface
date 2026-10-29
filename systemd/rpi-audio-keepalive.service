@@ -1,0 +1,20 @@
+[Unit]
+Description=rpi-audio: keep the gadget's playback running while the host streams
+# Some hosts (the Akai Force) drop the gadget when the Pi does not play into it.
+# Stand-in until the audio engine (F2) does this itself; stop it before any
+# other process opens the gadget's playback.
+After=rpi-audio-gadget.service sound.target
+BindsTo=rpi-audio-gadget.service
+
+[Service]
+EnvironmentFile=-/etc/rpi-audio/gadget.env
+ExecStart=/usr/local/lib/rpi-audio/rpi-audio-keepalive
+Restart=always
+RestartSec=1
+DynamicUser=yes
+SupplementaryGroups=audio
+CPUSchedulingPolicy=fifo
+CPUSchedulingPriority=70
+
+[Install]
+WantedBy=multi-user.target

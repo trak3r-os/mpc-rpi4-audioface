@@ -1,0 +1,56 @@
+#!/usr/bin/env bash
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+# Keep the gadget's playback (Pi -> host) running whenever the host streams.
+#
+# When nothing plays into the gadget, u_audio keeps resending its first packet
+# size (44000 frames/s at 44.1 kHz, bInterval 2) with stale data. Hosts that run
+# the gadget's IN and OUT as one clock, like the Akai Force, then xrun or drop
+# the device (docs/hw/2026-10-29-f1-force.md). Until the audio engine (F2) does
+# this itself, this loop plays silence, or test tones with KEEPALIVE_SOURCE=tones.
+#
+# Runs from rpi-audio-keepalive.service. Settings come from the environment:
+# the same GADGET_* as rpi-audio-gadget, plus
+#   KEEPALIVE_SOURCE   silence or tones (tonegen.py, channel k = k x 110 Hz)   default silence
+#   KEEPALIVE_CARD     ALSA card of the gadget on the Pi                       default UAC2Gadget
+
+set -uo pipefail
+
+: "${GADGET_CHANNELS:=2}" "${GADGET_SRATE:=44100}" "${GADGET_SSIZE:=4}"
+: "${KEEPALIVE_SOURCE:=silence}" "${KEEPALIVE_CARD:=UAC2Gadget}"
+
+case $GADGET_SSIZE in
+  2) fmt=S16_LE ;;
+  3) fmt=S24_3LE ;;
+  4) fmt=S32_LE ;;
+  *) echo "rpi-audio-keepalive: GADGET_SSIZE=$GADGET_SSIZE not supported" >&2; exit 1 ;;
+esac
+[[ $KEEPALIVE_SOURCE == tones && $fmt == S24_3LE ]] && {
+  echo "rpi-audio-keepalive: tonegen has no S24_3LE; playing silence" >&2
+  KEEPALIVE_SOURCE=silence
+}
+
+# "Playback Rate" is the rate of the host's stream from the Pi, 0 while the host is not streaming.
+host_rate() {
+  amixer -c "$KEEPALIVE_CARD" cget iface=PCM,name='Playback Rate' 2>/dev/null | sed -n 's/.*: values=//p'
+}
+
+play() {
+  local args=(-q -D "hw:CARD=$KEEPALIVE_CARD" -t raw -f "$fmt" -c "$GADGET_CHANNELS" -r "$GADGET_SRATE")
+  if [[ $KEEPALIVE_SOURCE == tones ]]; then
+    "$(dirname "$0")/tonegen.py" -c "$GADGET_CHANNELS" -r "$GADGET_SRATE" -f "$fmt" | aplay "${args[@]}"
+  else
+    aplay "${args[@]}" /dev/zero
+  fi
+}
+
+echo "rpi-audio-keepalive: $KEEPALIVE_SOURCE, $GADGET_CHANNELS ch $fmt on $KEEPALIVE_CARD"
+while :; do
+  rate=$(host_rate)
+  if [[ -n $rate && $rate != 0 ]]; then
+    echo "rpi-audio-keepalive: host streaming at $rate Hz, playing"
+    play   # returns when the host stops streaming (aplay: Input/output error)
+    echo "rpi-audio-keepalive: player ended"
+  fi
+  sleep 0.1
+done

@@ -1,0 +1,20 @@
+[Unit]
+Description=rpi-audio USB audio gadget (UAC2 on the USB-C port)
+# Early, so the host finds the interface as soon as possible. Until something
+# plays into it, the gadget resends stale data at a fixed packet size, which
+# some hosts reject: see rpi-audio-keepalive.service.
+DefaultDependencies=no
+After=local-fs.target sys-kernel-config.mount systemd-modules-load.service
+Wants=sys-kernel-config.mount
+Conflicts=shutdown.target
+Before=shutdown.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+EnvironmentFile=-/etc/rpi-audio/gadget.env
+ExecStart=/usr/local/lib/rpi-audio/rpi-audio-gadget up
+ExecStop=/usr/local/lib/rpi-audio/rpi-audio-gadget down
+
+[Install]
+WantedBy=sysinit.target

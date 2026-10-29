@@ -1,0 +1,167 @@
+#!/usr/bin/env bash
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+# The rpi-audio USB gadget: one UAC2 function on the Pi's USB-C (dwc2),
+# set up through configfs. It runs once at boot from rpi-audio-gadget.service.
+# Do not rebind the UDC in a loop: repeated rebinds can wedge dwc2.
+#
+#   rpi-audio-gadget up | down | status | check
+#
+# `check` only validates the settings: it needs no root and touches nothing.
+#
+# Settings come from the environment (the unit loads /etc/rpi-audio/gadget.env):
+#   GADGET_CHANNELS      channels per direction, 1..27 (f_uac2 limit)       default 2
+#   GADGET_SRATE         sample rate (some hosts, e.g. Akai MPC/Force,
+#                        accept only 44100)                                 default 44100
+#   GADGET_SSIZE         bytes per sample: 2, 3 or 4                         default 4
+#   GADGET_HS_BINT       high-speed bInterval 1..4, 0 = auto                 default 2
+#   GADGET_REQ_NUMBER    USB requests in flight                             default 4
+#   GADGET_C_SYNC        host-to-Pi endpoint sync: async or adaptive        default async
+#   GADGET_PRODUCT       iProduct; never "UAC2_Gadget" (Akai MPC/Force
+#                        hosts ignore cards with that name)                 default rpi-audio
+#   GADGET_MANUFACTURER  iManufacturer                                      default rpi-audio
+#   GADGET_VID           USB vendor ID (Linux Foundation)                   default 0x1d6b
+#   GADGET_PID           USB product ID (multifunction composite gadget)    default 0x0104
+
+set -euo pipefail
+shopt -s nullglob
+
+: "${GADGET_CHANNELS:=2}" "${GADGET_SRATE:=44100}" "${GADGET_SSIZE:=4}" "${GADGET_HS_BINT:=2}"
+: "${GADGET_REQ_NUMBER:=4}" "${GADGET_C_SYNC:=async}"
+: "${GADGET_PRODUCT:=rpi-audio}" "${GADGET_MANUFACTURER:=rpi-audio}"
+: "${GADGET_VID:=0x1d6b}" "${GADGET_PID:=0x0104}"
+
+CONFIGFS=/sys/kernel/config
+G=$CONFIGFS/usb_gadget/rpi-audio
+F=$G/functions/uac2.audio
+C=$G/configs/c.1
+
+die() { echo "rpi-audio-gadget: $*" >&2; exit 1; }
+warn() { echo "rpi-audio-gadget: $*" >&2; }
+
+# configfs attributes take the value without a trailing newline.
+put() { [[ -e $1 ]] || die "missing attribute $1"; printf '%s' "$2" > "$1"; }
+# Attributes that older kernels lack: skip them with a warning.
+put_opt() {
+  if [[ -e $1 ]]; then printf '%s' "$2" > "$1"; else warn "skipping ${1##*/}: not in this kernel"; fi
+}
+
+check_settings() {
+  [[ $GADGET_CHANNELS =~ ^[0-9]+$ ]] && (( GADGET_CHANNELS >= 1 && GADGET_CHANNELS <= 27 )) ||
+    die "GADGET_CHANNELS must be 1..27 (f_uac2 rejects channel masks above bit 26)"
+  [[ $GADGET_SSIZE =~ ^[234]$ ]] || die "GADGET_SSIZE must be 2, 3 or 4"
+  [[ $GADGET_HS_BINT =~ ^[0-4]$ ]] || die "GADGET_HS_BINT must be 0..4"
+  [[ $GADGET_C_SYNC == async || $GADGET_C_SYNC == adaptive ]] || die "GADGET_C_SYNC must be async or adaptive"
+  [[ $GADGET_PRODUCT != *UAC2_Gadget* && $GADGET_MANUFACTURER != *UAC2_Gadget* ]] ||
+    die "do not name the gadget UAC2_Gadget: some hosts (Akai MPC/Force) ignore that card"
+  if (( GADGET_HS_BINT > 0 )); then
+    # f_uac2 sizes a packet for the rate plus fb_max (5 per mille, the default) per
+    # interval of 2^(bint-1) microframes, and refuses to bind above 1024 bytes.
+    local per_s=$(( 8000 >> (GADGET_HS_BINT - 1) ))
+    local frames=$(( (GADGET_SRATE * 1005 + per_s * 1000 - 1) / (per_s * 1000) ))
+    local bytes=$(( frames * GADGET_CHANNELS * GADGET_SSIZE ))
+    (( bytes <= 1024 )) ||
+      die "a packet would be $bytes B (> 1024) at bInterval $GADGET_HS_BINT: use GADGET_HS_BINT=0 (auto), a lower bInterval, fewer channels or a smaller GADGET_SSIZE"
+  fi
+}
+
+serial() {
+  # The Pi's own serial, so the host sees the same device after every boot.
+  local s
+  s=$(tr -d '\0' < /proc/device-tree/serial-number 2>/dev/null || true)
+  [[ -n $s ]] || s=00000000
+  printf '%s' "${s: -8}"
+}
+
+up() {
+  check_settings
+  [[ -d $G ]] && die "already set up; run 'down' first"
+  modprobe libcomposite
+  mountpoint -q "$CONFIGFS" || mount -t configfs none "$CONFIGFS"
+  local udc=(/sys/class/udc/*)
+  (( ${#udc[@]} )) || die "no UDC: is dtoverlay=dwc2,dr_mode=peripheral set?"
+  local chmask
+  printf -v chmask '0x%x' $(( (1 << GADGET_CHANNELS) - 1 ))
+
+  mkdir "$G"
+  put "$G/idVendor" "$GADGET_VID"
+  put "$G/idProduct" "$GADGET_PID"
+  put "$G/bcdDevice" 0x0100
+  put "$G/bcdUSB" 0x0200
+  # Miscellaneous / Common / Interface Association: UAC2 uses an IAD, and so will MIDI.
+  put "$G/bDeviceClass" 0xEF
+  put "$G/bDeviceSubClass" 0x02
+  put "$G/bDeviceProtocol" 0x01
+  mkdir "$G/strings/0x409"
+  put "$G/strings/0x409/manufacturer" "$GADGET_MANUFACTURER"
+  put "$G/strings/0x409/product" "$GADGET_PRODUCT"
+  put "$G/strings/0x409/serialnumber" "$(serial)"
+
+  # Attributes are locked once the function is linked into a config: set them first.
+  mkdir "$F"
+  put "$F/p_chmask" "$chmask"
+  put "$F/c_chmask" "$chmask"
+  put "$F/p_srate" "$GADGET_SRATE"
+  put "$F/c_srate" "$GADGET_SRATE"
+  put "$F/p_ssize" "$GADGET_SSIZE"
+  put "$F/c_ssize" "$GADGET_SSIZE"
+  put "$F/c_sync" "$GADGET_C_SYNC"
+  put "$F/req_number" "$GADGET_REQ_NUMBER"
+  put_opt "$F/p_hs_bint" "$GADGET_HS_BINT"
+  put_opt "$F/c_hs_bint" "$GADGET_HS_BINT"
+  local a
+  for a in p_volume_present c_volume_present p_mute_present c_mute_present; do
+    put_opt "$F/$a" 0
+  done
+  put_opt "$F/function_name" "$GADGET_PRODUCT"
+
+  mkdir "$C"
+  mkdir "$C/strings/0x409"
+  put "$C/strings/0x409/configuration" "audio"
+  put "$C/bmAttributes" 0xC0   # self-powered: the Pi has its own supply
+  put "$C/MaxPower" 2
+  ln -s "$F" "$C/"
+
+  put "$G/UDC" "${udc[0]##*/}"
+  echo "rpi-audio-gadget: up on ${udc[0]##*/}: ${GADGET_CHANNELS}x${GADGET_CHANNELS} ch, ${GADGET_SRATE} Hz," \
+       "${GADGET_SSIZE} B/sample, bint ${GADGET_HS_BINT}, req ${GADGET_REQ_NUMBER}, ${GADGET_C_SYNC}"
+}
+
+down() {
+  [[ -d $G ]] || { echo "rpi-audio-gadget: not set up"; return 0; }
+  [[ -z $(< "$G/UDC") ]] || echo "" > "$G/UDC"
+  local p
+  for p in "$C"/*; do [[ -L $p ]] && rm "$p"; done
+  for p in "$G"/configs/*/strings/* "$G"/configs/* "$G"/functions/* "$G"/strings/*; do
+    rmdir "$p"
+  done
+  rmdir "$G"
+  echo "rpi-audio-gadget: down"
+}
+
+status() {
+  if [[ ! -d $G ]]; then echo "gadget: not set up"; return 0; fi
+  local udc
+  udc=$(< "$G/UDC")
+  echo "gadget: up, UDC=${udc:-unbound}, state=$(cat "/sys/class/udc/$udc/state" 2>/dev/null || echo '?')"
+  local a
+  for a in p_chmask c_chmask p_srate c_srate p_ssize c_ssize c_sync req_number p_hs_bint c_hs_bint; do
+    [[ -e $F/$a ]] && printf '  %-11s %s\n' "$a" "$(< "$F/$a")"
+  done
+  echo "ALSA:"
+  sed 's/^/  /' /proc/asound/cards
+  local card
+  card=$(awk '/UAC2|rpi-audio/ {print $1; exit}' /proc/asound/cards)
+  if [[ -n $card ]] && command -v amixer >/dev/null; then
+    echo "rate controls (card $card):"
+    amixer -c "$card" contents | sed 's/^/  /'
+  fi
+}
+
+case "${1:-}" in
+  up) up ;;
+  down) down ;;
+  status) status ;;
+  check) check_settings; echo "rpi-audio-gadget: settings ok" ;;
+  *) echo "usage: ${0##*/} up|down|status|check" >&2; exit 2 ;;
+esac

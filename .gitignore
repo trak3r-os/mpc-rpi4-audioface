@@ -1,0 +1,5 @@
+# Raw probe and test output: serial numbers, hosts, big captures.
+out/
+__pycache__/
+*.pyc
+.pytest_cache/
