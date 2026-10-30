@@ -22,6 +22,7 @@ Al empezar cada sesión, lee `docs/STATUS.md` (estado y traspaso) y la fase en c
 - **Gadget.** Se monta una vez al arrancar (`rpi-audio-gadget.service`). No reenlaces el UDC en bucle: los reenlaces repetidos pueden bloquear el dwc2.
 - **No editar** `../track3r-os`, `../o3-sdk` ni `../o3-303`. Lo que necesite el Tracker se anota en `docs/PLAN.md` §7.
 - **Privacidad.** Nada de contraseñas, números de serie ni salidas en bruto en git: van a `out/`, que está ignorado. En `docs/hw/` solo van resúmenes.
+- **Idioma.** Las docs para usuarios van en inglés (`README.md`, `docs/MIDI.md`, `docs/hosts/akai-force-*.md` menos `akai-force.md`). Las notas de laboratorio siguen en español (`docs/PLAN.md`, `docs/STATUS.md`, `docs/hw/`, `docs/hosts/akai-force.md`). El código y sus comentarios, en inglés.
 - **Licencia.** GPL-3.0-or-later. El código reutilizado lleva su aviso en `THIRD_PARTY.md`. No uses amidiminder: su autor prohíbe el trabajo derivado con IA.
 - **Git.** El usuario dio permiso total sobre el repo el 2026-10-30: commit y push a `origin` cuando haga falta, sin reescribir historia ya publicada. `origin` es `git@github-trak3r:trak3r-os/mpc-rpi4-audioface.git` (alias SSH `github-trak3r`, no `github.com`). Los commits van como `trak3r-os <342899900+trak3r-os@users.noreply.github.com>`, el correo oculto de GitHub, nunca con el correo personal ni el del trabajo. Está fijado en la configuración local del repo.
 

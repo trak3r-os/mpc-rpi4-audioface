@@ -1,4 +1,4 @@
-# Estado: 2026-10-30 (13:10)
+# Estado: 2026-10-30 (16:15)
 
 **Fase:** F1 cumplida con la Force a 26×26 S16, **siempre que la Pi esté reproduciendo**. F2 en marcha:
 
@@ -98,29 +98,40 @@ F4 en marcha: **USB MIDI en el gadget** (4 puertos), MIDI de paso por dispositiv
 
 ## Siguiente
 
-Hecho el 2026-10-30 (`docs/hw/2026-10-30-boot-soak.md`):
-- `rpi-audiod` al arranque;
-- el hotplug del GP-150;
-- el soak de 60 minutos;
-- el presupuesto Full-Speed y los perfiles;
-- el reinicio de la Force, con MidiLoop bien;
-- la revisión de los discos;
-- el control desde MPC por CC.
+Hecho el 2026-10-30 por la tarde, todo en `main` y en GitHub:
+- **rpi-audio Panel** (VST2 para MPC, `tools/hosts/akai-force-panel/`): instalado en la Force con su instalador, en `/media/AKAI_SSD/Synths` (CLAUDE.md, excepción 3).
+  - Se abre en MPC, conecta con la Pi y muestra dispositivos, nombres, niveles y presets.
+  - MUTE, el selector de nombres, los presets y un fader llegan a `rpi-audiod`.
+  - Detalle en `docs/hosts/akai-force-panel.md`.
+- **`rpi-audiod`:**
+  - nombres de dispositivo y de canal;
+  - presets (8 huecos), con Program Change 0–7 en el canal 16;
+  - los puentes paran con SIGINT: 0 xruns al desenchufar;
+  - ya no anota cada `status`.
+- **`install.sh`** en la raíz, para instalar desde un clon en la Pi; `tools/deploy.sh` lo usa por debajo (probado: despliega igual).
+- **Docs en inglés para usuarios:** README con las líneas de instalación, `docs/MIDI.md` y las docs del panel y de MPC Remote.
+- **La mitigación del incidente,** probada en la Force por `rpi-audio-7d`: limpia. Se quitó la regla.
+
+Datos de muestra en la Pi:
+- nombres: CODEC = "Mixer", GP-150 = "Guitar Rig", con "Amp L" y "Amp R";
+- presets 1 "Live" y 2 "Quiet" (GP-150 IN al 60 %).
+
+MPC queda con un proyecto "untitled" sin guardar, con una pista del panel.
 
 Queda:
-
-1. **Con el usuario delante:**
-   - si suenan el mezclador y el GP-150 en MPC;
-   - por dónde salen Out 1/2 y 3/4. Con eso, `install.sh conf` con la configuración del repo y reiniciar la Force.
-2. **El incidente del reinicio de la Pi:** probado en la Force (2026-10-30, con el usuario delante y AKAI_SSD expulsado): parada del gadget y reinicio completo de la Pi con MPC transmitiendo, los dos limpios, sin `EMI?`.
-   - Son dos pruebas y la causa sigue sin aislar; la hipótesis es babble al desenlazar el UDC en mitad del stream.
-   - Queda por ver cómo se comporta con MPC escribiendo, y si la primera apertura del gadget tras enumerar da siempre `capture error -5` (`docs/hw/2026-10-30-boot-soak.md`). La causa está en el kernel: `u_audio` no mantiene el ritmo de 44.100 cuando nadie reproduce, y jackd tarda ~0,5 s en empezar. El arreglo de raíz sería un `u_audio.ko` parcheado.
-   - La Pi guarda su journal entre arranques (`journalctl -b -1`) para analizar cualquier repetición.
-3. **Con el Tracker enchufado a la Pi:**
-   - la aceptación de F4;
-   - el presupuesto de verdad: con el Tracker en "8 OUT / 2 IN" más el mezclador, la grabación abre y la reproducción espera.
-4. **MPC al arrancar:** no guarda la interfaz USB y abre siempre su audio interno. Por qué en F1 sí abrió rpi-audio sola está por ver. Opción: elegir rpi-audio con MPC Remote al arrancar, desde `tools/hosts/`.
-5. **Después:** F5 y los opcionales (F1b con 32 canales, VST, S32).
+1. **Publicar:**
+   - una release de GitHub con el zip del panel, hecho con `release.py --repo trak3r-os/mpc-rpi4-audioface --license GPL-3.0-or-later` y comprobado con `catalog_check`, y con el zip del add-on;
+   - el add-on tiene que empaquetarse al estilo de sd88me (`release_addin.py`, `docs/ADDINS.md` de su repo), porque ahora es solo para MockbaMod;
+   - `gh` necesita sesión como trak3r-os, o la release la crea el usuario.
+2. **Catálogo de sd88me:** dos entradas (`kind: instrument` y `kind: addin`), del mismo repo y la misma release, con su `asset_pattern`. El PR a sd88me es hacia fuera: hay que preguntar antes. Fuera del catálogo, opcionalmente, un único paquete "Force extras" con un solo `install.sh`.
+3. **Panel, sin probar en la Force:** los Q-Links físicos, SAVE, "On project load", reabrir un proyecto guardado, y si los bloqueos de la restauración (3 s + 2 s) son adecuados.
+4. **Proponer al usuario un `u_audio.ko` parcheado:** es la causa del `capture error -5` en la primera apertura y de los cortes al reiniciar `rpi-audiod`.
+5. **MPC al arrancar** abre siempre su audio interno. Opción: elegir rpi-audio con MPC Remote al arrancar.
+6. **Con el usuario:**
+   - escuchar el mezclador y el GP-150;
+   - por dónde salen Out 1/2 y 3/4, y después `install.sh conf` del add-on y reiniciar la Force;
+   - con el Tracker, la aceptación de F4 y el presupuesto Full-Speed.
+7. **Después:** F5, F1b, S32.
 
 ## Pruebas de tonos
 
