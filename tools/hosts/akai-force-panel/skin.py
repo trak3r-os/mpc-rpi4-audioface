@@ -48,7 +48,8 @@ class SS:
 
     def rr(self, box, r, fill=None, outline=None, width=1):
         x0, y0, x1, y1 = box
-        self.d.rounded_rectangle((x0 * S, y0 * S, x1 * S - 1, y1 * S - 1), r * S, fill=fill and "#" + fill if isinstance(fill, str) else fill,
+        fill = fill and "#" + fill if isinstance(fill, str) else fill
+        self.d.rounded_rectangle((x0 * S, y0 * S, x1 * S - 1, y1 * S - 1), r * S, fill=fill,
                                  outline=outline and "#" + outline, width=max(1, int(width * S)))
 
     def line(self, pts, color, width=1):
@@ -169,9 +170,10 @@ def button_pair(w, h, label, size=16, number=None, kind="plain"):
         while label and size > 10 and font(size, "Bold").getlength(label) > w - 12:
             size -= 1
         if label:
-            c.text((w / 2 + (8 if kind == "solid" else 0), h / 2 + (0 if number is None else 0)), label, size, ink, "Bold")
+            c.text((w / 2 + (8 if kind == "solid" else 0), h / 2), label, size, ink, "Bold")
         if kind == "solid":  # record-style dot beside SAVE
-            c.ellipse((w / 2 - 36, h / 2 - 6, w / 2 - 24, h / 2 + 6), fill=ON_ACCENT if on else None, outline=ink, width=2)
+            c.ellipse((w / 2 - 36, h / 2 - 6, w / 2 - 24, h / 2 + 6),
+                      fill=ON_ACCENT if on else None, outline=ink, width=2)
         out.append(c.done())
     return out
 
@@ -219,9 +221,9 @@ def local(key, children, actions=None):
 
 
 def label(box, height, colour, just="horizontallyCentred verticallyCentred", handle="Data", weight="SemiBold"):
-    return component("Label", {"version": 1, "textStyle": {"version": 1,
-        "font": {"version": 1, "name": "Titillium Web", "style": weight, "height": float(height)},
-        "colour": "ff" + colour, "justification": just, "case": "Original"},
+    font = {"version": 1, "name": "Titillium Web", "style": weight, "height": float(height)}
+    return component("Label", {"version": 1, "textStyle": {
+        "version": 1, "font": font, "colour": "ff" + colour, "justification": just, "case": "Original"},
         "type": "Value", "handleName": handle}, box, "Value")
 
 
@@ -349,7 +351,8 @@ class Skin:
             self.place("Mute", f"S{n} {tag.upper()} Mute", k(f"{tag}_mute"), (cx, y0 + D.MUTE_Y, D.COL_W, D.MUTE_H),
                        condition=shown, focus="Yes")
             self.image(f"S{n} {tag.upper()} Dim", "dim.png", k(f"{tag}_vis"),
-                       (cx - 4, y0 + D.FADER_Y - D.DIM_TOP, D.COL_W + 8, D.MUTE_Y + D.MUTE_H - D.FADER_Y + D.DIM_TOP + 6),
+                       (cx - 4, y0 + D.FADER_Y - D.DIM_TOP, D.COL_W + 8,
+                        D.MUTE_Y + D.MUTE_H - D.FADER_Y + D.DIM_TOP + 6),
                        cond(k(f"{tag}_vis"), 2, 3))
 
     def footer(self):
@@ -418,12 +421,13 @@ def write_skin(root, version):
            "importFiles": ["/usr/share/Akai/Content/Synths/Generic/Generic Knob Overlay.json"],
            "localComponentDefinitions": list(skin.defs.values())},
            "info": {"version": 1, "type": "CompleteDescription"},
-           "tabs": [{"version": 3, "tabName": "PANEL", "fnKeyIndex": 0, "fnKeySubIndex": 0, "qlinkBoundsData": ["0 0 0 0"],
-                     "componentName": "PanelPage", "initialSize": f"0 0 {W} {H}", "scale": 1.0}]}}
+           "tabs": [{"version": 3, "tabName": "PANEL", "fnKeyIndex": 0, "fnKeySubIndex": 0,
+                     "qlinkBoundsData": ["0 0 0 0"], "componentName": "PanelPage",
+                     "initialSize": f"0 0 {W} {H}", "scale": 1.0}]}}
     coremap = qlink_map(D.INDEX)
     qmap = {"version": 4, "info": {"version": 1, "type": "CompleteDescription"},
-            "Screen Mode Q-Links": {"version": 4, "map": [{"Tab": 1, "SubTab": 1, "Bank Direction": "Column",
-                                                         "Q-Links": coremap}]},
+            "Screen Mode Q-Links": {"version": 4, "map": [
+                {"Tab": 1, "SubTab": 1, "Bank Direction": "Column", "Q-Links": coremap}]},
             "Program Mode Q-Links": coremap}
     for name, data in (("TUI.json", tui), ("Q-Links.json", qmap), ("Q-Links - 8by1.json", qmap)):
         (skin.out / name).write_text(json.dumps(data, indent=2) + "\n")
@@ -493,7 +497,7 @@ def preview(skin, scene, warn):
         im.alpha_composite(A[name].convert("RGBA"), pos)
 
     lx, ly, lw, lh = D.HEAD["link"]
-    live(im, (lx, ly, lw, lh), scene["link"], 26, DIM if scene["link"].startswith(("Pi", "No", "Conn")) else DIM, "l", warn=warn)
+    live(im, (lx, ly, lw, lh), scene["link"], 26, DIM, "l", warn=warn)
     for k in range(D.PRESETS):
         x, y = D.preset_x(k), D.HEAD["presets_y"]
         paste(f"preset_{k + 1}_{'on' if scene.get('pressed') == k else 'off'}.png", (x, y))
@@ -536,8 +540,9 @@ SCENES = {
     "preview": dict(
         link="44.1 kHz | 26x26", presets=["Live", "Studio", "-", "-", "-", "-", "-", "-"], onload=1,
         strips=[
-            dict(name="Mixer", state="running", in_range="IN 1-2", in_names="Main L, Main R", in_vis=1, in_level=100,
-                 in_mute=0, out_range="OUT 3-4", out_names="Main L, Main R", out_vis=1, out_level=72, out_mute=0, kind=10),
+            dict(name="Mixer", state="running", in_range="IN 1-2", in_names="Main L, Main R", in_vis=1,
+                 in_level=100, in_mute=0, out_range="OUT 3-4", out_names="Main L, Main R", out_vis=1,
+                 out_level=72, out_mute=0, kind=10),
             dict(name="Valeton GP-150", state="running", in_range="IN 3-8", in_names="Out L, Out R, FX L, FX R",
                  in_vis=1, in_level=64, in_mute=1, out_range="OUT 5-8", out_names="Send 1, Send 2, Ret...",
                  out_vis=1, out_level=88, out_mute=0, kind=14),

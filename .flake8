@@ -1,2 +1,4 @@
 [flake8]
 max-line-length = 120
+# Vendored third-party code keeps its own style.
+extend-exclude = tools/hosts/akai-force-panel/vendor
