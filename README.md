@@ -49,7 +49,10 @@ Run only one of the two `install.sh` lines. Use `--host akai-force` if the host 
 | `--no-enable` | Does not change what starts at boot |
 | `--force-config` | Overwrites `/etc/rpi-audio/*`. By default existing files are kept, and the new versions are written next to them as `*.new` |
 | `--no-boot-config` | Does not add `dtoverlay=dwc2,dr_mode=peripheral` to the boot configuration |
-| `-y` | Does not ask for confirmation |
+| `--tune-boot` | Also tunes the boot for audio: `threadirqs` in `cmdline.txt` and `dtparam=audio=off` (the Pi's own analogue audio) in `config.txt`, each with a backup. Only with this option; it takes effect after a reboot |
+| `-y` | Does not ask before adding the gadget overlay |
+
+The installer also enables `rpi-audio-cpu.service`, which keeps the CPU governor at `performance` so the audio threads do not wake up on a slowed clock. `sudo systemctl disable --now rpi-audio-cpu` goes back to `ondemand`.
 
 To update, run `git pull && sudo ./install.sh`. To remove it, run `sudo ./install.sh --uninstall`. Add `--purge` to also delete the settings and the saved state.
 
@@ -75,10 +78,11 @@ Never put "UAC2_Gadget" in the product name: MPC ignores cards with that name.
 2. On the Pi, run:
 
    ```sh
+   rpi-audiod doctor     # the installation and the Pi: controller, services, governor, power, PipeWire
    rpi-audiod status
    ```
 
-   It shows the gadget, the connected devices, their channel blocks, levels, names and presets.
+   `doctor` prints one line per check and exits with an error if something is broken. `status` shows the gadget, the connected devices, their channel blocks, levels, names and presets.
 3. On the host, look for an audio interface and MIDI ports called **rpi-audio**.
 
 What has been tested:
@@ -100,6 +104,8 @@ Run these on the Pi as root, or as the service user (`sudo -u rpi-audio rpi-audi
 
 ```sh
 rpi-audiod status                              # what the service is doing
+rpi-audiod doctor                              # check the installation
+rpi-audiod --version
 rpi-audiod assign IDENTITY --in 3 --out 5      # pin a device's first gadget channels
 rpi-audiod mute IDENTITY in on                 # cut a device's audio routes (in|out, on|off)
 rpi-audiod volume IDENTITY out 80              # a device's own playback level (in|out, 0-100)

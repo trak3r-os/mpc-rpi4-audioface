@@ -11,6 +11,8 @@ control port takes the commands below from the host too (docs/MIDI.md).
 
   rpi-audiod [run]                            the service (rpi-audiod.service)
   rpi-audiod status                           what the service is doing
+  rpi-audiod doctor                           check the installation and the Pi's state
+  rpi-audiod --version
   rpi-audiod assign IDENTITY [--in N] [--out N] [--midi K]   pin a device's gadget channels or MIDI port
   rpi-audiod mute IDENTITY in|out on|off      cut or restore a device's audio routes
   rpi-audiod volume IDENTITY in|out PERCENT   set a device's own capture or playback level
@@ -61,8 +63,21 @@ STARTUP_S = 4.0      # time a new feeder gets before the pointer has to move
 JACK_FAILS = 3       # jackd failures in a row before falling back to silence for a while
 FALLBACK_S = 10.0
 MIDI_COMMANDS = 20   # control-port commands run per tick, at most; the rest wait for the next
+CPUFREQ = "/sys/devices/system/cpu/cpufreq"
 os.environ["JACK_NO_START_SERVER"] = "1"   # a JACK tool must never start a server of its own
 os.environ["JACK_NO_AUDIO_RESERVATION"] = "1"   # no D-Bus session to reserve the card through
+
+
+def read_version():
+    """What install.sh wrote next to this script ("0.1.0 (3c48288)"), else the checkout's VERSION."""
+    here = Path(__file__).resolve().parent
+    for f, suffix in ((here / "VERSION", ""), (here.parent.parent / "VERSION", " (checkout)")):
+        with contextlib.suppress(OSError):
+            return f.read_text().strip() + suffix
+    return "unknown"
+
+
+VERSION = read_version()
 
 
 def log(msg):
@@ -802,7 +817,7 @@ class Daemon:
         try:
             cmd = midi.parse_command(text)
             if cmd.verb == "ping":
-                return "ok rpi-audio"
+                return f"ok rpi-audio {VERSION}"
             if cmd.verb == "status":
                 return midi.status_reply(self.status_data())
             return self.apply(cmd)
@@ -843,7 +858,7 @@ class Daemon:
                              "fs_load": b.load or None, "blocked": b.blocked}
                     entry[direction].update({k: v for k, v in extra.items() if v})
             devices.append(entry)
-        return {"time": time.strftime("%Y-%m-%d %H:%M:%S"), "host_playback_rate": playback_rate,
+        return {"version": VERSION, "time": time.strftime("%Y-%m-%d %H:%M:%S"), "host_playback_rate": playback_rate,
                 "host_capture_rate": capture_rate, "feeder": self.mode, "jack_ready": self.jack_ready,
                 "gadget_channels": self.channels, "devices": devices, "presets": presets.summary(load_presets()),
                 "midi": self.midi.status() if self.midi else None}
@@ -902,6 +917,7 @@ def cmd_status(_):
         s = json.loads(STATUS.read_text())
     except (OSError, ValueError):
         sys.exit("rpi-audiod: no status; is rpi-audiod.service running?")
+    print(f"rpi-audiod {s.get('version', '?')}")
     print(f"{s['time']}  host: playback {s['host_playback_rate']} Hz, capture {s['host_capture_rate']} Hz;"
           f" feeder: {s['feeder']}{' (jack up)' if s['jack_ready'] else ''}")
     for d in s["devices"]:
@@ -933,6 +949,65 @@ def cmd_status(_):
             print(f"    {e['endpoint']:40} {'port %d' % e['port'] if e['port'] else 'parked'}")
 
 
+def cmd_doctor(_):
+    """Checks what usually goes wrong, one line each. Exit status 1 if something is broken."""
+    bad = 0
+
+    def line(level, what, detail):
+        nonlocal bad
+        bad += level == "FAIL"
+        print(f"{level:4}  {what:10} {detail}")
+
+    line("ok", "version", VERSION)
+    udcs = sorted(glob.glob("/sys/class/udc/*"))
+    if not udcs:
+        line("FAIL", "udc", "no USB device controller: is dtoverlay=dwc2,dr_mode=peripheral in config.txt?"
+             " (then reboot)")
+    for u in udcs:
+        state = read(f"{u}/state").strip() or "?"
+        hint = "" if state == "configured" else " (is the USB-C connected to a host?)"
+        line("ok" if state == "configured" else "warn", "udc", f"{os.path.basename(u)}: {state}{hint}")
+    for unit in ("rpi-audio-gadget", "rpi-audiod", "rpi-audio-cpu"):
+        active = run("systemctl", "is-active", f"{unit}.service").stdout.strip() or "?"
+        enabled = run("systemctl", "is-enabled", f"{unit}.service").stdout.strip() or "?"
+        level = "ok" if active == "active" else "warn" if unit == "rpi-audio-cpu" else "FAIL"
+        line(level, "service", f"{unit}: {active}, {enabled}")
+    try:
+        s = json.loads(STATUS.read_text())
+        age = time.time() - STATUS.stat().st_mtime
+        line("ok" if age < 10 else "FAIL", "status", f"written {age:.0f} s ago; host playback"
+             f" {s['host_playback_rate']} Hz, capture {s['host_capture_rate']} Hz; feeder {s['feeder']}")
+        for d in s["devices"]:
+            for direction in (IN, OUT):
+                b = d.get(direction) or {}
+                if b.get("blocked"):
+                    line("warn", "device", f"{d['identity']} {direction}: {b['blocked']}")
+                elif b and s["feeder"] == "jack" and not b["running"]:
+                    line("warn", "device", f"{d['identity']} {direction}: bridge not running")
+    except (OSError, ValueError, KeyError) as e:
+        line("FAIL", "status", f"cannot read {STATUS}: {e}")
+    govs = {read(f).strip() or "?" for f in glob.glob(f"{CPUFREQ}/policy*/scaling_governor")}
+    if govs:
+        line("ok" if govs == {"performance"} else "warn", "cpu", "governor " + ", ".join(sorted(govs)))
+    throttled = run("vcgencmd", "get_throttled").stdout.strip()
+    if throttled:
+        fine = throttled.endswith("=0x0")
+        line("ok" if fine else "warn", "power",
+             throttled + ("" if fine else " (under-voltage or throttling since boot: check the power supply)"))
+    cmdline = read("/proc/cmdline") or ""
+    line("ok" if "threadirqs" in cmdline.split() else "info", "boot",
+         "threadirqs " + ("on" if "threadirqs" in cmdline.split() else "off (install.sh --tune-boot)"))
+    hogs = [p for p in ("pipewire", "pulseaudio") if run("pgrep", "-x", p).stdout.strip()]
+    if hogs:
+        line("warn", "audio", "running: " + ", ".join(hogs) + " (it may grab the gadget)")
+    else:
+        line("ok", "audio", "no PipeWire or PulseAudio")
+    pending = sorted(glob.glob(str(CONFIG.parent / "*.new")))
+    if pending:
+        line("warn", "config", "newer settings waiting: " + " ".join(pending) + " (diff, then move them in place)")
+    sys.exit(1 if bad else 0)
+
+
 def cmd_change(text):
     """assign, mute, volume, name and preset from the command line: the same commands, and the
     same checks, as on the MIDI control port (docs/MIDI.md)."""
@@ -947,9 +1022,11 @@ def cmd_change(text):
 
 def main():
     p = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
+    p.add_argument("--version", action="version", version=f"rpi-audiod {VERSION}")
     sub = p.add_subparsers(dest="cmd")
     sub.add_parser("run")
     sub.add_parser("status")
+    sub.add_parser("doctor")
     a = sub.add_parser("assign")
     a.add_argument("identity")
     a.add_argument("--in", dest="in_", type=int, help="first gadget IN channel (Pi -> host)")
@@ -970,6 +1047,8 @@ def main():
     args = p.parse_args()
     if args.cmd == "status":
         return cmd_status(args)
+    if args.cmd == "doctor":
+        return cmd_doctor(args)
     if args.cmd == "assign":
         keys = [f"{k}={v}" for k, v in (("in", args.in_), ("out", args.out), ("midi", args.midi)) if v is not None]
         return cmd_change(" ".join(["assign", args.identity, *keys]))

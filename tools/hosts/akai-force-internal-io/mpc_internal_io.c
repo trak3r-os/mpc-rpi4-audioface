@@ -10,8 +10,9 @@
  * resamples across the two clocks.
  *
  * It never blocks MPC's audio thread: the codec is opened non-blocking and
- * serviced inside MPC's own readi/writei calls on the gadget. When anything
- * fails, that direction passes MPC's audio through untouched.
+ * serviced inside MPC's own readi/writei calls on the gadget, and log lines go
+ * to a thread of their own. When anything fails, that direction passes MPC's
+ * audio through untouched.
  *
  * Settings: mpc_internal_io.conf next to this .so ("key = value", # comments),
  * each overridable by an MIO_<KEY> environment variable. See
@@ -29,6 +30,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 
 #include "mio_core.h"
 
@@ -85,14 +87,91 @@ static struct dir cap = {.name = "capture", .stream = SND_PCM_STREAM_CAPTURE};
 static pthread_mutex_t lock = PTHREAD_MUTEX_INITIALIZER;
 static pthread_once_t once = PTHREAD_ONCE_INIT;
 
+/* Log lines go through a small queue to a thread of their own: a write to stderr (MPC's journal) can block, and
+ * most lines come from MPC's audio thread. A line only tries the lock; one that finds it taken, or the queue full,
+ * is dropped and counted. */
+#define LOG_LINES 32
+#define LOG_LEN 240
+static struct {
+	pthread_mutex_t mu;
+	char line[LOG_LINES][LOG_LEN];
+	unsigned head, count;
+} logq = {.mu = PTHREAD_MUTEX_INITIALIZER};
+static unsigned log_dropped;
+
 static void say(const char *fmt, ...)
 {
+	char buf[LOG_LEN];
 	va_list ap;
 	va_start(ap, fmt);
-	fprintf(stderr, "[mpc_internal_io] ");
-	vfprintf(stderr, fmt, ap);
-	fputc('\n', stderr);
+	vsnprintf(buf, sizeof(buf), fmt, ap);
 	va_end(ap);
+	if (pthread_mutex_trylock(&logq.mu)) {
+		__atomic_fetch_add(&log_dropped, 1, __ATOMIC_RELAXED);
+		return;
+	}
+	if (logq.count < LOG_LINES) {
+		memcpy(logq.line[(logq.head + logq.count) % LOG_LINES], buf, sizeof(buf));
+		logq.count++;
+	} else {
+		__atomic_fetch_add(&log_dropped, 1, __ATOMIC_RELAXED);
+	}
+	pthread_mutex_unlock(&logq.mu);
+}
+
+static void log_flush(void)
+{
+	char line[LOG_LEN];
+	unsigned lost = __atomic_exchange_n(&log_dropped, 0, __ATOMIC_RELAXED);
+	if (lost)
+		fprintf(stderr, "[mpc_internal_io] %u log lines dropped\n", lost);
+	for (;;) {
+		pthread_mutex_lock(&logq.mu);
+		int have = logq.count > 0;
+		if (have) {
+			memcpy(line, logq.line[logq.head], sizeof(line));
+			logq.head = (logq.head + 1) % LOG_LINES;
+			logq.count--;
+		}
+		pthread_mutex_unlock(&logq.mu);
+		if (!have)
+			break;
+		fprintf(stderr, "[mpc_internal_io] %s\n", line);
+	}
+}
+
+static void *logger(void *arg)
+{
+	(void)arg;
+	for (;;) {
+		struct timespec ts = {0, 200 * 1000 * 1000};
+		nanosleep(&ts, NULL);
+		log_flush();
+	}
+	return NULL;
+}
+
+/* MPC exiting: what is still queued (the closing lines) would be lost. */
+__attribute__((destructor)) static void log_at_exit(void)
+{
+	log_flush();
+}
+
+/* At normal priority, whatever thread first calls in: MPC's audio thread runs real-time. */
+static void start_logger(void)
+{
+	pthread_attr_t a;
+	pthread_t t;
+	struct sched_param sp = {0};
+	pthread_attr_init(&a);
+	pthread_attr_setdetachstate(&a, PTHREAD_CREATE_DETACHED);
+	pthread_attr_setinheritsched(&a, PTHREAD_EXPLICIT_SCHED);
+	pthread_attr_setschedpolicy(&a, SCHED_OTHER);
+	pthread_attr_setschedparam(&a, &sp);
+	pthread_attr_setstacksize(&a, 64 * 1024);
+	if (pthread_create(&t, &a, logger, NULL))
+		fprintf(stderr, "[mpc_internal_io] no logger thread: its log lines are lost\n");
+	pthread_attr_destroy(&a);
 }
 
 static char *trim(char *s)
@@ -199,6 +278,7 @@ static void load_config(void)
 
 static void init(void)
 {
+	start_logger();
 	real.open = dlsym(RTLD_NEXT, "snd_pcm_open");
 	real.close = dlsym(RTLD_NEXT, "snd_pcm_close");
 	real.hw_params = dlsym(RTLD_NEXT, "snd_pcm_hw_params");
@@ -314,7 +394,8 @@ static int codec_open(struct dir *d, snd_pcm_uframes_t gadget_buffer)
 	return 0;
 }
 
-/* Starts the codec afresh: after opening, after an xrun on either side. */
+/* Starts the codec afresh: after opening, after an xrun on either side. Runs in MPC's audio thread: these are
+ * ioctls on a non-blocking PCM, and happen only after an xrun or MPC's own prepare. */
 static void codec_restart(struct dir *d)
 {
 	snd_pcm_drop(d->codec);

@@ -43,10 +43,13 @@ ssh -o BatchMode=yes "$host" 'sudo -n true' 2>/dev/null || {
   exit 1
 }
 
-rsync -a --delete "$root/gadget" "$root/systemd" "$root/config" "$root/tools" "$root/bridge" "$root/install.sh" "$host:$stage/"
+rsync -a --delete "$root/gadget" "$root/systemd" "$root/config" "$root/tools" "$root/bridge" "$root/install.sh" \
+  "$root/VERSION" "$host:$stage/"
 
 args=(--force-config -y)
 ((enable)) || args+=(--no-enable)
 [[ -z $hostconf ]] || args+=(--host "$hostconf")
-# install.sh does the work on the Pi; RPI_AUDIO_TAG keeps its messages prefixed "deploy:".
-ssh "$host" "sudo -n env RPI_AUDIO_TAG=deploy \"\$PWD/$stage/install.sh\" ${args[*]}"
+# install.sh does the work on the Pi; RPI_AUDIO_TAG keeps its messages prefixed "deploy:". The copy has no .git, so
+# the commit goes along for the version.
+commit=$(git -C "$root" describe --always --dirty 2>/dev/null || echo unknown)
+ssh "$host" "sudo -n env RPI_AUDIO_TAG=deploy RPI_AUDIO_COMMIT=$commit \"\$PWD/$stage/install.sh\" ${args[*]}"

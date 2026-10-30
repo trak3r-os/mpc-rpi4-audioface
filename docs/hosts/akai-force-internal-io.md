@@ -29,7 +29,8 @@ The code is in `tools/hosts/akai-force-internal-io/`.
 - **Resynchronisation:** every `prepare`/`recover` of MPC on the gadget, and every ADA2 xrun, restart ADA2 with silence. The ratio is kept.
 - **Releasing ADA2:** it is released when MPC closes the gadget. That way MPC can go back to its internal audio, which is otherwise exclusive (`hw`, no dmix).
 - **Failures:** if ADA2 can't be opened or configured, that direction passes MPC's audio through untouched.
-- **Log:** to stderr, which ends up in MPC's journal (`[mpc_internal_io] …`), with a status line every ~30 s. It writes no files.
+- **Log:** to stderr, which ends up in MPC's journal (`[mpc_internal_io] …`), with a status line every ~30 s. It writes no files. The lines go through a small queue to a thread of its own at normal priority, so MPC's audio thread never writes to the journal (that write can block); a line that finds the queue busy or full is dropped and counted. What is queued when MPC exits is written then. Checked on the laptop, natively in Docker, with `aplay` on an internal card as the gadget and the `null` PCM as the codec [repo]; not yet on the Force.
+- **Codec restarts** (`drop`, `prepare`, a write of silence, `start`) still run in MPC's audio thread: they are ioctls on a non-blocking PCM and happen only after an xrun or MPC's own `prepare`.
 
 ## Settings
 

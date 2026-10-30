@@ -57,8 +57,9 @@ def test_fresh_install_lays_out_files(root):
     assert (etc / "rpi-audio.toml").is_file()
     assert (etc / "rpi-audio.d/akai-force.toml").is_file()
     assert (etc / "devices.d/valeton-gp150.toml").is_file()
-    for u in ("rpi-audio-gadget", "rpi-audiod", "rpi-audio-keepalive"):
+    for u in ("rpi-audio-gadget", "rpi-audiod", "rpi-audio-keepalive", "rpi-audio-cpu"):
         assert (root / f"etc/systemd/system/{u}.service").is_file()
+    assert (lib / "VERSION").read_text().startswith((REPO / "VERSION").read_text().strip())
     assert (root / "etc/modules-load.d/rpi-audio.conf").read_text() == "snd-seq\nsnd-seq-midi\n"
     assert "Storage=persistent" in (root / "etc/systemd/journald.conf.d/rpi-audio.conf").read_text()
     assert "next: connect the Pi's USB-C" in r.stdout
@@ -170,3 +171,55 @@ def test_uninstall_prints_how_to_revert_overlay(root):
     boot(root, "[all]\n")
     r = run(root, "--uninstall")
     assert OVERLAY in r.stdout
+
+
+def test_version_takes_the_commit_given(root):
+    env = dict(os.environ, RPI_AUDIO_ROOT=str(root), RPI_AUDIO_COMMIT="abc1234")
+    r = subprocess.run([str(SCRIPT), "--no-boot-config"], env=env, capture_output=True, text=True)
+    assert r.returncode == 0, r.stderr
+    version = (REPO / "VERSION").read_text().strip()
+    assert (root / "usr/local/lib/rpi-audio/VERSION").read_text() == f"{version} (abc1234)\n"
+
+
+def cmdline(root, text):
+    f = root / "boot/firmware/cmdline.txt"
+    f.write_text(text)
+    return f
+
+
+def test_tune_boot_only_when_asked(root):
+    cfg = boot(root, "[all]\ndtparam=audio=on\n" + OVERLAY + "\n")
+    cl = cmdline(root, "console=tty1 root=PARTUUID=1234-02 rootwait\n")
+    before = cfg.read_text(), cl.read_text()
+    r = run(root, "-y")
+    assert r.returncode == 0, r.stderr
+    assert (cfg.read_text(), cl.read_text()) == before
+
+
+def test_tune_boot_edits_with_backups_once(root):
+    cfg = boot(root, "dtparam=audio=on\n[all]\n" + OVERLAY + "\n")
+    cl = cmdline(root, "console=tty1 root=PARTUUID=1234-02 rootwait\n")
+    r = run(root, "--tune-boot")
+    assert r.returncode == 0, r.stderr
+    assert cfg.read_text() == "dtparam=audio=off\n[all]\n" + OVERLAY + "\n"
+    assert cl.read_text() == "console=tty1 root=PARTUUID=1234-02 rootwait threadirqs\n"
+    assert len(list(cfg.parent.glob("config.txt.rpi-audio-*"))) == 1
+    assert len(list(cl.parent.glob("cmdline.txt.rpi-audio-*"))) == 1
+    assert "takes effect at the next reboot" in r.stdout
+    r = run(root, "--tune-boot")
+    assert r.returncode == 0, r.stderr
+    assert cl.read_text().count("threadirqs") == 1
+    assert cfg.read_text().count("dtparam=audio") == 1
+    assert "takes effect at the next reboot" not in r.stdout
+
+
+def test_tune_boot_adds_audio_off_under_all(root):
+    cfg = boot(root, "[cm4]\notg_mode=1\n[all]\n" + OVERLAY + "\n[pi5]\nfoo=1")
+    cmdline(root, "rootwait")
+    r = run(root, "--tune-boot")
+    assert r.returncode == 0, r.stderr
+    assert cfg.read_text().endswith("[pi5]\nfoo=1\n[all]\ndtparam=audio=off\n")
+
+
+def test_tune_boot_conflicts_with_no_boot_config(root):
+    assert run(root, "--tune-boot", "--no-boot-config").returncode == 2

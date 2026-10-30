@@ -6,25 +6,30 @@
 #   git clone https://github.com/trak3r-os/mpc-rpi4-audioface.git
 #   cd mpc-rpi4-audioface && sudo ./install.sh
 #
-#   sudo ./install.sh [--host NAME] [--no-enable] [--force-config] [--no-boot-config] [-y]
+#   sudo ./install.sh [--host NAME] [--no-enable] [--force-config] [--no-boot-config] [--tune-boot] [-y]
 #   sudo ./install.sh --uninstall [--purge]
 #
 #   --host NAME        also install tools/hosts/NAME.toml as /etc/rpi-audio/rpi-audio.d/NAME.toml
 #                      (rpi-audiod settings for that host, e.g. akai-force)
 #   --no-enable        leave the boot enable state of the units as it is (by default
-#                      rpi-audio-gadget and rpi-audiod are enabled, rpi-audio-keepalive disabled)
+#                      rpi-audio-gadget, rpi-audiod and rpi-audio-cpu are enabled,
+#                      rpi-audio-keepalive disabled)
 #   --force-config     overwrite /etc/rpi-audio/gadget.env and rpi-audio.toml even if they differ
 #                      (by default an existing, different file is kept and the repo's version is
 #                      written next to it as *.new)
 #   --no-boot-config   do not look at the boot config (dtoverlay=dwc2,dr_mode=peripheral)
-#   -y                 answer yes to the question about the boot config
+#   --tune-boot        also tune the boot for audio: threadirqs in cmdline.txt and
+#                      dtparam=audio=off (the Pi's own analogue audio) in config.txt, with backups.
+#                      Never done without this option, -y included; takes effect after a reboot
+#   -y                 answer yes to the question about the boot config (the gadget overlay)
 #   --uninstall        remove what this script installed; /etc/rpi-audio and /var/lib/rpi-audio stay
 #   --purge            with --uninstall: remove those two as well
 #
 # Idempotent: run it again after every `git pull`. A running rpi-audiod is restarted so it
 # runs the new code (the host hears a gap); the gadget only when its settings changed.
-# The boot config is touched only to add the USB gadget overlay, after asking, with a backup;
-# the Pi is never rebooted by this script.
+# The boot config is touched only to add the USB gadget overlay, after asking, and with
+# --tune-boot, always with a backup; the Pi is never rebooted by this script.
+# rpi-audio-cpu.service keeps the CPU governor at "performance" (disable it to go back to "ondemand").
 # PipeWire must not be installed alongside: it would grab the gadget and steer its pitch.
 #
 # For tests only: RPI_AUDIO_ROOT=/some/dir puts every path under that prefix and skips
@@ -47,7 +52,7 @@ JOURNALD=$R/etc/systemd/journald.conf.d/rpi-audio.conf
 STATE=$R/var/lib/rpi-audio
 UDCDIR=$R/sys/class/udc
 OVERLAY='dtoverlay=dwc2,dr_mode=peripheral'
-units="rpi-audio-gadget rpi-audiod rpi-audio-keepalive"
+units="rpi-audio-gadget rpi-audiod rpi-audio-keepalive rpi-audio-cpu"
 packages="jackd2 jack-example-tools zita-ajbridge"
 
 say() { echo "$tag: $*"; }
@@ -55,7 +60,7 @@ warn() { echo "$tag: $*" >&2; }
 die() { warn "$*"; exit 1; }
 usage() {
   cat >&2 <<'EOF'
-usage: sudo ./install.sh [--host NAME] [--no-enable] [--force-config] [--no-boot-config] [-y]
+usage: sudo ./install.sh [--host NAME] [--no-enable] [--force-config] [--no-boot-config] [--tune-boot] [-y]
        sudo ./install.sh --uninstall [--purge]
 EOF
   exit 2
@@ -66,13 +71,14 @@ sysrun() { if ((staging)); then say "(test root) skipped: $*"; else "$@"; fi; }
 # Queries about units: nothing to ask under RPI_AUDIO_ROOT.
 unit_active() { ((! staging)) && systemctl is-active --quiet "$1.service"; }
 
-enable=1 force=0 bootcfg=1 yes=0 uninstall=0 purge=0 hostconf=
+enable=1 force=0 bootcfg=1 tuneboot=0 yes=0 uninstall=0 purge=0 hostconf=
 while (($#)); do
   case $1 in
     --host) hostconf=${2:?--host needs a name}; shift ;;
     --no-enable) enable=0 ;;
     --force-config) force=1 ;;
     --no-boot-config) bootcfg=0 ;;
+    --tune-boot) tuneboot=1 ;;
     -y|--yes) yes=1 ;;
     --uninstall) uninstall=1 ;;
     --purge) purge=1 ;;
@@ -83,6 +89,7 @@ while (($#)); do
 done
 if ((purge && !uninstall)); then warn "--purge only makes sense with --uninstall"; usage; fi
 if ((uninstall)) && [[ -n $hostconf ]]; then warn "--host does not go with --uninstall"; usage; fi
+if ((tuneboot && !bootcfg)); then warn "--tune-boot does not go with --no-boot-config"; usage; fi
 if [[ -n $hostconf ]]; then
   [[ $hostconf =~ ^[A-Za-z0-9._-]+$ ]] || die "invalid host name: $hostconf"
   [[ -f $here/tools/hosts/$hostconf.toml ]] || die "no tools/hosts/$hostconf.toml in this clone"
@@ -131,7 +138,7 @@ if ((uninstall)); then
     say "kept $ETC and $STATE (add --purge to remove them)"
   fi
   echo
-  say "left alone: the installed packages ($packages), the rpi-audio user and the boot overlay."
+  say "left alone: the installed packages ($packages), the rpi-audio user and the boot config."
   if cfg=$(boot_config); then
     say "to turn the USB gadget overlay off, remove the line '$OVERLAY' from $cfg"
     say "(a backup of the file as it was before install.sh is next to it, config.txt.rpi-audio-*, if one was made), then reboot."
@@ -170,6 +177,10 @@ install -m 755 "$here/tools/tonegen.py" "$here/bridge/rpi-audiod/rpi-audiod" "$L
 install -m 644 "$here/bridge/rpi-audiod/audiod.py" "$here/bridge/rpi-audiod/midi.py" \
   "$here/bridge/rpi-audiod/presets.py" "$here/bridge/rpi-audiod/usb.py" "$LIB/"
 ln -sf /usr/local/lib/rpi-audio/rpi-audiod "$BIN/rpi-audiod"
+# The version, for `rpi-audiod --version`, `ping` and `status`: the release, then the commit when known
+# (deploy.sh passes it; a clone has its own).
+commit=${RPI_AUDIO_COMMIT:-$(git -c safe.directory="$here" -C "$here" describe --always --dirty 2>/dev/null || true)}
+printf '%s%s\n' "$(tr -d '[:space:]' < "$here/VERSION")" "${commit:+ ($commit)}" > "$LIB/VERSION"
 
 # The ALSA sequencer, for the gadget's MIDI ports and the devices' (docs/MIDI.md).
 printf 'snd-seq\nsnd-seq-midi\n' > "$MODULES"
@@ -220,7 +231,7 @@ done
 if [[ -n $hostconf ]]; then install -m 644 "$here/tools/hosts/$hostconf.toml" "$ETC/rpi-audio.d/"; fi
 
 install -m 644 "$here/systemd/rpi-audio-gadget.service" "$here/systemd/rpi-audio-keepalive.service" \
-  "$here/systemd/rpi-audiod.service" "$UNITDIR/"
+  "$here/systemd/rpi-audiod.service" "$here/systemd/rpi-audio-cpu.service" "$UNITDIR/"
 sysrun systemctl daemon-reload
 
 # --- Boot config: the USB gadget overlay ------------------------------------
@@ -281,11 +292,53 @@ if ((bootcfg)); then
   fi
 fi
 
+# --- Boot tuning: only with --tune-boot -------------------------------------
+
+tuned=0
+backup_boot() {   # one backup per file per run, named like the overlay's
+  [[ -e $1.rpi-audio-$ts ]] || cp -p "$1" "$1.rpi-audio-$ts"
+}
+if ((tuneboot)); then
+  ts=$(date +%Y%m%d-%H%M%S)
+  if ! cfg=$(boot_config); then
+    warn "no boot config found: --tune-boot changes nothing"
+  else
+    # Interrupt handlers in threads, so that jackd and the bridges (realtime) come before the network's and the SD
+    # card's handlers.
+    cmdline=$(dirname "$cfg")/cmdline.txt
+    if [[ ! -f $cmdline ]]; then
+      warn "no $cmdline: threadirqs not added"
+    elif ! grep -qw threadirqs "$cmdline"; then
+      backup_boot "$cmdline"
+      sed -i '1 s/[[:space:]]*$/ threadirqs/' "$cmdline"
+      say "added threadirqs to $cmdline (backup: $cmdline.rpi-audio-$ts)"
+      tuned=1
+    fi
+    # The Pi's own analogue audio: unused here, one card and one interrupt source fewer.
+    if grep -Eq '^[[:space:]]*dtparam=audio=on' "$cfg"; then
+      backup_boot "$cfg"
+      sed -i -E 's/^([[:space:]]*)dtparam=audio=on/\1dtparam=audio=off/' "$cfg"
+      say "changed dtparam=audio=on to off in $cfg (backup: $cfg.rpi-audio-$ts)"
+      tuned=1
+    elif ! grep -Eq '^[[:space:]]*dtparam=audio=off' "$cfg"; then
+      backup_boot "$cfg"
+      {
+        [[ -s $cfg && -n $(tail -c 1 "$cfg") ]] && echo
+        [[ $(last_section "$cfg") == "[all]" ]] || echo "[all]"
+        echo "dtparam=audio=off"
+      } >> "$cfg"
+      say "added dtparam=audio=off to $cfg (backup: $cfg.rpi-audio-$ts)"
+      tuned=1
+    fi
+  fi
+fi
+
 # --- Enable, restart --------------------------------------------------------
 
 if ((enable)); then
   sysrun systemctl disable rpi-audio-keepalive.service
-  sysrun systemctl enable rpi-audio-gadget.service rpi-audiod.service
+  sysrun systemctl enable rpi-audio-gadget.service rpi-audiod.service rpi-audio-cpu.service
+  sysrun systemctl restart rpi-audio-cpu.service
 fi
 
 # The gadget is rebound only when its settings changed (one rebind: docs/STATUS.md). rpi-audiod
@@ -320,6 +373,7 @@ if udc_exists; then
 else
   say "gadget: no UDC (the USB gadget overlay is not active)"
 fi
+if ((tuned)); then say "the boot tuning takes effect at the next reboot."; fi
 if ((overlay_added)); then
   say "next: reboot the Pi (sudo reboot) so the USB gadget overlay takes effect, then connect its USB-C to the host."
 elif ((overlay_pending)); then

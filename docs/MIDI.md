@@ -62,8 +62,8 @@ F0 7D 52 42 <ASCII text> F7      reply
 
 | Command | Reply | Effect |
 |---|---|---|
-| `ping` | `ok rpi-audio` | — |
-| `status` | JSON | The same content as `/run/rpi-audio/status.json` |
+| `ping` | `ok rpi-audio VERSION`, e.g. `ok rpi-audio 0.1.0 (3c48288)` | — |
+| `status` | JSON | The same content as `/run/rpi-audio/status.json`, with `version` |
 | `assign IDENTITY [in=N] [out=N] [midi=K]` | `ok` | Pins the first IN channel, the first OUT channel or the MIDI cable. `midi=` without `/P` means `/0` |
 | `mute IDENTITY in\|out on\|off` | `ok` | Cuts or restores the audio routes in that direction |
 | `volume IDENTITY in\|out PERCENT` | `ok` | The device's own level, 0 to 100: `in` is its capture (what reaches the host) and `out` its playback |

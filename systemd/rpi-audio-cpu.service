@@ -1,0 +1,14 @@
+# Installed by install.sh. The CPU at full speed all the time (governor "performance"): with the default
+# "ondemand", the clock drops while the audio threads idle between periods and they wake up slower.
+# Stopping or disabling it puts "ondemand" back.
+[Unit]
+Description=rpi-audio: CPU governor performance
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/bin/sh -c 'for g in /sys/devices/system/cpu/cpufreq/policy*/scaling_governor; do echo performance > "$g"; done'
+ExecStop=/bin/sh -c 'for g in /sys/devices/system/cpu/cpufreq/policy*/scaling_governor; do echo ondemand > "$g"; done'
+
+[Install]
+WantedBy=multi-user.target
