@@ -1,4 +1,4 @@
-# Estado: 2026-10-30 (12:50)
+# Estado: 2026-10-30 (13:10)
 
 **Fase:** F1 cumplida con la Force a 26×26 S16, **siempre que la Pi esté reproduciendo**. F2 en marcha:
 
@@ -19,7 +19,9 @@ F4 en marcha: **USB MIDI en el gadget** (4 puertos), MIDI de paso por dispositiv
 - **⚠️ No reiniciar ni apagar la Pi con la Force conectada y MPC transmitiendo** sin el usuario delante. El 2026-10-30, un reinicio de la Pi tiró todo el hub USB interno de la Force (`usb2-port1: disabled by hub (EMI?)`). Con él se fueron la superficie, la SD de MockbaMod y AKAI_SSD, que se desmontaron en sucio. La causa está por aislar: `docs/hw/2026-10-30-boot-soak.md`.
 - **La Force:** `mpc_internal_io` está instalado en la SD de MockbaMod y se carga en cada arranque.
   - **Ajustes temporales de la prueba de salidas:** MPC Out 1/2 → códec 1/2 y Out 3/4 → códec 3/4. Al acabar, volver a `mpc_internal_io.conf` del repo con `install.sh conf` y reiniciar la Force.
-  - MPC arranca con su audio interno: hay que elegir rpi-audio a mano tras cada arranque [?].
+  - MPC arranca con su audio interno: hay que elegir rpi-audio tras cada arranque, a mano o con MPC Remote. MPC guarda "Internal" aunque se elija rpi-audio [Force] (`docs/hw/2026-10-30-boot-soak.md`, sección 5).
+  - La carrera de `LD_PRELOAD` está arreglada en un arranque real: MidiLoop carga, 0 errores ACVX y el `midicheck` no reinicia MPC.
+  - **Discos:** AKAI_SSD da limpio con `fsck.exfat -n`, pero sigue con la marca de sucio. La SD de MockbaMod dice 15,6 GB y el lector de la Force solo ve 4 GB: no hay que pasar de ~3,7 GB usados (ahora 1,1 GB).
 
   Para quitar el add-on: `install.sh disable` y reiniciar la Force.
 - **La Pi:**
@@ -30,12 +32,11 @@ F4 en marcha: **USB MIDI en el gadget** (4 puertos), MIDI de paso por dispositiv
   - canales: mezclador (CODEC) a IN 1–2 y desde OUT 3–4; GP-150 (ahora 6/4 canales) a IN 3–8 y desde OUT 5–8. IN 25–26 están reservados para el add-on (`tools/hosts/akai-force.toml`);
   - volver al keepalive: `sudo systemctl start rpi-audio-keepalive` (para `rpi-audiod`). Para que dure tras reiniciar: `systemctl disable rpi-audiod` y `systemctl enable rpi-audio-keepalive`.
 - **Pendiente del usuario:**
-  - **revisar AKAI_SSD** tras el desmontaje en sucio (fsck de exFAT en un ordenador, o lo que ofrezca la Force). No se ha tocado desde aquí;
-  - **reiniciar la Force** para probar el arreglo de la carrera de MidiLoop. El clasificador de permisos bloqueó que lo hiciera yo;
+  - si quiere quitar la marca de sucio de AKAI_SSD y de la SD: `fsck.exfat -y` en un ordenador, con el volumen desmontado (la comprobación en solo lectura da AKAI_SSD limpio);
   - ¿suenan el mezclador y el GP-150 en MPC?
   - prueba de salidas: ¿por dónde salen en la Force Out 1/2 y Out 3/4?
   - ¿aparecen `rpi-audio MIDI 1–4` en Preferences → MIDI? Los pads, los botones y los Q-Links siguen respondiendo (confirmado);
-  - el control desde MPC: la pista y los Q-Links ya están preparados (`docs/hw/2026-10-30-f4-midi.md`). Falta girar el Q-Link 7 físico a tope y volverlo a 0: silencia la entrada del GP-150 y la repone.
+  - el control desde MPC **ya está probado** de punta a punta con una pista MIDI y CC enviados por MPC Remote: silencio y nivel del GP-150 (`docs/hw/2026-10-30-boot-soak.md`, sección 7).
 - **MPC Remote** está instalado en la Force y se maneja desde aquí por túnel (`docs/hosts/akai-force-remote.md`, `CLAUDE.md`, excepción 2).
 - **Control desde el host (decidido con el usuario):** por USB y genérico, **no por red ni con un VST como base**. Hecho como función USB MIDI del gadget (`docs/MIDI.md`):
   - **órdenes de texto en SysEx:** `ping`, `status`, `assign`, `mute` y `volume`, con respuesta. Desde un host Linux: `tools/midictl.py`;
@@ -97,19 +98,19 @@ F4 en marcha: **USB MIDI en el gadget** (4 puertos), MIDI de paso por dispositiv
 
 ## Siguiente
 
-Hecho el 2026-10-30, con el usuario fuera:
-- `rpi-audiod` al arranque, con reinicio de la Pi;
+Hecho el 2026-10-30 (`docs/hw/2026-10-30-boot-soak.md`):
+- `rpi-audiod` al arranque;
 - el hotplug del GP-150;
 - el soak de 60 minutos;
-- el presupuesto Full-Speed y los perfiles.
+- el presupuesto Full-Speed y los perfiles;
+- el reinicio de la Force, con MidiLoop bien;
+- la revisión de los discos;
+- el control desde MPC por CC.
 
-Está todo en `docs/hw/2026-10-30-boot-soak.md`. Queda:
+Queda:
 
 1. **Con el usuario delante:**
-   - revisar AKAI_SSD;
-   - reiniciar la Force para probar MidiLoop: que no haya errores ACVX ni reinicios del `midicheck`, y ver si MPC abre rpi-audio solo;
-   - el Q-Link 7 físico (CC 67);
-   - si suenan el mezclador y el GP-150;
+   - si suenan el mezclador y el GP-150 en MPC;
    - por dónde salen Out 1/2 y 3/4. Con eso, `install.sh conf` con la configuración del repo y reiniciar la Force.
 2. **Aislar el incidente del reinicio de la Pi:**
    - primero con el portátil de host;
@@ -119,8 +120,9 @@ Está todo en `docs/hw/2026-10-30-boot-soak.md`. Queda:
 3. **Con el Tracker enchufado a la Pi:**
    - la aceptación de F4;
    - el presupuesto de verdad: con el Tracker en "8 OUT / 2 IN" más el mezclador, la grabación abre y la reproducción espera.
-4. **Mejora:** al desenchufar un dispositivo, jackd da unos 13 xruns mientras se paran sus zita colgados. Habría que pararlos antes o sin bloquear el grafo.
-5. **Después:** F5 y los opcionales (F1b con 32 canales, VST, S32).
+4. **Por qué MPC ya no abre rpi-audio solo al arrancar** (en F1 sí lo hacía), o cómo hacer que lo guarde.
+5. **Mejora:** al desenchufar un dispositivo, jackd da unos 13 xruns mientras se paran sus zita colgados.
+6. **Después:** F5 y los opcionales (F1b con 32 canales, VST, S32).
 
 ## Pruebas de tonos
 
