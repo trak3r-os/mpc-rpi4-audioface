@@ -62,16 +62,20 @@ if [ ! -f /etc/security/limits.d/audio.conf ]; then
 fi
 # rpi-audiod runs as a system user in the audio group (realtime limits for jackd).
 id rpi-audio >/dev/null 2>&1 || useradd --system --gid audio --home-dir /nonexistent --no-create-home --shell /usr/sbin/nologin rpi-audio
-install -d /usr/local/lib/rpi-audio /etc/rpi-audio /etc/rpi-audio/rpi-audio.d
+install -d /usr/local/lib/rpi-audio /etc/rpi-audio /etc/rpi-audio/rpi-audio.d /etc/rpi-audio/devices.d
 install -m 755 $stage/gadget/rpi-audio-gadget $stage/gadget/rpi-audio-keepalive /usr/local/lib/rpi-audio/
 install -m 755 $stage/tools/tonegen.py $stage/bridge/rpi-audiod/rpi-audiod /usr/local/lib/rpi-audio/
-install -m 644 $stage/bridge/rpi-audiod/audiod.py $stage/bridge/rpi-audiod/midi.py /usr/local/lib/rpi-audio/
+install -m 644 $stage/bridge/rpi-audiod/audiod.py $stage/bridge/rpi-audiod/midi.py $stage/bridge/rpi-audiod/usb.py /usr/local/lib/rpi-audio/
 # The ALSA sequencer, for the gadget's MIDI ports and the devices' (docs/MIDI.md).
 printf 'snd-seq\nsnd-seq-midi\n' > /etc/modules-load.d/rpi-audio.conf
 modprobe snd-seq
 modprobe snd-seq-midi
 ln -sf /usr/local/lib/rpi-audio/rpi-audiod /usr/local/bin/rpi-audiod
 install -m 644 $stage/config/gadget.env $stage/config/rpi-audio.toml /etc/rpi-audio/
+# Device profiles: added or replaced, never removed (others may have put theirs there).
+for f in $stage/config/devices.d/*.toml; do
+  [ -e "\$f" ] && install -m 644 "\$f" /etc/rpi-audio/devices.d/
+done
 if [ -n "$hostconf" ]; then install -m 644 $stage/tools/hosts/$hostconf.toml /etc/rpi-audio/rpi-audio.d/; fi
 install -m 644 $stage/systemd/rpi-audio-gadget.service $stage/systemd/rpi-audio-keepalive.service \
   $stage/systemd/rpi-audiod.service /etc/systemd/system/

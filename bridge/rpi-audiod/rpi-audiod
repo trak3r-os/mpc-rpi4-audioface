@@ -15,8 +15,10 @@ control port takes the commands below from the host too (docs/MIDI.md).
   rpi-audiod mute IDENTITY in|out on|off      cut or restore a device's audio routes
   rpi-audiod volume IDENTITY in|out PERCENT   set a device's own capture or playback level
 
-Gadget channels are sticky per device identity (/var/lib/rpi-audio/slots.json). Settings:
-/etc/rpi-audio/rpi-audio.toml, then /etc/rpi-audio/rpi-audio.d/*.toml; the gadget's own
+Gadget channels are sticky per device identity (/var/lib/rpi-audio/slots.json). A full-speed
+device is only bridged while its isochronous load fits [usb] fs_budget on its bus. Settings:
+/etc/rpi-audio/rpi-audio.toml, then /etc/rpi-audio/rpi-audio.d/*.toml; optional per-device
+profiles in /etc/rpi-audio/devices.d/*.toml (config/devices.d/); the gadget's own
 come from the GADGET_* environment, or from gadget.env.
 """
 
@@ -39,6 +41,7 @@ from pathlib import Path
 
 import audiod
 import midi
+import usb
 from audiod import IN, OUT
 
 CONFIG = Path(os.environ.get("RPI_AUDIO_CONFIG", "/etc/rpi-audio/rpi-audio.toml"))
@@ -59,13 +62,30 @@ def log(msg):
 
 
 def load_config():
-    cfg = {"gadget": {}, "engine": {}, "bridge": {}, "slots": {}, "midi": {}}
+    cfg = {"gadget": {}, "engine": {}, "bridge": {}, "slots": {}, "midi": {}, "usb": {}}
     for path in [CONFIG, *sorted(CONFIG.parent.glob(CONFIG.stem + ".d/*.toml"))]:
         if path.exists():
             with open(path, "rb") as f:
                 for table, values in tomllib.load(f).items():
                     cfg.setdefault(table, {}).update(values)
     return cfg
+
+
+def load_profiles():
+    """The device profiles in devices.d next to the config, in file name order; a file that
+    does not parse, or has a bad `match`, is skipped with a warning."""
+    profiles = []
+    for path in sorted(CONFIG.parent.glob("devices.d/*.toml")):
+        try:
+            with open(path, "rb") as f:
+                profile, warnings = audiod.parse_profile(tomllib.load(f), path.name)
+        except (OSError, tomllib.TOMLDecodeError) as e:
+            profile, warnings = None, [f"{path.name}: {e}; file ignored"]
+        for w in warnings:
+            log(f"rpi-audiod: profile {w}")
+        if profile:
+            profiles.append(profile)
+    return profiles
 
 
 def gadget_setting(name, default):
@@ -92,6 +112,13 @@ def read(path):
         return Path(path).read_text()
     except OSError:
         return ""
+
+
+def read_bytes(path):
+    try:
+        return Path(path).read_bytes()
+    except OSError:
+        return b""
 
 
 def write_json(path, data):
@@ -187,20 +214,31 @@ class Child:
 
 
 class Device:
-    """A USB audio card as found in /proc/asound."""
+    """A USB audio card as found in /proc/asound, with what is read once when it is found:
+    its profile, USB speed and bus, and the full-speed load of each direction."""
 
-    def __init__(self, card, card_id, usbbus, ident, plans):
+    def __init__(self, card, card_id, usbbus, ident, plans, profile=None, speed="", bus="", loads=None):
         self.card, self.id, self.usbbus, self.identity = card, card_id, usbbus, ident
         self.plans = plans  # {IN: (rate, channels) or None, OUT: ...}
+        self.profile, self.speed, self.bus = profile, speed, bus
+        self.loads = loads or {IN: None, OUT: None}   # B per frame; None when unknown
+        self.kept = {d: audiod.kept_channels(p[1], profile.get("ignore", d) if profile else ()) if p else []
+                     for d, p in plans.items()}   # the device channels that get a gadget slot
 
 
-def usb_attr(card, name):
+def usb_dir(card):
+    """sysfs directory of the USB device a sound card hangs off, "" when there is none."""
     dev = os.path.realpath(f"/sys/class/sound/card{card}/device")
     for _ in range(3):  # the card hangs off the interface; the attributes are on the device
         dev = os.path.dirname(dev)
         if os.path.exists(f"{dev}/idVendor"):
-            return read(f"{dev}/{name}").strip(), os.path.basename(dev)
-    return "", ""
+            return dev
+    return ""
+
+
+def usb_attr(card, name):
+    dev = usb_dir(card)
+    return (read(f"{dev}/{name}").strip(), os.path.basename(dev)) if dev else ("", "")
 
 
 def usb_cards(cfg):
@@ -219,18 +257,44 @@ def usb_cards(cfg):
     return [(*c[:3], ident) for c, ident in zip(found, audiod.dedupe([c[3] for c in found]))]
 
 
-def scan(cfg):
-    """The USB cards with at least one PCM direction, and {card: identity} for every USB
-    card, MIDI-only ones included."""
+def new_device(card, card_id, usbbus, ident, stream, cfg, profiles):
+    """The Device for a card with PCM streams: profile, plans and full-speed loads, read once."""
+    vendor, _ = usb_attr(card, "idVendor")
+    product, _ = usb_attr(card, "idProduct")
+    profile, warnings = audiod.match_profile(profiles, vendor, product, usb_attr(card, "bcdDevice")[0])
+    for w in warnings:
+        log(f"rpi-audiod: {card_id}: {w}")
     rates = cfg["bridge"].get("rates", [48000, 44100])
-    found, cards = [], {}
+    if profile and profile.rate:
+        rates = [profile.rate, *rates]
+    plans = {IN: audiod.plan_direction(stream["capture"], rates),
+             OUT: audiod.plan_direction(stream["playback"], rates)}
+    speed, bus = usb_attr(card, "speed")[0], usb_attr(card, "busnum")[0]
+    active = usb_attr(card, "bConfigurationValue")[0]
+    interfaces = usb.parse_descriptors(read_bytes(f"{usb_dir(card)}/descriptors"),
+                                       int(active) if active.isdigit() else None)
+    loads = {d: usb.direction_load(speed, stream[kind], plans[d], interfaces) if plans[d] else None
+             for d, kind in ((IN, "capture"), (OUT, "playback"))}
+    return Device(card, card_id, usbbus, ident, plans, profile, speed, bus, loads)
+
+
+def scan(cfg, profiles, cache):
+    """The USB cards with at least one PCM direction, and {card: identity} for every USB
+    card, MIDI-only ones included. cache holds the Devices already found, so each is read once."""
+    found, cards, seen = [], {}, {}
     for card, card_id, usbbus, ident in usb_cards(cfg):
         cards[card] = ident
-        stream = audiod.parse_stream(read(f"/proc/asound/card{card}/stream0"))
-        plans = {IN: audiod.plan_direction(stream["capture"], rates),
-                 OUT: audiod.plan_direction(stream["playback"], rates)}
-        if any(plans.values()):
-            found.append(Device(card, card_id, usbbus, ident, plans))
+        key = (card, usbbus, ident)
+        dev = cache.get(key)
+        if dev is None:
+            stream = audiod.parse_stream(read(f"/proc/asound/card{card}/stream0"))
+            if stream["capture"] or stream["playback"]:
+                dev = new_device(card, card_id, usbbus, ident, stream, cfg, profiles)
+        if dev:
+            seen[key] = dev
+            found.append(dev)
+    cache.clear()
+    cache.update(seen)
     return found, cards
 
 
@@ -240,22 +304,37 @@ class Bridge:
     def __init__(self, dev, direction):
         self.dev, self.direction = dev, direction
         self.client = audiod.client_name(dev.id, direction)
-        self.rate, self.channels = dev.plans[direction]
+        self.rate, self.channels = dev.plans[direction]   # channels: what zita opens
+        self.kept = dev.kept[direction]                   # the ones that get a gadget slot
+        self.size = len(self.kept)
+        self.load = dev.loads[direction] or 0             # full-speed B per frame
+        self.blocked = None                               # why it does not start: the USB budget
         self.child, self.backoff, self.next_try, self.start = None, 1.0, 0.0, None
 
     def routes(self):
         if self.start is None:
             return []
-        return audiod.routes(self.client, self.direction, self.start, self.channels)
+        return audiod.routes(self.client, self.direction, self.start, self.kept)
 
-    def tick(self, cfg, now):
+    def check_budget(self, used, budget):
+        """True when zita may start; otherwise records why, logging when that starts or ends."""
+        why = usb.budget_reason(self.load, used, budget, self.dev.bus)
+        if bool(why) != bool(self.blocked):
+            log(f"rpi-audiod: {self.client} " + (f"waits, {why}" if why else "has USB budget again, starting"))
+        self.blocked = why
+        return why is None
+
+    def tick(self, cfg, now, used=0, budget=0):
+        """used: full-speed B per frame the other running bridges take on this device's bus."""
         if self.child and not self.child.alive():
             lived = now - self.child.started
             log(f"rpi-audiod: {self.client} exited after {lived:.1f} s (code {self.child.proc.returncode})")
             self.child = None
             self.backoff = 1.0 if lived > 60 else min(self.backoff * 2, 30.0)
             self.next_try = now + self.backoff
-        if self.child is None and self.start is not None and now >= self.next_try:
+        if self.child or self.start is None:
+            self.blocked = None
+        elif now >= self.next_try and self.check_budget(used, budget):
             b = cfg["bridge"]
             tool = "zita-a2j" if self.direction == IN else "zita-j2a"
             cmd = [tool, "-j", self.client, "-d", f"hw:CARD={self.dev.id}", "-r", str(self.rate),
@@ -448,6 +527,12 @@ class Daemon:
         self.muted = {IN: set(), OUT: set()}
         self.volumes = {}                    # (identity, direction) -> level last set
         self.seen_usbbus = set()
+        self.profiles, self.known = load_profiles(), {}   # device profiles; scan()'s cache
+        try:
+            self.fs_budget = max(int(cfg["usb"].get("fs_budget", usb.FS_BUDGET)), 0)
+        except (TypeError, ValueError):
+            log(f"rpi-audiod: [usb] fs_budget {cfg['usb']['fs_budget']!r} is not a number; using {usb.FS_BUDGET}")
+            self.fs_budget = usb.FS_BUDGET
         self.slots_stamp = None
         ports = int(gadget_setting("GADGET_MIDI_PORTS", 0))
         midi_id = gadget_setting("GADGET_MIDI_ID", cfg["midi"].get("card", "MIDIGadget"))
@@ -543,9 +628,12 @@ class Daemon:
         def allocate(slots):
             for direction in (IN, OUT):
                 sizes = slots.setdefault(direction + "_channels", {})
-                present = {i: dev.plans[direction][1] for i, dev in self.devices.items() if dev.plans[direction]}
+                present = {i: len(dev.kept[direction]) for i, dev in self.devices.items() if dev.kept[direction]}
+                preferred = {i: dev.profile.get("start", direction) for i, dev in self.devices.items()
+                             if dev.profile and dev.profile.get("start", direction)}
                 assigned[direction], _, slots[direction] = audiod.allocate(
-                    present, slots.get(direction, {}), sizes, self.channels, reserved[direction])
+                    present, slots.get(direction, {}), sizes, self.channels, reserved[direction],
+                    preferred=preferred)
                 sizes.update(present)
             return slots
 
@@ -562,7 +650,7 @@ class Daemon:
                         b.stop()
                     b.start = assigned[direction].get(i)
                     log(f"rpi-audiod: {b.client} -> gadget {direction.upper()} "
-                        + (f"{b.start}-{b.start + b.channels - 1}" if b.start else "parked: no free channels"))
+                        + (f"{b.start}-{b.start + b.size - 1}" if b.start else "parked: no free channels"))
         self.muted = {d: set(slots.get("mute", {}).get(d, [])) for d in (IN, OUT)}
         self.set_volumes(slots.get("volume", {}))
 
@@ -588,7 +676,7 @@ class Daemon:
             run("amixer", "-q", "-c", dev.id, "sset", control, floor, "unmute")
 
     def scan_devices(self):
-        found, self.cards = scan(self.cfg)
+        found, self.cards = scan(self.cfg, self.profiles, self.known)
         found = {d.identity: d for d in found}
         changed = False
         for i, dev in list(self.devices.items()):
@@ -607,10 +695,16 @@ class Daemon:
             if i in self.devices:
                 continue
             plans = ", ".join(f"{d} {p[1]} ch {p[0]} Hz" for d, p in dev.plans.items() if p)
-            log(f"rpi-audiod: {dev.id} ({i}) on card {dev.card}: {plans}")
+            log(f"rpi-audiod: {dev.id} ({i}) on card {dev.card}: {plans}"
+                + (f", profile {dev.profile.source}" if dev.profile else ""))
+            log(f"rpi-audiod: {dev.id}: USB bus {dev.bus or '?'}, speed {dev.speed or '?'} Mbit/s, full-speed load "
+                + ", ".join(f"{d} {'unknown, not checked' if v is None else f'{v} B'}"
+                            for d, v in dev.loads.items() if dev.plans[d]))
             self.devices[i] = dev
             for direction in (IN, OUT):
-                if dev.plans[direction]:
+                if dev.plans[direction] and not dev.kept[direction]:
+                    log(f"rpi-audiod: {dev.id}: the profile ignores every {direction.upper()} channel; no bridge")
+                elif dev.plans[direction]:
                     self.bridges[(i, direction)] = Bridge(dev, direction)
             if dev.usbbus not in self.seen_usbbus:
                 self.seen_usbbus.add(dev.usbbus)
@@ -618,6 +712,11 @@ class Daemon:
             changed = True
         if changed or slots_stamp() != self.slots_stamp:
             self.reassign()
+
+    def bus_used(self, bridge):
+        """Full-speed B per frame the other running bridges take on this bridge's USB bus."""
+        return sum(b.load for b in self.bridges.values()
+                   if b is not bridge and b.dev.bus == bridge.dev.bus and b.child and b.child.alive())
 
     def connect_routes(self):
         ports, pairs = audiod.parse_connections(run("jack_lsp", "-c").stdout)
@@ -665,6 +764,8 @@ class Daemon:
         devices = []
         for i, dev in self.devices.items():
             entry = {"identity": i, "card": dev.id, "usbbus": dev.usbbus}
+            if dev.profile and dev.profile.name:
+                entry["name"] = dev.profile.name
             for direction in (IN, OUT):
                 b = self.bridges.get((i, direction))
                 if b:
@@ -672,6 +773,11 @@ class Daemon:
                                         "start": b.start, "running": bool(b.child and b.child.alive()),
                                         "muted": i in self.muted[direction],
                                         "level": self.volumes.get((i, direction))}
+                    extra = {"slots": b.size if b.size != b.channels else None,
+                             "ignored": [k for k in range(1, b.channels + 1) if k not in b.kept] or None,
+                             "names": [*dev.profile.get("names", direction)][:b.channels] if dev.profile else None,
+                             "fs_load": b.load or None, "blocked": b.blocked}
+                    entry[direction].update({k: v for k, v in extra.items() if v})
             devices.append(entry)
         return {"time": time.strftime("%Y-%m-%d %H:%M:%S"), "host_playback_rate": playback_rate,
                 "host_capture_rate": capture_rate, "feeder": self.mode, "jack_ready": self.jack_ready,
@@ -705,7 +811,7 @@ class Daemon:
                 self.next_scan = now + 0.5
             if self.jack_ready:
                 for b in self.bridges.values():
-                    b.tick(self.cfg, now)
+                    b.tick(self.cfg, now, self.bus_used(b), self.fs_budget)
                 if now >= self.next_routes:
                     self.connect_routes()
                     self.next_routes = now + 1.0
@@ -735,16 +841,23 @@ def cmd_status(_):
     print(f"{s['time']}  host: playback {s['host_playback_rate']} Hz, capture {s['host_capture_rate']} Hz;"
           f" feeder: {s['feeder']}{' (jack up)' if s['jack_ready'] else ''}")
     for d in s["devices"]:
-        print(f"  {d['card']:12} {d['identity']}")
+        print(f"  {d['card']:12} {d['identity']}" + (f"  {d['name']}" if d.get("name") else ""))
         for direction, label in ((IN, "to host IN"), (OUT, "from host OUT")):
             b = d.get(direction)
             if b:
-                where = f"{b['start']}-{b['start'] + b['channels'] - 1}" if b["start"] else "parked"
+                size = b.get("slots", b["channels"])
+                where = f"{b['start']}-{b['start'] + size - 1}" if b["start"] else "parked"
                 extra = ", muted" if b.get("muted") else ""
+                if b.get("names"):
+                    extra += f", channels {' '.join(n or '-' for n in b['names'])}"
+                if b.get("ignored"):
+                    extra += ", ignoring " + ",".join(map(str, b["ignored"]))
                 if b.get("level") is not None:
                     extra += f", level {b['level']}%"
                 print(f"    {b['client']:16} {b['channels']} ch {b['rate']} Hz  {label} {where}"
                       f"  {'running' if b['running'] else 'not running'}{extra}")
+                if b.get("blocked"):
+                    print(f"      waiting: {b['blocked']}")
     m = s.get("midi")
     if m:
         state = ("on client %s" % m["client"]) if m["client"] is not None else "not found"

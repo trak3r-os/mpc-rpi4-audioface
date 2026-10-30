@@ -1,0 +1,9 @@
+# Profile for the Valeton GP-150 (rpi-audiod; the format is in config/rpi-audio.toml).
+# Facts: 84ef:0186, high speed (no full-speed load), 48 kHz only [Pi]
+# (docs/hw/2026-10-29-f2-usb-devices.md). Its channel counts changed between sessions
+# (2 in / 2 out on 2026-10-29, 6 in / 4 out later), so there are no channel names or
+# ignores here [?].
+
+match = "84ef:0186"
+name = "Valeton GP-150"
+rate = 48000

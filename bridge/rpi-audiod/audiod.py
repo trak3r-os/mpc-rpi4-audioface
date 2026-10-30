@@ -14,6 +14,8 @@ class Altset:
     channels: int
     rates: tuple  # the discrete rates, or (lowest, highest) when continuous
     continuous: bool = False
+    interface: int = 0  # USB interface and alternate setting numbers, 0 when stream0 gives none
+    altset: int = 0
 
     def supports(self, rate):
         if self.continuous:
@@ -23,23 +25,31 @@ class Altset:
 
 def parse_stream(text):
     """Parses /proc/asound/cardN/stream0 of a USB audio card into
-    {"playback": [Altset, ...], "capture": [Altset, ...]}."""
+    {"playback": [Altset, ...], "capture": [Altset, ...]}. The "Interface = N" lines of a
+    running stream's Status block are not altset headers and are skipped."""
     found = {"playback": [], "capture": []}
     section = channels = None
+    interface = altset = 0
     for line in text.splitlines():
         s = line.strip()
+        header = re.fullmatch(r"(Interface|Altset) (\d+)", s)
         if s in ("Playback:", "Capture:"):
             section = s[:-1].lower()
+        elif header:
+            if header[1] == "Interface":
+                interface = int(header[2])
+            else:
+                altset = int(header[2])
         elif section and s.startswith("Channels:"):
             channels = int(s.split(":")[1])
         elif section and channels and s.startswith("Rates:"):
             value = s.split(":", 1)[1]
             span = re.match(r"\s*(\d+)\s*-\s*(\d+)", value)
             if span:
-                found[section].append(Altset(channels, (int(span[1]), int(span[2])), True))
+                found[section].append(Altset(channels, (int(span[1]), int(span[2])), True, interface, altset))
             else:
                 rates = tuple(sorted(int(r) for r in re.findall(r"\d+", value)))
-                found[section].append(Altset(channels, rates))
+                found[section].append(Altset(channels, rates, False, interface, altset))
             channels = None
     return found
 
@@ -99,7 +109,7 @@ def free_start(size, total, taken, align=2):
     return None
 
 
-def allocate(present, saved, sizes_saved, total, reserved, align=2):
+def allocate(present, saved, sizes_saved, total, reserved, align=2, preferred=None):
     """Gives each present device a block of gadget channels in one direction.
 
     present: {identity: channels} for the devices plugged in now, in the order they appeared.
@@ -108,6 +118,9 @@ def allocate(present, saved, sizes_saved, total, reserved, align=2):
     A device gets its saved block back if it is still free; a new one gets the first free
     block that no absent device holds, then one taken from absent devices, else it is parked.
     New blocks start as free_start() places them with `align`.
+    preferred: {identity: start} from device profiles, tried first for a device with no
+    saved block, and only where the block is free of other devices, absent ones included;
+    those devices are placed before the rest.
     Returns (assigned {identity: start}, parked [identity], saved')."""
     taken = set(reserved)
     assigned, parked, saved = {}, [], dict(saved)
@@ -120,10 +133,12 @@ def allocate(present, saved, sizes_saved, total, reserved, align=2):
     for dev, start in saved.items():
         if dev not in present and dev in sizes_saved:
             absent |= block(start, sizes_saved[dev])
-    for dev, size in present.items():
-        if dev in assigned:
-            continue
-        start = free_start(size, total, taken | absent, align)
+    preferred = preferred or {}
+    for dev in sorted((d for d in present if d not in assigned), key=lambda d: d not in preferred):
+        size = present[dev]
+        start = preferred.get(dev)
+        if start is None or start < 1 or start + size - 1 > total or block(start, size) & (taken | absent):
+            start = free_start(size, total, taken | absent, align)
         if start is None:
             start = free_start(size, total, taken, align)
         if start is None:
@@ -137,12 +152,22 @@ def allocate(present, saved, sizes_saved, total, reserved, align=2):
     return assigned, parked, saved
 
 
-def routes(client, direction, start, channels):
+def kept_channels(channels, ignore):
+    """The device channels (1-based) that get a gadget slot, out of `channels`."""
+    return [k for k in range(1, channels + 1) if k not in ignore]
+
+
+def routes(client, direction, start, kept):
     """JACK connections between a bridge and the gadget (jackd's system ports):
-    device capture -> host IN on playback_N, host OUT on capture_N -> device playback."""
+    device capture -> host IN on playback_N, host OUT on capture_N -> device playback.
+    kept is a channel count or the list of device channels to route, which take
+    consecutive slots from `start`."""
+    if isinstance(kept, int):
+        kept = range(1, kept + 1)
+    slots = list(enumerate(kept))
     if direction == IN:
-        return [(f"{client}:capture_{k}", f"system:playback_{start + k - 1}") for k in range(1, channels + 1)]
-    return [(f"system:capture_{start + k - 1}", f"{client}:playback_{k}") for k in range(1, channels + 1)]
+        return [(f"{client}:capture_{k}", f"system:playback_{start + i}") for i, k in slots]
+    return [(f"system:capture_{start + i}", f"{client}:playback_{k}") for i, k in slots]
 
 
 def feeder(playback_rate, capture_rate):
@@ -229,3 +254,91 @@ def pcm_status(text):
     state = re.search(r"state:\s*(\S+)", text)
     ptr = re.search(r"hw_ptr\s*:\s*(\d+)", text)
     return (state[1] if state else "closed"), (int(ptr[1]) if ptr else None)
+
+
+@dataclass(frozen=True)
+class Profile:
+    """An optional device profile (config/devices.d/*.toml)."""
+    match: str                 # "idVendor:idProduct", lowercase hex
+    source: str = ""           # file name, for messages
+    bcd: str = ""              # only this bcdDevice, when set
+    name: str = ""
+    rate: int = 0              # preferred rate, 0 for none
+    start_in: int = 0          # preferred first gadget channel, 0 for none
+    start_out: int = 0
+    names_in: tuple = ()       # device channel names, from channel 1
+    names_out: tuple = ()
+    ignore_in: tuple = ()      # device channels that get no gadget slot
+    ignore_out: tuple = ()
+
+    def get(self, key, direction):
+        return getattr(self, f"{key}_{direction}")
+
+
+def _hex(digits):
+    def check(value):
+        if not isinstance(value, str) or not re.fullmatch(f"[0-9a-f]{{{digits}}}", value):
+            raise ValueError(f"{digits} lowercase hex digits")
+        return value
+    return check
+
+
+def _int(value):
+    if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+        raise ValueError("a positive integer")
+    return value
+
+
+def _text(value):
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError("a non-empty string")
+    return value.strip()
+
+
+def _names(value):
+    if not isinstance(value, list) or not all(isinstance(v, str) for v in value):
+        raise ValueError("a list of strings")
+    return tuple(value)
+
+
+def _channels(value):
+    try:
+        return tuple(sorted({_int(v) for v in value}))
+    except (TypeError, ValueError):
+        raise ValueError("a list of channel numbers, 1 and up") from None
+
+
+PROFILE_KEYS = {"bcd": _hex(4), "name": _text, "rate": _int, "start_in": _int, "start_out": _int,
+                "names_in": _names, "names_out": _names, "ignore_in": _channels, "ignore_out": _channels}
+
+
+def parse_profile(data, source=""):
+    """(Profile or None, [warning]) from the table of one profile file: a bad `match` drops
+    the file, an unknown key or a bad value only that key."""
+    match = data.get("match")
+    if not isinstance(match, str) or not re.fullmatch(r"[0-9a-f]{4}:[0-9a-f]{4}", match):
+        return None, [f"{source}: match must be idVendor:idProduct in lowercase hex, like \"84ef:0186\"; file ignored"]
+    fields, warnings = {}, []
+    for key, value in data.items():
+        if key == "match":
+            continue
+        if key not in PROFILE_KEYS:
+            warnings.append(f"{source}: unknown key '{key}' ignored")
+            continue
+        try:
+            fields[key] = PROFILE_KEYS[key](value)
+        except ValueError as e:
+            warnings.append(f"{source}: '{key}' must be {e}; ignored")
+    return Profile(match, source, **fields), warnings
+
+
+def match_profile(profiles, vendor, product, bcd):
+    """(Profile or None, [warning]) for a device: those with its VID:PID and, when set, its
+    bcdDevice; one with a bcd beats one without; of equals, the first by file name."""
+    hits = [p for p in profiles if p.match == f"{vendor}:{product}".lower() and p.bcd in ("", bcd.lower())]
+    best = [p for p in hits if p.bcd] or hits
+    best.sort(key=lambda p: p.source)
+    if len(best) > 1:
+        names = ", ".join(p.source for p in best)
+        return best[0], [f"profiles {names} match {vendor}:{product} equally; using {best[0].source}"]
+    return (best[0] if best else None), []

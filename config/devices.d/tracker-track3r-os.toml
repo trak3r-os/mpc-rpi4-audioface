@@ -1,0 +1,18 @@
+# Profile for a Tracker running track3r-os, in AUDIO mode (rpi-audiod; the format is in
+# config/rpi-audio.toml). Sources, all in ../track3r-os:
+#   - 16d0:0e9f, bcdDevice 0x0101 in AUDIO mode (0x0001 STANDARD and 0x0002 DISK carry no audio):
+#     usb/include/o3os/usb/identity.h (kVendorId, kProductId, kDeviceBcdAudio). The VID:PID is the
+#     official firmware's pair, so bcd is what picks this firmware's audio mode.
+#   - Every audio layout ("8 OUT / 2 IN", "10 OUT"...) keeps bcdDevice 0x0101, so bcd does not
+#     tell layouts apart: docs/adr/0012-usb-audio.md, amendments 3 and 5.
+#   - The return (what the Pi sends to the Tracker, OUT here) is always two channels, named
+#     "Return L" and "Return R" in its string descriptors: tests/usb_descriptor_test.cpp.
+#   - 44.1 kHz only: docs/hw/2026-10-29-f2-usb-devices.md [Pi].
+# No names_in: the stems are S1..S(n-2) and then "Master L", "Master R", with n = 2, 4, 6, 8, 10
+# or 11 by layout (usb/src/descriptors.cpp, channel_name), and a profile has one fixed list [?].
+
+match = "16d0:0e9f"
+bcd = "0101"
+name = "Tracker (track3r-os)"
+rate = 44100
+names_out = ["Return L", "Return R"]

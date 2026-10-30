@@ -38,3 +38,28 @@ channel_out = 15             # and for what comes from it (OUT)
 # "out" is host -> Pi; out 1-2 are usually the host's main mix.
 reserve_in = []
 reserve_out = [1, 2]
+
+[usb]
+# The most periodic (isochronous) full-speed bytes per frame one USB bus takes. A full-speed
+# device direction whose load does not fit what the running bridges leave is not started
+# (it waits, with the reason in `rpi-audiod status`) until another device leaves.
+# High-speed devices cost nothing. 1099 is what the Pi 4's VL805 accepted
+# (docs/hw/2026-10-29-f2-usb-devices.md); 0 turns the check off.
+fs_budget = 1099
+
+# Optional per-device profiles go in /etc/rpi-audio/devices.d/*.toml, one device per file
+# (installed from config/devices.d/). Keys, all but `match` optional:
+#   match = "84ef:0186"     idVendor:idProduct, lowercase hex
+#   bcd = "0101"            only this bcdDevice (a device's "shape", e.g. a firmware mode);
+#                           a profile with a matching bcd beats one without
+#   name = "..."            display name in status
+#   rate = 48000            preferred rate, tried before [bridge] rates
+#   start_in = 3            preferred first gadget channel (IN: Pi -> host, OUT: host -> Pi)
+#   start_out = 5           when the device has no saved block and the block is free;
+#                           saved blocks always win
+#   names_in = ["L", "R"]   device channel names shown in status, from channel 1
+#   names_out = ["L", "R"]
+#   ignore_in = [3, 4]      device channels (1-based) with no gadget slot and no route;
+#   ignore_out = []         the bridge still opens all of them
+# A bad `match` ignores the file; an unknown key or bad value is logged and ignored. Two equally
+# specific profiles for one device: the first by file name is used, with a warning.

@@ -4,6 +4,8 @@
 import sys
 from pathlib import Path
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "bridge" / "rpi-audiod"))
 import audiod  # noqa: E402
 from audiod import IN, OUT  # noqa: E402
@@ -253,3 +255,91 @@ def test_pcm_status():
 
 def test_identity_is_one_word():
     assert audiod.identity("1234", "5678", "AB 12/3", "1-1.2") == "usb-1234:5678-AB_12_3"
+
+
+def test_routes_skip_ignored_channels():
+    kept = audiod.kept_channels(6, (2, 3, 9))
+    assert kept == [1, 4, 5, 6]
+    assert audiod.routes("d_in", IN, 3, kept) == [
+        ("d_in:capture_1", "system:playback_3"), ("d_in:capture_4", "system:playback_4"),
+        ("d_in:capture_5", "system:playback_5"), ("d_in:capture_6", "system:playback_6")]
+    assert audiod.routes("d_out", OUT, 1, [2, 3]) == [
+        ("system:capture_1", "d_out:playback_2"), ("system:capture_2", "d_out:playback_3")]
+
+
+def test_allocate_preferred_start():
+    # A device without a saved block gets its preferred one when it is free, even after others.
+    assigned, _, saved = audiod.allocate({"a": 2, "b": 2}, {}, {}, 26, [1, 2], preferred={"b": 3})
+    assert assigned == {"a": 5, "b": 3}   # b is placed first; a takes the next free block
+    # A saved block wins over the preference.
+    assigned, _, _ = audiod.allocate({"a": 2, "b": 2}, {"b": 9}, {}, 26, [], preferred={"b": 3})
+    assert assigned["b"] == 9
+    # Taken, reserved, absent-held, out of range or not fitting: the usual first free block.
+    assigned, _, _ = audiod.allocate({"a": 2, "b": 2}, {}, {}, 26, [], preferred={"a": 1, "b": 1})
+    assert assigned == {"a": 1, "b": 3}
+    assigned, _, _ = audiod.allocate({"a": 2}, {}, {}, 26, [3, 4], preferred={"a": 4})
+    assert assigned == {"a": 1}
+    assigned, _, _ = audiod.allocate({"a": 2}, {"gone": 5}, {"gone": 2}, 26, [], preferred={"a": 6})
+    assert assigned == {"a": 1}
+    assigned, _, _ = audiod.allocate({"a": 2}, {}, {}, 26, [], preferred={"a": 26})
+    assert assigned == {"a": 1}
+    assigned, _, _ = audiod.allocate({"a": 2}, {}, {}, 26, [], preferred={"a": 0})
+    assert assigned == {"a": 1}
+    assigned, _, _ = audiod.allocate({"a": 3}, {}, {}, 26, [], preferred={"a": 4})   # any channel, no pairing
+    assert assigned == {"a": 4}
+
+
+def test_parse_profile():
+    data = {"match": "84ef:0186", "bcd": "0101", "name": " GP ", "rate": 48000, "start_in": 3, "start_out": 5,
+            "names_in": ["L", "R"], "names_out": ["L", "R"], "ignore_in": [4, 3, 3], "ignore_out": []}
+    profile, warnings = audiod.parse_profile(data, "gp.toml")
+    assert warnings == []
+    assert profile == audiod.Profile("84ef:0186", "gp.toml", "0101", "GP", 48000, 3, 5,
+                                     ("L", "R"), ("L", "R"), (3, 4), ())
+    assert profile.get("start", OUT) == 5 and profile.get("ignore", IN) == (3, 4)
+    assert audiod.parse_profile({"match": "84ef:0186"}, "x") == (audiod.Profile("84ef:0186", "x"), [])
+
+
+def test_parse_profile_bad_data():
+    for match in ("84EF:0186", "84ef-0186", "84ef:018", 5, None):
+        profile, warnings = audiod.parse_profile({"match": match, "name": "x"}, "bad.toml")
+        assert profile is None and len(warnings) == 1 and "bad.toml" in warnings[0]
+    assert audiod.parse_profile({"name": "x"}, "bad.toml")[0] is None
+    bad = {"match": "84ef:0186", "bcd": "1.1", "name": "", "rate": "48000", "start_in": 0, "start_out": True,
+           "names_in": "L", "names_out": [1], "ignore_in": [0], "ignore_out": "1", "colour": "red"}
+    profile, warnings = audiod.parse_profile(bad, "p.toml")
+    assert profile == audiod.Profile("84ef:0186", "p.toml")   # every bad key ignored
+    assert len(warnings) == 10 and all(w.startswith("p.toml:") for w in warnings)
+    assert any("unknown key 'colour'" in w for w in warnings)
+    good, warnings = audiod.parse_profile({"match": "84ef:0186", "rate": 44100, "bogus": 1}, "p.toml")
+    assert good.rate == 44100 and len(warnings) == 1
+
+
+def test_match_profile():
+    p = audiod.parse_profile
+    plain = p({"match": "16d0:0e9f", "name": "any"}, "10-any.toml")[0]
+    audio = p({"match": "16d0:0e9f", "bcd": "0101", "name": "audio"}, "20-audio.toml")[0]
+    other = p({"match": "84ef:0186", "name": "gp"}, "gp.toml")[0]
+    profiles = [plain, audio, other]
+    assert audiod.match_profile(profiles, "16d0", "0e9f", "0101") == (audio, [])   # bcd beats no bcd
+    assert audiod.match_profile(profiles, "16d0", "0e9f", "0001") == (plain, [])
+    assert audiod.match_profile(profiles, "84ef", "0186", "0101") == (other, [])
+    assert audiod.match_profile(profiles, "08bb", "2902", "0100") == (None, [])
+    assert audiod.match_profile([audio], "16d0", "0e9f", "0001") == (None, [])
+    twin = p({"match": "16d0:0e9f", "bcd": "0101", "name": "twin"}, "05-twin.toml")[0]
+    found, warnings = audiod.match_profile([audio, twin], "16D0", "0E9F", "0101")
+    assert found is twin and len(warnings) == 1 and "05-twin.toml" in warnings[0] and "20-audio.toml" in warnings[0]
+
+
+def test_repo_profiles_are_clean():
+    tomllib = pytest.importorskip("tomllib")
+    files = sorted((Path(__file__).resolve().parent.parent / "config" / "devices.d").glob("*.toml"))
+    assert files
+    profiles = []
+    for path in files:
+        profile, warnings = audiod.parse_profile(tomllib.loads(path.read_text()), path.name)
+        assert profile and not warnings, (path.name, warnings)
+        profiles.append(profile)
+    assert audiod.match_profile(profiles, "84ef", "0186", "0101")[0].rate == 48000
+    assert audiod.match_profile(profiles, "16d0", "0e9f", "0101")[0].names_out == ("Return L", "Return R")
+    assert audiod.match_profile(profiles, "16d0", "0e9f", "0001") == (None, [])
