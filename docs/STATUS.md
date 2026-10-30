@@ -1,4 +1,4 @@
-# Estado: 2026-10-30 (19:00)
+# Estado: 2026-10-30 (21:15)
 
 **Fase:** F1 cumplida con la Force a 26×26 S16, **siempre que la Pi esté reproduciendo**. F2 en marcha:
 
@@ -16,6 +16,10 @@ F4 en marcha: **USB MIDI en el gadget** (4 puertos), MIDI de paso por dispositiv
 
 ## Estado ahora mismo
 
+- **Causa de los paquetes vacíos encontrada y arreglada** (`docs/hw/2026-10-30-boot-soak.md`, sección 9): las respuestas SysEx de `rpi-audiod` salían de una vez y retrasaban el audio isócrono en el `dwc2`.
+  - Ahora salen en trozos de 64 B cada 6 ms.
+  - Con el panel abierto, 20 minutos sin un solo vacío de la Pi y un reinicio de MPC en 20 min, que no parece venir de la Pi.
+  - `threadirqs` no hace falta.
 - **Matriz de soaks acabada** (`docs/hw/2026-10-30-boot-soak.md`, sección 9):
   - el governor `performance` baja los paquetes IN vacíos de ~3–6 a ~1 por minuto, y los rearranques de MPC de uno cada pocos minutos a uno cada 10–20 minutos. Queda habilitado (`rpi-audio-cpu`);
   - `req_number` 8 no ayuda: vuelve a 4;

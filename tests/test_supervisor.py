@@ -1139,6 +1139,20 @@ def test_raw_midi_writes_everything_and_keeps_the_device_open():
     assert lib.opened == [(b"hw:CARD=MIDIGadget,DEV=0,SUBDEV=0", daemon.RawMidiOut.NONBLOCK)] and lib.closed == 0
 
 
+def test_raw_midi_writes_in_small_pieces_with_a_pause(monkeypatch):
+    sizes, pauses = [], []
+    lib = FakeAsound()
+    write = lib.snd_rawmidi_write
+    lib.snd_rawmidi_write = lambda h, data, n: sizes.append(n) or write(h, data, n)
+    monkeypatch.setattr(daemon.time, "sleep", pauses.append)
+    out = daemon.RawMidiOut("hw:CARD=MIDIGadget,DEV=0,SUBDEV=0", lib)
+    data = bytes(range(128)) * 2
+    out.write(data)
+    assert lib.written == data
+    assert sizes == [64, 64, 64, 64]
+    assert pauses == [out.GAP] * 3
+
+
 def test_raw_midi_waits_while_the_host_is_not_reading_then_gives_up(monkeypatch):
     lib = FakeAsound(write_results=[-11, -11, None])
     out = daemon.RawMidiOut("hw:X", lib)

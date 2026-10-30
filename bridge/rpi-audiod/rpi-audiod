@@ -421,9 +421,15 @@ class Bridge:
 class RawMidiOut:
     """One output of an ALSA raw MIDI device, kept open between writes (libasound through ctypes), so a reply is
     one write: no process to start and no sequencer subscription to make and drop each time. Non-blocking, with a
-    deadline: a host that stops reading the gadget's MIDI cannot hold the sender up for long."""
+    deadline: a host that stops reading the gadget's MIDI cannot hold the sender up for long.
+
+    Writes go out in small pieces with a pause between them. On the Pi's dwc2, a long burst of bulk MIDI to the host
+    delays the gadget's isochronous audio IN: 1.5 KB of SysEx in one go cost empty audio packets and host stream
+    restarts, while the same bytes in 64-byte pieces 6 ms apart did not (docs/hw/2026-10-30-boot-soak.md, section 9)."""
     EAGAIN = 11
     NONBLOCK = 2   # SND_RAWMIDI_NONBLOCK
+    CHUNK = 64     # bytes per write
+    GAP = 0.006    # seconds between writes
 
     def __init__(self, name, lib=None):
         self.name, self.handle = name, None
@@ -463,7 +469,8 @@ class RawMidiOut:
             self.open()
         deadline = time.monotonic() + timeout
         while data:
-            r = self.lib.snd_rawmidi_write(self.handle, data, len(data))
+            piece = data[:self.CHUNK]
+            r = self.lib.snd_rawmidi_write(self.handle, piece, len(piece))
             if r == -self.EAGAIN:
                 if time.monotonic() > deadline:
                     raise TimeoutError(f"{self.name}: the host is not reading")
@@ -473,6 +480,8 @@ class RawMidiOut:
                 raise OSError(-r, f"{self.name}: {self.error(r)}")
             else:
                 data = data[r:]
+                if data:
+                    time.sleep(self.GAP)
 
 
 class Midi:

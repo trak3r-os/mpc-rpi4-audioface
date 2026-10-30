@@ -12,7 +12,9 @@ Evidence status:
 
 Details: `docs/hw/2026-10-30-f4-midi.md`.
 
-**Replies must be sent with `aplaymidi`, not `aseqsend`.** A kernel sequencer port only opens its output when something is subscribed to it, and `aseqsend` sends without subscribing [Pi]. `aplaymidi` does subscribe. It takes a one-track MIDI file that contains the SysEx.
+**Replies are written to the gadget's raw MIDI output** of the control cable, which `rpi-audiod` keeps open. If that fails, it falls back to `aplaymidi`. Do not use `aseqsend`: a kernel sequencer port only opens its output when something is subscribed to it, and `aseqsend` sends without subscribing [Pi].
+
+**Replies go out in 64-byte pieces, 6 ms apart**, so a 1.5 KB `status` takes about 150 ms. On the Pi's USB controller, a long burst of MIDI to the host delays the audio going to the host. In one go, the panel's replies cost empty audio packets and made the host restart its streams; paced, they cost nothing (`docs/hw/2026-10-30-boot-soak.md`, section 9).
 
 ## Gadget
 
