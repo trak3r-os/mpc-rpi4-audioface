@@ -4,6 +4,7 @@ and the budget bookkeeping of the daemon's bridges."""
 
 import importlib.machinery
 import importlib.util
+import signal
 import sys
 import types
 from pathlib import Path
@@ -171,9 +172,9 @@ if stub:
 
 
 class FakeChild:
-    def __init__(self, name, cmd, on_line=None):
+    def __init__(self, name, cmd, on_line=None, stop_signal=None):
         self.name, self.cmd, self.alive_, self.proc = name, cmd, True, types.SimpleNamespace(returncode=0)
-        self.started = 0.0
+        self.started, self.stop_signal = 0.0, stop_signal
 
     def alive(self):
         return self.alive_
@@ -263,3 +264,16 @@ def test_device_ignores_channels_and_status_names(monkeypatch):
     assert entry["name"] == "Dev"
     assert entry[IN]["slots"] == 2 and entry[IN]["ignored"] == [2] and entry[IN]["names"] == ["L", "R", "Aux"]
     assert OUT not in entry
+
+
+def test_bridges_stop_zita_with_sigint(monkeypatch):
+    d, _ = bridges(monkeypatch, ("a", "1", 0))
+    tick(d, 1099)
+    assert d.bridges[("usb-a", IN)].child.stop_signal == signal.SIGINT
+
+
+def test_child_stop_sends_its_signal(monkeypatch):
+    monkeypatch.setattr(daemon, "log", lambda msg: None)
+    c = daemon.Child("sleep", ["sleep", "5"], stop_signal=signal.SIGINT)
+    c.stop()
+    assert c.proc.returncode == -signal.SIGINT

@@ -174,10 +174,11 @@ def udc_state():
 class Child:
     """A process whose output goes to the log with a prefix; a line repeated in a row
     is logged once with a count (a stuck zita says "Starting synchronisation." forever).
-    With on_line, each line goes to it instead."""
+    With on_line, each line goes to it instead. stop_signal is what stop() sends first."""
 
-    def __init__(self, name, cmd, on_line=None):
+    def __init__(self, name, cmd, on_line=None, stop_signal=signal.SIGTERM):
         self.name, self.cmd, self.started, self.on_line = name, cmd, time.monotonic(), on_line
+        self.stop_signal = stop_signal
         self.proc = subprocess.Popen(cmd, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
                                      stderr=subprocess.STDOUT, text=True, errors="replace")
         threading.Thread(target=self._pump, daemon=True).start()
@@ -204,11 +205,11 @@ class Child:
 
     def stop(self, grace=1.0):
         if self.alive():
-            self.proc.terminate()
+            self.proc.send_signal(self.stop_signal)
             try:
                 self.proc.wait(grace)
             except subprocess.TimeoutExpired:
-                log(f"rpi-audiod: {self.name} ignored SIGTERM, killing it")
+                log(f"rpi-audiod: {self.name} ignored {signal.Signals(self.stop_signal).name}, killing it")
                 self.proc.kill()
                 self.proc.wait()
 
@@ -340,7 +341,9 @@ class Bridge:
             cmd = [tool, "-j", self.client, "-d", f"hw:CARD={self.dev.id}", "-r", str(self.rate),
                    "-c", str(self.channels), "-p", str(b.get("period", 256)), "-n", str(b.get("periods", 2))]
             log(f"rpi-audiod: starting {' '.join(cmd)}")
-            self.child = Child(self.client, cmd)
+            # zita only leaves JACK cleanly on SIGINT; SIGTERM kills it mid-cycle and
+            # jackd logs xruns until it drops the client.
+            self.child = Child(self.client, cmd, stop_signal=signal.SIGINT)
 
     def stop(self, disconnect=True):
         """disconnect=False when jackd is going away too: a stuck server could hang it."""

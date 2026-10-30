@@ -121,8 +121,7 @@ Queda:
    - la aceptación de F4;
    - el presupuesto de verdad: con el Tracker en "8 OUT / 2 IN" más el mezclador, la grabación abre y la reproducción espera.
 4. **Por qué MPC ya no abre rpi-audio solo al arrancar** (en F1 sí lo hacía), o cómo hacer que lo guarde.
-5. **Mejora:** al desenchufar un dispositivo, jackd da unos 13 xruns mientras se paran sus zita colgados.
-6. **Después:** F5 y los opcionales (F1b con 32 canales, VST, S32).
+5. **Después:** F5 y los opcionales (F1b con 32 canales, VST, S32).
 
 ## Pruebas de tonos
 
