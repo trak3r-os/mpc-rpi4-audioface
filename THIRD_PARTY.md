@@ -14,6 +14,13 @@ Reused code keeps its own licence. Everything else in the repository is GPL-3.0-
   sd88me's installer in its zip) and by the internal I/O add-on (`tools/hosts/akai-force-internal-io/`, whose zip ships
   sd88me's addin installer).
 
+## Linux kernel patch (`tools/kernel/u_audio/`)
+
+- `u_audio-idle-silence.patch` changes the kernel's `drivers/usb/gadget/function/u_audio.c` (GPL-2.0), so the patch
+  is under GPL-2.0, like the file it changes. `build.sh` downloads that file and its two headers from
+  raspberrypi/linux at a fixed commit, checks their SHA-256 and builds the module on the Pi; none of the kernel's
+  files are kept in this repository.
+
 ## rpi-audio Panel (`tools/hosts/akai-force-panel/`)
 
 - Adapted from `barsiren-mcp` (MIT): the shape of the native skin generator (`skin.py`: TUI.json components,

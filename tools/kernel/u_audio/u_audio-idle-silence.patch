@@ -1,0 +1,182 @@
+usb: gadget: u_audio: size IN packets and send silence while ALSA is idle
+
+SPDX-License-Identifier: GPL-2.0
+A patch to the Linux kernel (drivers/usb/gadget/function/u_audio.c, GPL-2.0), so it is under the kernel's licence,
+not this repository's. Base: raspberrypi/linux 4e747c864a88537e18b1ffc19a1954c9686bb8e1 (rpi-6.18.y).
+
+While the gadget's playback PCM is not running (before an engine opens it, or between two engines),
+u_audio_iso_complete() re-queued every IN request untouched: the size it had last (at stream start, the
+rate rounded down to whole frames per packet, e.g. 11 frames = 44000 frames/s for 44100 Hz with bInterval 2)
+and the audio it carried last. The host then receives fewer frames per second than the rate it set, plus
+stale audio. An Akai MPC fails its capture with -EIO ("capture error -5") when that happens while it
+streams. Size every IN packet for the rate, running or not, and send zeros while ALSA is idle.
+
+--- a/drivers/usb/gadget/function/u_audio.c
++++ b/drivers/usb/gadget/function/u_audio.c
+@@ -146,6 +146,67 @@
+ 	*(__le32 *)buf = cpu_to_le32(ff);
+ }
+ 
++/*
++ * Size the next IN (playback) packet for the stream's rate. Called for every
++ * IN packet, also while ALSA is not running, so the host always receives the
++ * nominal number of frames per second.
++ */
++static void u_audio_size_in_req(struct snd_uac_chip *uac,
++				struct uac_rtd_params *prm,
++				struct usb_ep *ep, struct usb_request *req)
++{
++	unsigned int frames, p_pktsize;
++	unsigned long long pitched_rate_mil, p_pktsize_residue_mil,
++			residue_frames_mil, div_result;
++
++	/*
++	 * For each IN packet, take the quotient of the current data
++	 * rate and the endpoint's interval as the base packet size.
++	 * If there is a residue from this division, add it to the
++	 * residue accumulator.
++	 */
++	unsigned long long p_interval_mil = uac->p_interval * 1000000ULL;
++
++	pitched_rate_mil = (unsigned long long) prm->srate * prm->pitch;
++	div_result = pitched_rate_mil;
++	do_div(div_result, uac->p_interval);
++	do_div(div_result, 1000000);
++	frames = (unsigned int) div_result;
++
++	pr_debug("p_srate %d, pitch %d, interval_mil %llu, frames %d\n",
++			prm->srate, prm->pitch, p_interval_mil, frames);
++
++	p_pktsize = min_t(unsigned int,
++				uac->p_framesize * frames,
++				ep->maxpacket);
++
++	if (p_pktsize < ep->maxpacket) {
++		residue_frames_mil = pitched_rate_mil - frames * p_interval_mil;
++		p_pktsize_residue_mil = uac->p_framesize * residue_frames_mil;
++	} else
++		p_pktsize_residue_mil = 0;
++
++	req->length = p_pktsize;
++	uac->p_residue_mil += p_pktsize_residue_mil;
++
++	/*
++	 * Whenever there are more bytes in the accumulator p_residue_mil than we
++	 * need to add one more sample frame, increase this packet's
++	 * size and decrease the accumulator.
++	 */
++	div_result = uac->p_residue_mil;
++	do_div(div_result, uac->p_interval);
++	do_div(div_result, 1000000);
++	if ((unsigned int) div_result >= uac->p_framesize) {
++		req->length += uac->p_framesize;
++		uac->p_residue_mil -= uac->p_framesize * p_interval_mil;
++		pr_debug("increased req length to %d\n", req->length);
++	}
++	pr_debug("remains uac->p_residue_mil %llu\n", uac->p_residue_mil);
++
++	req->actual = req->length;
++}
++
+ static void u_audio_iso_complete(struct usb_ep *ep, struct usb_request *req)
+ {
+ 	unsigned int pending;
+@@ -155,9 +216,6 @@
+ 	struct snd_pcm_runtime *runtime;
+ 	struct uac_rtd_params *prm = req->context;
+ 	struct snd_uac_chip *uac = prm->uac;
+-	unsigned int frames, p_pktsize;
+-	unsigned long long pitched_rate_mil, p_pktsize_residue_mil,
+-			residue_frames_mil, div_result;
+ 
+ 	/* i/f shutting down */
+ 	if (!prm->ep_enabled) {
+@@ -178,65 +236,24 @@
+ 
+ 	substream = prm->ss;
+ 
+-	/* Do nothing if ALSA isn't active */
++	if (prm == &uac->p_prm)
++		u_audio_size_in_req(uac, prm, ep, req);
++
++	/*
++	 * ALSA isn't active: an IN packet goes out with silence, still sized for
++	 * the rate. Re-sending the last packet as it was would repeat stale audio
++	 * at a fixed size, below the nominal rate, which some hosts treat as an
++	 * error (Akai MPC: "capture error -5").
++	 */
+ 	if (!substream)
+-		goto exit;
++		goto idle;
+ 
+ 	snd_pcm_stream_lock(substream);
+ 
+ 	runtime = substream->runtime;
+ 	if (!runtime || !snd_pcm_running(substream)) {
+ 		snd_pcm_stream_unlock(substream);
+-		goto exit;
+-	}
+-
+-	if (substream->stream == SNDRV_PCM_STREAM_PLAYBACK) {
+-		/*
+-		 * For each IN packet, take the quotient of the current data
+-		 * rate and the endpoint's interval as the base packet size.
+-		 * If there is a residue from this division, add it to the
+-		 * residue accumulator.
+-		 */
+-		unsigned long long p_interval_mil = uac->p_interval * 1000000ULL;
+-
+-		pitched_rate_mil = (unsigned long long) prm->srate * prm->pitch;
+-		div_result = pitched_rate_mil;
+-		do_div(div_result, uac->p_interval);
+-		do_div(div_result, 1000000);
+-		frames = (unsigned int) div_result;
+-
+-		pr_debug("p_srate %d, pitch %d, interval_mil %llu, frames %d\n",
+-				prm->srate, prm->pitch, p_interval_mil, frames);
+-
+-		p_pktsize = min_t(unsigned int,
+-					uac->p_framesize * frames,
+-					ep->maxpacket);
+-
+-		if (p_pktsize < ep->maxpacket) {
+-			residue_frames_mil = pitched_rate_mil - frames * p_interval_mil;
+-			p_pktsize_residue_mil = uac->p_framesize * residue_frames_mil;
+-		} else
+-			p_pktsize_residue_mil = 0;
+-
+-		req->length = p_pktsize;
+-		uac->p_residue_mil += p_pktsize_residue_mil;
+-
+-		/*
+-		 * Whenever there are more bytes in the accumulator p_residue_mil than we
+-		 * need to add one more sample frame, increase this packet's
+-		 * size and decrease the accumulator.
+-		 */
+-		div_result = uac->p_residue_mil;
+-		do_div(div_result, uac->p_interval);
+-		do_div(div_result, 1000000);
+-		if ((unsigned int) div_result >= uac->p_framesize) {
+-			req->length += uac->p_framesize;
+-			uac->p_residue_mil -= uac->p_framesize * p_interval_mil;
+-			pr_debug("increased req length to %d\n", req->length);
+-		}
+-		pr_debug("remains uac->p_residue_mil %llu\n", uac->p_residue_mil);
+-
+-		req->actual = req->length;
++		goto idle;
+ 	}
+ 
+ 	hw_ptr = prm->hw_ptr;
+@@ -271,7 +288,11 @@
+ 
+ 	if ((hw_ptr % snd_pcm_lib_period_bytes(substream)) < req->actual)
+ 		snd_pcm_period_elapsed(substream);
++	goto exit;
+ 
++idle:
++	if (prm == &uac->p_prm)
++		memset(req->buf, 0, req->length);
+ exit:
+ 	if (usb_ep_queue(ep, req, GFP_ATOMIC))
+ 		dev_err(uac->card->dev, "%d Error!\n", __LINE__);

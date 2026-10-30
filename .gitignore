@@ -5,6 +5,7 @@ __pycache__/
 .pytest_cache/
 tools/hosts/akai-force-internal-io/build/
 tools/hosts/akai-force-internal-io/dist/
+tools/kernel/u_audio/build/
 # Claude Code worktrees
 .claude/worktrees/
 tools/hosts/akai-force-panel/build/
