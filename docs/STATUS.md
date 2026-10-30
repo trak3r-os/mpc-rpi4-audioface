@@ -114,7 +114,7 @@ Queda:
    - por dónde salen Out 1/2 y 3/4. Con eso, `install.sh conf` con la configuración del repo y reiniciar la Force.
 2. **El incidente del reinicio de la Pi:** probado en la Force (2026-10-30, con el usuario delante y AKAI_SSD expulsado): parada del gadget y reinicio completo de la Pi con MPC transmitiendo, los dos limpios, sin `EMI?`.
    - Son dos pruebas y la causa sigue sin aislar; la hipótesis es babble al desenlazar el UDC en mitad del stream.
-   - Queda por ver cómo se comporta con MPC escribiendo, y si la primera apertura del gadget tras enumerar da siempre `capture error -5` (`docs/hw/2026-10-30-boot-soak.md`).
+   - Queda por ver cómo se comporta con MPC escribiendo, y si la primera apertura del gadget tras enumerar da siempre `capture error -5` (`docs/hw/2026-10-30-boot-soak.md`). La causa está en el kernel: `u_audio` no mantiene el ritmo de 44.100 cuando nadie reproduce, y jackd tarda ~0,5 s en empezar. El arreglo de raíz sería un `u_audio.ko` parcheado.
    - La Pi guarda su journal entre arranques (`journalctl -b -1`) para analizar cualquier repetición.
 3. **Con el Tracker enchufado a la Pi:**
    - la aceptación de F4;
