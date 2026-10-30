@@ -1,4 +1,4 @@
-# Estado: 2026-10-30 (17:25)
+# Estado: 2026-10-30 (19:00)
 
 **Fase:** F1 cumplida con la Force a 26×26 S16, **siempre que la Pi esté reproduciendo**. F2 en marcha:
 
@@ -16,11 +16,12 @@ F4 en marcha: **USB MIDI en el gadget** (4 puertos), MIDI de paso por dispositiv
 
 ## Estado ahora mismo
 
-- **El gadget, tras el incidente del soak D (17:20):** la Force no lo volvió a enumerar después de los reenlaces del agente, ni siquiera al desenchufar y volver a enchufar el cable.
-  - Un reinicio de la Pi, con el OK del usuario, lo arregló (17:30): la Force ve `rpi-audio` (tarjeta 0) y el UDC está `configured`.
-  - MPC no lo lista en Preferences → Audio Device: solo sale "Internal". Falta reiniciar MPC (lo hace el usuario) y elegir rpi-audio.
-  - Detalle y resultados de la matriz: `docs/hw/2026-10-30-boot-soak.md`, sección 9. Con governor `performance` (C2, ya habilitado), 0,5 paquetes vacíos por minuto y ningún reinicio de MPC, frente a ~3–6 por minuto con `ondemand`.
-  - Quedan D (`req_number` 8) y E (parche de `u_audio`).
+- **Matriz de soaks acabada** (`docs/hw/2026-10-30-boot-soak.md`, sección 9):
+  - el governor `performance` baja los paquetes IN vacíos de ~3–6 a ~1 por minuto, y los rearranques de MPC de uno cada pocos minutos a uno cada 10–20 minutos. Queda habilitado (`rpi-audio-cpu`);
+  - `req_number` 8 no ayuda: vuelve a 4;
+  - el `u_audio` parcheado no cambia los vacíos y está cargado hasta el próximo reinicio.
+  - Lo siguiente serían `threadirqs` con afinidad de la IRQ del `dwc2`, o su DMA por descriptores. Tocan el arranque: necesitan el OK del usuario.
+  - El incidente de los reenlaces del agente se arregló reiniciando la Pi (17:30). MPC refresca su lista de dispositivos al salir de Preferences y volver a entrar.
 - **Reinicio de la Pi con la Force conectada:** el 2026-10-30 un reinicio con MPC transmitiendo tiró una vez todo el hub USB interno de la Force (`usb2-port1: disabled by hub (EMI?)`) y desmontó en sucio la SD de MockbaMod y AKAI_SSD. Con la mitigación de `rpi-audio-gadget down` (1f7a421), la parada del gadget y un reinicio completo con MPC transmitiendo salieron limpios (dos pruebas, con el SSD expulsado). La causa no está aislada; si vuelve a pasar, hay que reponer la regla. `docs/hw/2026-10-30-boot-soak.md`.
 - **La Force:** `mpc_internal_io` está instalado en la SD de MockbaMod y se carga en cada arranque.
   - **Ajustes temporales de la prueba de salidas:** MPC Out 1/2 → códec 1/2 y Out 3/4 → códec 3/4. Al acabar, volver a `mpc_internal_io.conf` del repo con `install.sh conf` y reiniciar la Force.
