@@ -564,9 +564,9 @@ static void test_engine() {
     CHECK_EQ(fake->count("status"), 0);
 
     fake->present = true;
-    CHECK(wait_for([&] { return c.synced(); }));  // status reassembled from 90-byte pieces
-    c.get_text(P_LINK, txt, sizeof txt);
-    CHECK_EQ(std::string(txt), std::string("44.1 kHz | 26x26"));
+    // status reassembled from 90-byte pieces; the texts follow on the worker's next tick, after synced()
+    CHECK(wait_for([&] { return c.synced() && c.get_text(P_LINK, txt, sizeof txt) &&
+                                std::string(txt) == "44.1 kHz | 26x26"; }));
     CHECK_EQ(c.get_value(strip_param(2, F_PRESENT)), 1);
     c.get_text(strip_param(0, F_NAME), txt, sizeof txt);
     CHECK_EQ(std::string(txt), std::string("Mixer"));
