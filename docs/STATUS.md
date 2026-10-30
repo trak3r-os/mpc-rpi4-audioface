@@ -16,9 +16,9 @@ F4 en marcha: **USB MIDI en el gadget** (4 puertos), MIDI de paso por dispositiv
 
 ## Estado ahora mismo
 
-- **La Force no ve el gadget (17:20):** tras reiniciar el gadget para el soak D, la Force no lo volvió a enumerar, y los reenlaces que siguieron tampoco lo arreglaron.
-  - Hay que desenchufar y volver a enchufar el cable USB, o reiniciar la Pi con el OK del usuario.
-  - Después, elegir rpi-audio en MPC.
+- **El gadget, tras el incidente del soak D (17:20):** la Force no lo volvió a enumerar después de los reenlaces del agente, ni siquiera al desenchufar y volver a enchufar el cable.
+  - Un reinicio de la Pi, con el OK del usuario, lo arregló (17:30): la Force ve `rpi-audio` (tarjeta 0) y el UDC está `configured`.
+  - MPC no lo lista en Preferences → Audio Device: solo sale "Internal". Falta reiniciar MPC (lo hace el usuario) y elegir rpi-audio.
   - Detalle y resultados de la matriz: `docs/hw/2026-10-30-boot-soak.md`, sección 9. Con governor `performance` (C2, ya habilitado), 0,5 paquetes vacíos por minuto y ningún reinicio de MPC, frente a ~3–6 por minuto con `ondemand`.
   - Quedan D (`req_number` 8) y E (parche de `u_audio`).
 - **Reinicio de la Pi con la Force conectada:** el 2026-10-30 un reinicio con MPC transmitiendo tiró una vez todo el hub USB interno de la Force (`usb2-port1: disabled by hub (EMI?)`) y desmontó en sucio la SD de MockbaMod y AKAI_SSD. Con la mitigación de `rpi-audio-gadget down` (1f7a421), la parada del gadget y un reinicio completo con MPC transmitiendo salieron limpios (dos pruebas, con el SSD expulsado). La causa no está aislada; si vuelve a pasar, hay que reponer la regla. `docs/hw/2026-10-30-boot-soak.md`.
