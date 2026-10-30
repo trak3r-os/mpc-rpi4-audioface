@@ -2,7 +2,7 @@
 
 A native ARM VST2 plugin for MPC OS that shows and controls the hub from the Force's touchscreen: devices with their channel ranges, names, levels and mutes, presets, and the link state. It makes no sound: it exists for its screen. It lives in `tools/hosts/akai-force-panel/`, together with its art generator and its packaging. It belongs to the Force, not to the generic project: the protocol it speaks (`docs/MIDI.md`) can be used by any host.
 
-**Evidence status.** It builds for armhf, passes its tests on the laptop [repo], and the installer accepts the package against a copy of `MPC.settings` on the laptop [repo]. **None of this has been tested on the Force**: not that MPC loads the plugin, not that the skin looks like the preview, and not the communication with the hub [?]. What is missing is listed at the end.
+**Evidence status.** It builds for armhf, passes its tests on the laptop [repo], and the installer accepts the package against a copy of `MPC.settings` on the laptop [repo]. **On the Force (2026-10-30)** [Force]: installed with its `install.sh` into `/media/AKAI_SSD/Synths`; MPC lists it under VST and opens it; the skin looks like the preview. It connects to the Pi and shows the devices (CODEC, "Guitar Rig" with "Amp L, Amp R"), levels and the presets "Live" and "Quiet". Through MPC Remote touches: MUTE on and off, the name picker ("Mixer"), loading presets 2 and 1 (the fader followed: 60, then 100) and a fader drag (51, then 91 or 93) all reached `rpi-audiod` as commands. What is still missing is listed at the end.
 
 ## What it shows
 

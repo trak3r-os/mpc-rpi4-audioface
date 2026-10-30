@@ -139,13 +139,13 @@ Host notes are in [docs/hosts/akai-force.md](docs/hosts/akai-force.md).
 
 A VST2 plugin for MPC that shows the hub on the Force's screen: each device with its channel range, name, level and mute, the 8 presets, and the link state. It makes no sound. The Q-Links control levels. Details: [docs/hosts/akai-force-panel.md](docs/hosts/akai-force-panel.md).
 
-**Status: not yet tested on the Force.** It builds, passes its tests on a laptop, and its installer accepts the package, but nobody has loaded it in MPC yet.
+**Status: tested on an Akai Force (MPC 3.9.1.2, MockbaMod) on 2026-10-30.** It installs with its installer, loads in MPC, connects to the Pi and shows the devices, names, channel names, levels and presets. MUTE, the name picker, presets and a fader drag all reached `rpi-audiod`. Not tested yet: the physical Q-Links, SAVE, "On project load" and reopening a saved project.
 
 To install, copy the release folder to the Force and run its installer as root. Save your MPC project first, because the installer restarts MPC.
 
 ```sh
 scp -r rpi-audio-Panel-1.0.0 root@force.local:/tmp/
-ssh root@force.local sh /tmp/rpi-audio-Panel-1.0.0/install.sh -t /media/AKAI_SSD/Synths
+ssh root@force.local sh /tmp/rpi-audio-Panel-1.0.0/install.sh -y -t /media/AKAI_SSD/Synths
 ```
 
 To build the release folder yourself (needs Docker, g++ and Python 3 with Pillow):

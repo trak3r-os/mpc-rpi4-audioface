@@ -518,7 +518,8 @@ class Midi:
                 text = midi.sysex_text(event[1])
                 if text is not None:
                     reply = daemon.command(text)
-                    log(f"rpi-audiod: MIDI command '{text}': {reply[:60]}")
+                    if text.split()[:1] not in (["status"], ["ping"]):   # a panel polls status every second
+                        log(f"rpi-audiod: MIDI command '{text}': {reply[:60]}")
                     self.send(reply)
             elif event[0] == "cc" and event[1] in self.channels:
                 cmd = midi.cc_command(*event[1:], self.channels, daemon.starts())

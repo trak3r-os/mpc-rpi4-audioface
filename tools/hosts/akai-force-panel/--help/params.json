@@ -1,0 +1,1041 @@
+[
+ {
+  "key": "link",
+  "name": "Link",
+  "min": 0,
+  "max": 1,
+  "default": 0,
+  "display": "string"
+ },
+ {
+  "key": "preset_1",
+  "name": "Preset 1",
+  "min": 0,
+  "max": 1,
+  "default": 0,
+  "momentary": true,
+  "hold_ms": 150
+ },
+ {
+  "key": "preset_2",
+  "name": "Preset 2",
+  "min": 0,
+  "max": 1,
+  "default": 0,
+  "momentary": true,
+  "hold_ms": 150
+ },
+ {
+  "key": "preset_3",
+  "name": "Preset 3",
+  "min": 0,
+  "max": 1,
+  "default": 0,
+  "momentary": true,
+  "hold_ms": 150
+ },
+ {
+  "key": "preset_4",
+  "name": "Preset 4",
+  "min": 0,
+  "max": 1,
+  "default": 0,
+  "momentary": true,
+  "hold_ms": 150
+ },
+ {
+  "key": "preset_5",
+  "name": "Preset 5",
+  "min": 0,
+  "max": 1,
+  "default": 0,
+  "momentary": true,
+  "hold_ms": 150
+ },
+ {
+  "key": "preset_6",
+  "name": "Preset 6",
+  "min": 0,
+  "max": 1,
+  "default": 0,
+  "momentary": true,
+  "hold_ms": 150
+ },
+ {
+  "key": "preset_7",
+  "name": "Preset 7",
+  "min": 0,
+  "max": 1,
+  "default": 0,
+  "momentary": true,
+  "hold_ms": 150
+ },
+ {
+  "key": "preset_8",
+  "name": "Preset 8",
+  "min": 0,
+  "max": 1,
+  "default": 0,
+  "momentary": true,
+  "hold_ms": 150
+ },
+ {
+  "key": "preset_name_1",
+  "name": "Preset 1 Name",
+  "min": 0,
+  "max": 1,
+  "default": 0,
+  "display": "string"
+ },
+ {
+  "key": "preset_name_2",
+  "name": "Preset 2 Name",
+  "min": 0,
+  "max": 1,
+  "default": 0,
+  "display": "string"
+ },
+ {
+  "key": "preset_name_3",
+  "name": "Preset 3 Name",
+  "min": 0,
+  "max": 1,
+  "default": 0,
+  "display": "string"
+ },
+ {
+  "key": "preset_name_4",
+  "name": "Preset 4 Name",
+  "min": 0,
+  "max": 1,
+  "default": 0,
+  "display": "string"
+ },
+ {
+  "key": "preset_name_5",
+  "name": "Preset 5 Name",
+  "min": 0,
+  "max": 1,
+  "default": 0,
+  "display": "string"
+ },
+ {
+  "key": "preset_name_6",
+  "name": "Preset 6 Name",
+  "min": 0,
+  "max": 1,
+  "default": 0,
+  "display": "string"
+ },
+ {
+  "key": "preset_name_7",
+  "name": "Preset 7 Name",
+  "min": 0,
+  "max": 1,
+  "default": 0,
+  "display": "string"
+ },
+ {
+  "key": "preset_name_8",
+  "name": "Preset 8 Name",
+  "min": 0,
+  "max": 1,
+  "default": 0,
+  "display": "string"
+ },
+ {
+  "key": "save",
+  "name": "Save",
+  "options": [
+   "Off",
+   "On"
+  ],
+  "default": 0
+ },
+ {
+  "key": "onload",
+  "name": "On Project Load",
+  "options": [
+   "None",
+   "Preset 1",
+   "Preset 2",
+   "Preset 3",
+   "Preset 4",
+   "Preset 5",
+   "Preset 6",
+   "Preset 7",
+   "Preset 8"
+  ],
+  "default": 0
+ },
+ {
+  "key": "s1_name",
+  "name": "S1 Name",
+  "min": 0,
+  "max": 1,
+  "default": 0,
+  "display": "string"
+ },
+ {
+  "key": "s1_state",
+  "name": "S1 State",
+  "min": 0,
+  "max": 1,
+  "default": 0,
+  "display": "string"
+ },
+ {
+  "key": "s1_present",
+  "name": "S1 Present",
+  "options": [
+   "No",
+   "Yes"
+  ],
+  "default": 0
+ },
+ {
+  "key": "s1_in_vis",
+  "name": "S1 IN Shown",
+  "options": [
+   "Hidden",
+   "Shown",
+   "Dimmed"
+  ],
+  "default": 0
+ },
+ {
+  "key": "s1_out_vis",
+  "name": "S1 OUT Shown",
+  "options": [
+   "Hidden",
+   "Shown",
+   "Dimmed"
+  ],
+  "default": 0
+ },
+ {
+  "key": "s1_in_range",
+  "name": "S1 IN Range",
+  "min": 0,
+  "max": 1,
+  "default": 0,
+  "display": "string"
+ },
+ {
+  "key": "s1_in_names",
+  "name": "S1 IN Names",
+  "min": 0,
+  "max": 1,
+  "default": 0,
+  "display": "string"
+ },
+ {
+  "key": "s1_in_level",
+  "name": "S1 IN Level",
+  "min": 0,
+  "max": 100,
+  "default": 100,
+  "unit": "%",
+  "display": "int"
+ },
+ {
+  "key": "s1_in_mute",
+  "name": "S1 IN Mute",
+  "options": [
+   "Off",
+   "On"
+  ],
+  "default": 0
+ },
+ {
+  "key": "s1_out_range",
+  "name": "S1 OUT Range",
+  "min": 0,
+  "max": 1,
+  "default": 0,
+  "display": "string"
+ },
+ {
+  "key": "s1_out_names",
+  "name": "S1 OUT Names",
+  "min": 0,
+  "max": 1,
+  "default": 0,
+  "display": "string"
+ },
+ {
+  "key": "s1_out_level",
+  "name": "S1 OUT Level",
+  "min": 0,
+  "max": 100,
+  "default": 100,
+  "unit": "%",
+  "display": "int"
+ },
+ {
+  "key": "s1_out_mute",
+  "name": "S1 OUT Mute",
+  "options": [
+   "Off",
+   "On"
+  ],
+  "default": 0
+ },
+ {
+  "key": "s1_kind",
+  "name": "S1 Type",
+  "options": [
+   "Default",
+   "Guitar",
+   "Bass",
+   "Synth",
+   "Keys",
+   "Drums",
+   "Drum machine",
+   "Sampler",
+   "Vocal",
+   "Mic",
+   "Mixer",
+   "Line",
+   "FX",
+   "Tracker",
+   "Custom"
+  ],
+  "default": 0
+ },
+ {
+  "key": "s1_kind__open",
+  "name": "S1 Type List",
+  "options": [
+   "Closed",
+   "Open"
+  ],
+  "default": 0,
+  "popup_of": "s1_kind"
+ },
+ {
+  "key": "s2_name",
+  "name": "S2 Name",
+  "min": 0,
+  "max": 1,
+  "default": 0,
+  "display": "string"
+ },
+ {
+  "key": "s2_state",
+  "name": "S2 State",
+  "min": 0,
+  "max": 1,
+  "default": 0,
+  "display": "string"
+ },
+ {
+  "key": "s2_present",
+  "name": "S2 Present",
+  "options": [
+   "No",
+   "Yes"
+  ],
+  "default": 0
+ },
+ {
+  "key": "s2_in_vis",
+  "name": "S2 IN Shown",
+  "options": [
+   "Hidden",
+   "Shown",
+   "Dimmed"
+  ],
+  "default": 0
+ },
+ {
+  "key": "s2_out_vis",
+  "name": "S2 OUT Shown",
+  "options": [
+   "Hidden",
+   "Shown",
+   "Dimmed"
+  ],
+  "default": 0
+ },
+ {
+  "key": "s2_in_range",
+  "name": "S2 IN Range",
+  "min": 0,
+  "max": 1,
+  "default": 0,
+  "display": "string"
+ },
+ {
+  "key": "s2_in_names",
+  "name": "S2 IN Names",
+  "min": 0,
+  "max": 1,
+  "default": 0,
+  "display": "string"
+ },
+ {
+  "key": "s2_in_level",
+  "name": "S2 IN Level",
+  "min": 0,
+  "max": 100,
+  "default": 100,
+  "unit": "%",
+  "display": "int"
+ },
+ {
+  "key": "s2_in_mute",
+  "name": "S2 IN Mute",
+  "options": [
+   "Off",
+   "On"
+  ],
+  "default": 0
+ },
+ {
+  "key": "s2_out_range",
+  "name": "S2 OUT Range",
+  "min": 0,
+  "max": 1,
+  "default": 0,
+  "display": "string"
+ },
+ {
+  "key": "s2_out_names",
+  "name": "S2 OUT Names",
+  "min": 0,
+  "max": 1,
+  "default": 0,
+  "display": "string"
+ },
+ {
+  "key": "s2_out_level",
+  "name": "S2 OUT Level",
+  "min": 0,
+  "max": 100,
+  "default": 100,
+  "unit": "%",
+  "display": "int"
+ },
+ {
+  "key": "s2_out_mute",
+  "name": "S2 OUT Mute",
+  "options": [
+   "Off",
+   "On"
+  ],
+  "default": 0
+ },
+ {
+  "key": "s2_kind",
+  "name": "S2 Type",
+  "options": [
+   "Default",
+   "Guitar",
+   "Bass",
+   "Synth",
+   "Keys",
+   "Drums",
+   "Drum machine",
+   "Sampler",
+   "Vocal",
+   "Mic",
+   "Mixer",
+   "Line",
+   "FX",
+   "Tracker",
+   "Custom"
+  ],
+  "default": 0
+ },
+ {
+  "key": "s2_kind__open",
+  "name": "S2 Type List",
+  "options": [
+   "Closed",
+   "Open"
+  ],
+  "default": 0,
+  "popup_of": "s2_kind"
+ },
+ {
+  "key": "s3_name",
+  "name": "S3 Name",
+  "min": 0,
+  "max": 1,
+  "default": 0,
+  "display": "string"
+ },
+ {
+  "key": "s3_state",
+  "name": "S3 State",
+  "min": 0,
+  "max": 1,
+  "default": 0,
+  "display": "string"
+ },
+ {
+  "key": "s3_present",
+  "name": "S3 Present",
+  "options": [
+   "No",
+   "Yes"
+  ],
+  "default": 0
+ },
+ {
+  "key": "s3_in_vis",
+  "name": "S3 IN Shown",
+  "options": [
+   "Hidden",
+   "Shown",
+   "Dimmed"
+  ],
+  "default": 0
+ },
+ {
+  "key": "s3_out_vis",
+  "name": "S3 OUT Shown",
+  "options": [
+   "Hidden",
+   "Shown",
+   "Dimmed"
+  ],
+  "default": 0
+ },
+ {
+  "key": "s3_in_range",
+  "name": "S3 IN Range",
+  "min": 0,
+  "max": 1,
+  "default": 0,
+  "display": "string"
+ },
+ {
+  "key": "s3_in_names",
+  "name": "S3 IN Names",
+  "min": 0,
+  "max": 1,
+  "default": 0,
+  "display": "string"
+ },
+ {
+  "key": "s3_in_level",
+  "name": "S3 IN Level",
+  "min": 0,
+  "max": 100,
+  "default": 100,
+  "unit": "%",
+  "display": "int"
+ },
+ {
+  "key": "s3_in_mute",
+  "name": "S3 IN Mute",
+  "options": [
+   "Off",
+   "On"
+  ],
+  "default": 0
+ },
+ {
+  "key": "s3_out_range",
+  "name": "S3 OUT Range",
+  "min": 0,
+  "max": 1,
+  "default": 0,
+  "display": "string"
+ },
+ {
+  "key": "s3_out_names",
+  "name": "S3 OUT Names",
+  "min": 0,
+  "max": 1,
+  "default": 0,
+  "display": "string"
+ },
+ {
+  "key": "s3_out_level",
+  "name": "S3 OUT Level",
+  "min": 0,
+  "max": 100,
+  "default": 100,
+  "unit": "%",
+  "display": "int"
+ },
+ {
+  "key": "s3_out_mute",
+  "name": "S3 OUT Mute",
+  "options": [
+   "Off",
+   "On"
+  ],
+  "default": 0
+ },
+ {
+  "key": "s3_kind",
+  "name": "S3 Type",
+  "options": [
+   "Default",
+   "Guitar",
+   "Bass",
+   "Synth",
+   "Keys",
+   "Drums",
+   "Drum machine",
+   "Sampler",
+   "Vocal",
+   "Mic",
+   "Mixer",
+   "Line",
+   "FX",
+   "Tracker",
+   "Custom"
+  ],
+  "default": 0
+ },
+ {
+  "key": "s3_kind__open",
+  "name": "S3 Type List",
+  "options": [
+   "Closed",
+   "Open"
+  ],
+  "default": 0,
+  "popup_of": "s3_kind"
+ },
+ {
+  "key": "s4_name",
+  "name": "S4 Name",
+  "min": 0,
+  "max": 1,
+  "default": 0,
+  "display": "string"
+ },
+ {
+  "key": "s4_state",
+  "name": "S4 State",
+  "min": 0,
+  "max": 1,
+  "default": 0,
+  "display": "string"
+ },
+ {
+  "key": "s4_present",
+  "name": "S4 Present",
+  "options": [
+   "No",
+   "Yes"
+  ],
+  "default": 0
+ },
+ {
+  "key": "s4_in_vis",
+  "name": "S4 IN Shown",
+  "options": [
+   "Hidden",
+   "Shown",
+   "Dimmed"
+  ],
+  "default": 0
+ },
+ {
+  "key": "s4_out_vis",
+  "name": "S4 OUT Shown",
+  "options": [
+   "Hidden",
+   "Shown",
+   "Dimmed"
+  ],
+  "default": 0
+ },
+ {
+  "key": "s4_in_range",
+  "name": "S4 IN Range",
+  "min": 0,
+  "max": 1,
+  "default": 0,
+  "display": "string"
+ },
+ {
+  "key": "s4_in_names",
+  "name": "S4 IN Names",
+  "min": 0,
+  "max": 1,
+  "default": 0,
+  "display": "string"
+ },
+ {
+  "key": "s4_in_level",
+  "name": "S4 IN Level",
+  "min": 0,
+  "max": 100,
+  "default": 100,
+  "unit": "%",
+  "display": "int"
+ },
+ {
+  "key": "s4_in_mute",
+  "name": "S4 IN Mute",
+  "options": [
+   "Off",
+   "On"
+  ],
+  "default": 0
+ },
+ {
+  "key": "s4_out_range",
+  "name": "S4 OUT Range",
+  "min": 0,
+  "max": 1,
+  "default": 0,
+  "display": "string"
+ },
+ {
+  "key": "s4_out_names",
+  "name": "S4 OUT Names",
+  "min": 0,
+  "max": 1,
+  "default": 0,
+  "display": "string"
+ },
+ {
+  "key": "s4_out_level",
+  "name": "S4 OUT Level",
+  "min": 0,
+  "max": 100,
+  "default": 100,
+  "unit": "%",
+  "display": "int"
+ },
+ {
+  "key": "s4_out_mute",
+  "name": "S4 OUT Mute",
+  "options": [
+   "Off",
+   "On"
+  ],
+  "default": 0
+ },
+ {
+  "key": "s4_kind",
+  "name": "S4 Type",
+  "options": [
+   "Default",
+   "Guitar",
+   "Bass",
+   "Synth",
+   "Keys",
+   "Drums",
+   "Drum machine",
+   "Sampler",
+   "Vocal",
+   "Mic",
+   "Mixer",
+   "Line",
+   "FX",
+   "Tracker",
+   "Custom"
+  ],
+  "default": 0
+ },
+ {
+  "key": "s4_kind__open",
+  "name": "S4 Type List",
+  "options": [
+   "Closed",
+   "Open"
+  ],
+  "default": 0,
+  "popup_of": "s4_kind"
+ },
+ {
+  "key": "s5_name",
+  "name": "S5 Name",
+  "min": 0,
+  "max": 1,
+  "default": 0,
+  "display": "string"
+ },
+ {
+  "key": "s5_state",
+  "name": "S5 State",
+  "min": 0,
+  "max": 1,
+  "default": 0,
+  "display": "string"
+ },
+ {
+  "key": "s5_present",
+  "name": "S5 Present",
+  "options": [
+   "No",
+   "Yes"
+  ],
+  "default": 0
+ },
+ {
+  "key": "s5_in_vis",
+  "name": "S5 IN Shown",
+  "options": [
+   "Hidden",
+   "Shown",
+   "Dimmed"
+  ],
+  "default": 0
+ },
+ {
+  "key": "s5_out_vis",
+  "name": "S5 OUT Shown",
+  "options": [
+   "Hidden",
+   "Shown",
+   "Dimmed"
+  ],
+  "default": 0
+ },
+ {
+  "key": "s5_in_range",
+  "name": "S5 IN Range",
+  "min": 0,
+  "max": 1,
+  "default": 0,
+  "display": "string"
+ },
+ {
+  "key": "s5_in_names",
+  "name": "S5 IN Names",
+  "min": 0,
+  "max": 1,
+  "default": 0,
+  "display": "string"
+ },
+ {
+  "key": "s5_in_level",
+  "name": "S5 IN Level",
+  "min": 0,
+  "max": 100,
+  "default": 100,
+  "unit": "%",
+  "display": "int"
+ },
+ {
+  "key": "s5_in_mute",
+  "name": "S5 IN Mute",
+  "options": [
+   "Off",
+   "On"
+  ],
+  "default": 0
+ },
+ {
+  "key": "s5_out_range",
+  "name": "S5 OUT Range",
+  "min": 0,
+  "max": 1,
+  "default": 0,
+  "display": "string"
+ },
+ {
+  "key": "s5_out_names",
+  "name": "S5 OUT Names",
+  "min": 0,
+  "max": 1,
+  "default": 0,
+  "display": "string"
+ },
+ {
+  "key": "s5_out_level",
+  "name": "S5 OUT Level",
+  "min": 0,
+  "max": 100,
+  "default": 100,
+  "unit": "%",
+  "display": "int"
+ },
+ {
+  "key": "s5_out_mute",
+  "name": "S5 OUT Mute",
+  "options": [
+   "Off",
+   "On"
+  ],
+  "default": 0
+ },
+ {
+  "key": "s5_kind",
+  "name": "S5 Type",
+  "options": [
+   "Default",
+   "Guitar",
+   "Bass",
+   "Synth",
+   "Keys",
+   "Drums",
+   "Drum machine",
+   "Sampler",
+   "Vocal",
+   "Mic",
+   "Mixer",
+   "Line",
+   "FX",
+   "Tracker",
+   "Custom"
+  ],
+  "default": 0
+ },
+ {
+  "key": "s5_kind__open",
+  "name": "S5 Type List",
+  "options": [
+   "Closed",
+   "Open"
+  ],
+  "default": 0,
+  "popup_of": "s5_kind"
+ },
+ {
+  "key": "s6_name",
+  "name": "S6 Name",
+  "min": 0,
+  "max": 1,
+  "default": 0,
+  "display": "string"
+ },
+ {
+  "key": "s6_state",
+  "name": "S6 State",
+  "min": 0,
+  "max": 1,
+  "default": 0,
+  "display": "string"
+ },
+ {
+  "key": "s6_present",
+  "name": "S6 Present",
+  "options": [
+   "No",
+   "Yes"
+  ],
+  "default": 0
+ },
+ {
+  "key": "s6_in_vis",
+  "name": "S6 IN Shown",
+  "options": [
+   "Hidden",
+   "Shown",
+   "Dimmed"
+  ],
+  "default": 0
+ },
+ {
+  "key": "s6_out_vis",
+  "name": "S6 OUT Shown",
+  "options": [
+   "Hidden",
+   "Shown",
+   "Dimmed"
+  ],
+  "default": 0
+ },
+ {
+  "key": "s6_in_range",
+  "name": "S6 IN Range",
+  "min": 0,
+  "max": 1,
+  "default": 0,
+  "display": "string"
+ },
+ {
+  "key": "s6_in_names",
+  "name": "S6 IN Names",
+  "min": 0,
+  "max": 1,
+  "default": 0,
+  "display": "string"
+ },
+ {
+  "key": "s6_in_level",
+  "name": "S6 IN Level",
+  "min": 0,
+  "max": 100,
+  "default": 100,
+  "unit": "%",
+  "display": "int"
+ },
+ {
+  "key": "s6_in_mute",
+  "name": "S6 IN Mute",
+  "options": [
+   "Off",
+   "On"
+  ],
+  "default": 0
+ },
+ {
+  "key": "s6_out_range",
+  "name": "S6 OUT Range",
+  "min": 0,
+  "max": 1,
+  "default": 0,
+  "display": "string"
+ },
+ {
+  "key": "s6_out_names",
+  "name": "S6 OUT Names",
+  "min": 0,
+  "max": 1,
+  "default": 0,
+  "display": "string"
+ },
+ {
+  "key": "s6_out_level",
+  "name": "S6 OUT Level",
+  "min": 0,
+  "max": 100,
+  "default": 100,
+  "unit": "%",
+  "display": "int"
+ },
+ {
+  "key": "s6_out_mute",
+  "name": "S6 OUT Mute",
+  "options": [
+   "Off",
+   "On"
+  ],
+  "default": 0
+ },
+ {
+  "key": "s6_kind",
+  "name": "S6 Type",
+  "options": [
+   "Default",
+   "Guitar",
+   "Bass",
+   "Synth",
+   "Keys",
+   "Drums",
+   "Drum machine",
+   "Sampler",
+   "Vocal",
+   "Mic",
+   "Mixer",
+   "Line",
+   "FX",
+   "Tracker",
+   "Custom"
+  ],
+  "default": 0
+ },
+ {
+  "key": "s6_kind__open",
+  "name": "S6 Type List",
+  "options": [
+   "Closed",
+   "Open"
+  ],
+  "default": 0,
+  "popup_of": "s6_kind"
+ }
+]
