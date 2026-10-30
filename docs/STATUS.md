@@ -120,7 +120,7 @@ Queda:
 3. **Con el Tracker enchufado a la Pi:**
    - la aceptación de F4;
    - el presupuesto de verdad: con el Tracker en "8 OUT / 2 IN" más el mezclador, la grabación abre y la reproducción espera.
-4. **Por qué MPC ya no abre rpi-audio solo al arrancar** (en F1 sí lo hacía), o cómo hacer que lo guarde.
+4. **MPC al arrancar:** no guarda la interfaz USB y abre siempre su audio interno. Por qué en F1 sí abrió rpi-audio sola está por ver. Opción: elegir rpi-audio con MPC Remote al arrancar, desde `tools/hosts/`.
 5. **Después:** F5 y los opcionales (F1b con 32 canales, VST, S32).
 
 ## Pruebas de tonos
