@@ -7,12 +7,15 @@ Al empezar cada sesión, lee `docs/STATUS.md` (estado y traspaso) y la fase en c
 ## Reglas
 
 - **Evidencia.** Marca los hechos como en el plan: [Pi], [Force], [repo], [código], [ext], [est] o [?]. Nunca digas "hecho", "funciona" o "estable" sin haber ejecutado en el mismo turno el comando que lo demuestra, y di qué falta. Una prueba contra un host (p. ej. el portátil) no demuestra nada sobre otro (p. ej. la Force).
-- **Hosts: solo lectura.** En un host (la Force), por SSH, solo diagnósticos que no escriban (`tools/hosts/`). Nunca instales, escribas ficheros, reinicies servicios ni cambies preferencias en un host. Dos excepciones:
+- **Hosts: solo lectura.** En un host (la Force), por SSH, solo diagnósticos que no escriban (`tools/hosts/`). Nunca instales, escribas ficheros, reinicies servicios ni cambies preferencias en un host. Tres excepciones:
   1. **La SD de MockbaMod** (autorizada por el usuario el 2026-10-29): en la Force se puede escribir en `/media/662522`, de donde MPC carga sus add-ons con `LD_PRELOAD`. Nunca con una prueba en marcha, y nada fuera de esa ruta.
   2. **MPC Remote** (autorizada por el usuario el 2026-10-30): el addin MPC Remote se instala en esa misma SD (`tools/hosts/akai-force-remote/`). A través de su MCP se puede manejar MPC para probar rpi-audio: ver la pantalla, tocarla, pulsar botones, mandar MIDI y cambiar las preferencias de audio y MIDI. También se pueden crear pistas de prueba en un proyecto nuevo.
      - Nunca guardar, sobrescribir ni borrar proyectos, samples o ficheros del usuario.
      - Nunca pulsar REC ni tocar lo que no tenga que ver con la prueba.
      - Siempre con `bind=127.0.0.1` y por túnel SSH.
+  3. **rpi-audio Panel** (autorizada por el usuario el 2026-10-30): el plugin `tools/hosts/akai-force-panel/` se instala, actualiza o desinstala con el `install.sh`/`uninstall.sh` de su paquete.
+     - Ese instalador escribe solo su carpeta en `/media/AKAI_SSD/Synths`, registra el plugin en `MPC.settings` y reinicia MPC.
+     - Nada más en AKAI_SSD ni en las preferencias, y nunca con un proyecto del usuario sin guardar.
 
   Las contraseñas van en variables de entorno (`FORCE_PASS`), nunca en un fichero. La Force se resuelve como `force.local`.
 - **Pi.** `no3z@192.168.1.106`, con clave SSH. Los cambios de sistema van por `tools/deploy.sh` (idempotente) y se anotan en `docs/hw/`. Nada destructivo sin preguntar: formatear, borrar datos, cambiar la red o el arranque.
