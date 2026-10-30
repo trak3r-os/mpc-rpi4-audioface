@@ -13,9 +13,9 @@ MODE="${1:-all}"
 ARM_IMAGE="${PANEL_ARM_IMAGE:-rpi-audio-panel-armhf:bullseye}"
 SO=rpi_audio_panel.so
 MAX_GLIBC="2.32"   # MPC OS 2.x; barsiren's floor
-WRAP=vendor/mpc-vst-plugins/wrapper
+WRAP=../vendor/mpc-vst-plugins/wrapper
 CORE=(src/panel_json.cpp src/panel_protocol.cpp src/panel_model.cpp src/panel_core.cpp src/panel_engine.cpp src/panel_io_alsa.cpp)
-INC=(-Ibuild -Isrc -I"$WRAP" -DENGINE_TYPED_PARAMETERS)
+INC=(-Ibuild -Isrc -I"$WRAP")
 CXXW=(-std=c++17 -Wall -Wextra -Wno-unused-parameter -Wno-psabi -fPIC -pthread)
 CW=(-std=gnu11 -Wall -Wextra -Wno-unused-parameter -fPIC)
 
@@ -106,7 +106,7 @@ arm() {
   if ! docker image inspect "$ARM_IMAGE" >/dev/null 2>&1; then
     docker build -f Dockerfile.arm -t "$ARM_IMAGE" .
   fi
-  docker run --rm --user "$(id -u):$(id -g)" -v "$ROOT:/work" -w /work "$ARM_IMAGE" bash build.sh arm-internal
+  docker run --rm --user "$(id -u):$(id -g)" -v "$ROOT/..:/work" -w /work/akai-force-panel "$ARM_IMAGE" bash build.sh arm-internal
 }
 
 case "$MODE" in

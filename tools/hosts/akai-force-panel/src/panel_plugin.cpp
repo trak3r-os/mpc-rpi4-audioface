@@ -3,6 +3,7 @@
 // parameters, which the skin shows and the Q-Links drive.
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <memory>
 #include <string>
@@ -18,6 +19,7 @@ namespace {
 
 struct Instance {
   std::unique_ptr<Engine> engine;
+  uint32_t pending[kWords] = {};  // changes taken from the core and not yet handed to the wrapper
 };
 
 void* create(const char* data_dir) {
@@ -34,8 +36,16 @@ void render(void*, int16_t* out, int frames) { std::memset(out, 0, sizeof(int16_
 
 Core& core_of(void* p) { return static_cast<Instance*>(p)->engine->core(); }
 
+// The wrapper sends values as text: an option's index, or the value in the parameter's own range.
 void set_param(void* p, const char* key, const char* val) {
-  if (!std::strcmp(key, "state")) core_of(p).load_state(val);
+  if (!std::strcmp(key, "state")) {
+    core_of(p).load_state(val);
+    return;
+  }
+  int i = key_index(key);
+  if (i < 0 || is_text(i)) return;
+  double v = std::strtod(val, nullptr);
+  if (std::isfinite(v)) core_of(p).set_param(i, static_cast<int>(std::lround(v)));
 }
 
 int get_param(void* p, const char* key, char* buf, int n) {
@@ -55,23 +65,27 @@ int get_param(void* p, const char* key, char* buf, int n) {
   return static_cast<int>(std::strlen(buf));
 }
 
-int poll_changes(void* p, uint32_t* changed, int nwords) { return core_of(p).poll_changes(changed, nwords); }
-
 }  // namespace
 
-// The wrapper's typed-parameter path (ENGINE_TYPED_PARAMETERS): numeric values without string round trips.
-extern "C" int engine_get_physical(void* inst, int index, float* value) {
-  if (index < 0 || index >= kParams) return 0;
-  *value = is_text(index) ? 0.0f : static_cast<float>(core_of(inst).get_value(index));
-  return 1;
-}
-
-extern "C" void engine_set_physical(void* inst, int index, float physical) {
-  if (!std::isfinite(physical)) return;
-  core_of(inst).set_param(index, static_cast<int>(std::lround(physical)));
+// What changed on its own (the Pi's status, a reply): the wrapper asks once per block, one key per call, under its
+// engine lock, and tells the host. Texts are left out: the wrapper polls those itself and asks for an UpdateDisplay.
+extern "C" int mpc_engine_changed(void* p, char* key, int len) {
+  Instance* in = static_cast<Instance*>(p);
+  for (int pass = 0; pass < 2; pass++) {
+    for (int w = 0; w < kWords; w++)
+      while (in->pending[w]) {
+        int i = w * 32 + __builtin_ctz(in->pending[w]);
+        in->pending[w] &= in->pending[w] - 1;
+        if (i >= kParams || is_text(i)) continue;
+        key_name(i, key, len);
+        return 1;
+      }
+    if (pass == 0) core_of(p).poll_changes(in->pending, kWords);
+  }
+  return 0;
 }
 
 extern "C" const mpc_engine_t* mpc_engine(void) {
-  static const mpc_engine_t api = {create, destroy, midi, set_param, get_param, render, nullptr, poll_changes};
+  static const mpc_engine_t api = {create, destroy, midi, set_param, get_param, render, nullptr, nullptr};
   return &api;
 }

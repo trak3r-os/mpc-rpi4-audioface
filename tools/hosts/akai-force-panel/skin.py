@@ -17,7 +17,7 @@ from PIL import Image, ImageDraw, ImageFont
 
 HERE = pathlib.Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
-sys.path.insert(0, str(HERE / "vendor/mpc-vst-plugins/tools"))
+sys.path.insert(0, str(HERE / "../vendor/mpc-vst-plugins/tools"))
 import gen_vst  # noqa: E402
 import panel_def as D  # noqa: E402
 

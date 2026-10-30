@@ -2,7 +2,7 @@
 
 A native ARM VST2 plugin for MPC OS that shows and controls the hub from the Force's touchscreen: devices with their channel ranges, names, levels and mutes, presets, and the link state. It makes no sound: it exists for its screen. It lives in `tools/hosts/akai-force-panel/`, together with its art generator and its packaging. It belongs to the Force, not to the generic project: the protocol it speaks (`docs/MIDI.md`) can be used by any host.
 
-**Evidence status.** It builds for armhf, passes its tests on the laptop [repo], and the installer accepts the package against a copy of `MPC.settings` on the laptop [repo]. **On the Force (2026-10-30)** [Force]: installed with its `install.sh` into `/media/AKAI_SSD/Synths`; MPC lists it under VST and opens it; the skin looks like the preview. It connects to the Pi and shows the devices (CODEC, "Guitar Rig" with "Amp L, Amp R"), levels and the presets "Live" and "Quiet". Through MPC Remote touches: MUTE on and off, the name picker ("Mixer"), loading presets 2 and 1 (the fader followed: 60, then 100) and a fader drag (51, then 91 or 93) all reached `rpi-audiod` as commands. What is still missing is listed at the end.
+**Evidence status.** It builds for armhf, passes its tests on the laptop [repo], and the installer accepts the package against a copy of `MPC.settings` on the laptop [repo]. **On the Force (2026-10-30)** [Force]: installed with its `install.sh` into `/media/AKAI_SSD/Synths`; MPC lists it under VST and opens it; the skin looks like the preview. It connects to the Pi and shows the devices (CODEC, "Guitar Rig" with "Amp L, Amp R"), levels and the presets "Live" and "Quiet". Through MPC Remote touches: MUTE on and off, the name picker ("Mixer"), loading presets 2 and 1 (the fader followed: 60, then 100) and a fader drag (51, then 91 or 93) all reached `rpi-audiod` as commands. **Rebuilt on sd88me's current wrapper and installed again the same day** [Force]: the same screen, MUTE, presets 2 and 1 (the fader followed: 60, then 100), a fader drag (86 → 65 in four commands) and a level changed on the Pi (the fader moved to 100 on its own). What is still missing is listed at the end.
 
 ## What it shows
 
@@ -50,7 +50,7 @@ What is tested: JSON reader, SysEx reassembly, command format, state → strips,
 
 ## Install
 
-The plugin is installed with sd88me's installer, into `/media/AKAI_SSD/Synths`, which is outside what Claude may write on the Force, so you do it yourself. The Force needs MockbaMod. Save your project first: the installer stops and starts MPC.
+The plugin is installed with sd88me's installer, into `/media/AKAI_SSD/Synths`. The Force needs MockbaMod. Save your project first: the installer stops and starts MPC.
 
 ```sh
 scp -r dist/rpi-audio-Panel-1.0.0 root@force.local:/tmp/
@@ -59,16 +59,19 @@ ssh root@force.local sh /tmp/rpi-audio-Panel-1.0.0/install.sh -y -t /media/AKAI_
 
 Then add **rpi-audio Panel** to a track from the instrument browser. `panel.conf` is kept when you update. To remove it, run `uninstall.sh` from the same package.
 
-## What changed in sd88me's wrapper
+## sd88me's wrapper
 
-Three small changes, recorded in `tools/hosts/akai-force-panel/vendor/mpc-vst-plugins/VENDORED.md` and in `THIRD_PARTY.md`: the numeric-parameter hook gets a generic name; `mpc_engine_t` gains `poll_changes`; and `housekeeping()` (called from `processReplacing`) tells the host what the engine changed on its own. The wrapper comes from the copy in `barsiren-mcp` (MIT, the user's own project), which is sd88me's commit `faae55a` plus fixes and runs on the Force. It is not the current head of sd88me.
+The wrapper, `gen_vst.py` and the packager are sd88me's, vendored **unmodified** in `tools/hosts/vendor/mpc-vst-plugins/`
+(commit in its `VENDORED.md`; `THIRD_PARTY.md`). To update them, run `tools/hosts/vendor/sync-mpc-vst-plugins.sh`, then
+`build.sh all` and the tests. The panel reports what changes on its own (the Pi's status, a reply) through the wrapper's
+optional `mpc_engine_changed()`, one key per call; the wrapper polls text readouts itself and asks MPC for an
+UpdateDisplay when one changes. Values arrive from the wrapper as text, an option's index or the value in the
+parameter's range.
 
 ## Not verified on the Force
 
-- That MPC loads the `.so` (it needs `libasound.so.2`, which MPC already uses [Force]) and shows the skin; the real size of live texts and whether they cut long names (a 168 px name label fits about 14 characters).
-- That `snd_seq_open("default")` works inside MPC (JUCE uses it for its MIDI, so it should) and that the `rpi-audio` client and its port 0 appear with those names on the Force.
-- Conditional visibility (`IndexedEnabling`) with three states, popup pickers with 15 options, and the close key.
-- That MPC calls `processReplacing` while the track is stopped (the Pi's changes reaching the screen depend on it) and that it does not rebuild the automation screen on every `audioMasterAutomate`. If it records the notifications as automation when recording, this needs adjusting.
+- Whether long names are cut (a 168 px name label fits about 14 characters), the "Dimmed" visibility state, and the picker's close key.
+- That the change notifications (`audioMasterAutomate`) are not recorded as automation while MPC records. With the transport stopped, the Pi's changes do reach the screen [Force].
 - That MPC does not rewrite saved parameters after the 2 s lock that follows a state restore.
 - What MPC does with the project state: the plugin only saves *On project load*.
 - How long the Pi takes to apply a command and whether the 2 s hold is enough.

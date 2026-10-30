@@ -21,8 +21,13 @@ import os
 import re
 import shutil
 import stat
+import sys
 import tempfile
 import zipfile
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from catalog_check import max_glibc  # noqa: E402
+import skin_compat  # noqa: E402
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 
@@ -97,7 +102,16 @@ for script in ("install.sh", "uninstall.sh"):
     open(p, "w", newline="\n").write(text)
     os.chmod(p, 0o755)
 
+def elf_machine(path):
+    d = open(path, "rb").read(20)
+    if d[:4] != b"\x7fELF":
+        return "not-elf"
+    arch = {40: "armv7", 62: "x86_64", 183: "aarch64", 3: "x86"}.get(int.from_bytes(d[18:20], "little"), "unknown")
+    return arch if arch != "armv7" or d[4:6] == b"\x01\x01" else "unknown"   # ARM, but not 32-bit little-endian
+
 # INSTALL.md
+gen2 = elf_machine(a.so) == "aarch64"   # a Gen2 (64-bit) build: its INSTALL.md names the Gen2 device class, drive and plugin-list key
+SYNTHS = "<your Synths folder>" if gen2 else "/sdcard/Synths"   # Gen2: /nvme/Synths on a Live III, /storage/Synths on a One (docs/GEN2.md)
 kind = "instrument" if attr.get("isInstrument") == "1" else "effect"
 b = ""
 if bench:
@@ -106,27 +120,36 @@ if bench:
          "block %.1f%%, verdict **%s**. As a rule of thumb, several instances run comfortably when p99 is under 15%%.\n"
          % (bench["p99_pct"], bench["max_pct"], bench["verdict"]))
 extra_md = "".join("- `%s` (data next to the plugin)\n" % e for e in extras)
-user_md = ("\nYour own files go in %s inside the plugin folder (`/sdcard/Synths/%s/`); the installer keeps them when you upgrade "
+user_md = ("\nYour own files go in %s inside the plugin folder (`%s/%s/`); the installer keeps them when you upgrade "
            "and uninstall, and moves them there from the old `/sdcard/vst` location if you had installed the plugin that way.\n"
-           % (", ".join("`%s/`" % d for d in a.user_data), skin_name)) if a.user_data else ""
+           % (", ".join("`%s/`" % d for d in a.user_data), SYNTHS, skin_name)) if a.user_data else ""
+REQ_GEN1 = """- A first-generation MPC OS standalone device (32-bit ARM, like the Force, MPC Live / Live II, One, X and Key 61).
+  The installer refuses anything else. Newer models are untested.
+- **Root shell access** (SSH) to the device. Stock MPC OS doesn't offer this; you need a modded unit.
+- Tested on MPC OS with a Force. Installing plugins this way is unofficial: back up first, use at your own risk."""
+REQ_GEN2 = """- A Gen2 MPC OS standalone device (64-bit ARM, aarch64: MPC Live III and the other 64-bit models) on MPC OS 3.x.
+  The installer refuses anything else (the 32-bit Force, MPC Live / Live II, One, X and Key 61 need the `-mpc-armv7.zip` build).
+- **Root shell access** (SSH) to the device. Stock MPC OS doesn't offer this; you need a modded unit.
+- Gen2 devices keep plugins in the internal drive's Synths folder, and the folder differs: **`/nvme/Synths`** on a Live III, **`/storage/Synths`**
+  on an MPC One. It must be one of the folders listed under `SynthContentLocations` in `/data/Settings/MPC/MPC.settings` (MPC draws a plugin's
+  skin only from a listed folder): `grep -A6 SynthContentLocations /data/Settings/MPC/MPC.settings`. Use that folder wherever this guide says
+  `<your Synths folder>`.
+  Tested on an MPC Live III. Installing plugins this way is unofficial: back up first, use at your own risk."""
 install_md = """# {name} {ver}
 
 {about}A native MPC OS plugin ({kind}) with its own MPC screen skin, loaded by MPC's built-in plugin host.
 
 ## Requirements
 
-- A first-generation MPC OS standalone device (32-bit ARM, like the Force, MPC Live / Live II, One, X and Key 61).
-  The installer refuses anything else. Newer models are untested.
-- **Root shell access** (SSH) to the device. Stock MPC OS doesn't offer this; you need a modded unit.
-- Tested on MPC OS with a Force. Installing plugins this way is unofficial: back up first, use at your own risk.
+{requirements}
 
 ## Install (scripted)
 
 1. Unzip, then copy the whole folder to the device, e.g. `scp -r {top} root@<device-ip>:/tmp/`
-2. Run it: `ssh root@<device-ip> sh /tmp/{top}/install.sh`
+2. Run it: `ssh root@<device-ip> sh /tmp/{top}/install.sh{install_args}`
 
 The installer checks the device, **stops MPC** (save your project first), copies `portable/{skin}/` (the plugin, its skin
-and its data, as one folder) into `/sdcard/Synths`, backs up `MPC.settings`, adds the plugin to MPC's plugin list from the
+and its data, as one folder) into `{synths}`, backs up `MPC.settings`, adds the plugin to MPC's plugin list from the
 folder's `plugin-meta.xml` and starts MPC again. Running it again upgrades in place, keeping your own files.
 An older install of this plugin (the previous layout, with the `.so` in `/sdcard/vst`) is replaced, not duplicated.
 `-y` skips the confirmation prompt; `-t <folder>` installs into another Synths folder (for example on a card).
@@ -141,14 +164,14 @@ restarts MPC). Projects that use the plugin will load without it. Files you adde
 
 ## Install by hand
 
-1. Copy `portable/{skin}/` to `/sdcard/Synths/{skin}/`. It holds `{so}`, `plugin-meta.xml`, `version.xml`, `Plugin Skins/`
+1. Copy `portable/{skin}/` to `{synths}/{skin}/`. It holds `{so}`, `plugin-meta.xml`, `version.xml`, `Plugin Skins/`
    and the data:
 {extra_md}2. Stop MPC: `systemctl stop acvs`. If there is no `acvs` service (`systemctl cat acvs` fails, as on some MPC OS 2.x versions and on Hakai-enabled systems), use `systemctl stop inmusic-mpc`.
 3. Back up the settings file, `MPC.settings` (on a Force: `/media/az01-internal/Settings/MPC/MPC.settings`).
-4. In `MPC.settings`, inside `<VALUE name="pluginList-arm"><KNOWNPLUGINS>`, add the line from `plugin-meta.xml` with
-   `%payload-path%` replaced by `/sdcard/Synths`. If there is no `pluginList-arm` value yet, add one just before `</PROPERTIES>`:
+4. In `MPC.settings`, inside `<VALUE name="{listkey}"><KNOWNPLUGINS>`, add the line from `plugin-meta.xml` with
+   `%payload-path%` replaced by `{synths}`. If there is no `{listkey}` value yet, add one just before `</PROPERTIES>`:
    ```xml
-   <VALUE name="pluginList-arm">
+   <VALUE name="{listkey}">
      <KNOWNPLUGINS>
        (the line from plugin-meta.xml)
      </KNOWNPLUGINS>
@@ -163,19 +186,11 @@ rebuild the whole plugin list from the plugin folders in `Synths` keep this plug
 
 See `SHA256SUMS`. Made with [mpc-vst-plugins](https://github.com/sd88me/mpc-vst-plugins).
 """.format(name=name, ver=a.version, about=(a.about + "\n\n") if a.about else "", kind=kind, top=top, so=so_name,
-           skin=skin_name, extra_md=extra_md, bench=b, user_md=user_md,
+           skin=skin_name, extra_md=extra_md, bench=b, user_md=user_md, synths=SYNTHS, listkey="pluginList-arm-64bit" if gen2 else "pluginList-arm",
+           install_args=" -t '<your Synths folder>'" if gen2 else "", requirements=REQ_GEN2 if gen2 else REQ_GEN1,
            where="Instrument plugins" if kind == "instrument" else "Insert effects")
 open(os.path.join(root, "INSTALL.md"), "w").write(install_md)
 
-def max_glibc(path):
-    """Highest GLIBC_x.y[.z] symbol version the .so asks for, as 'x.y[.z]' (None if it needs none)."""
-    found = re.findall(rb"GLIBC_(\d+(?:\.\d+){1,2})", open(path, "rb").read())
-    return max((f.decode() for f in found), key=lambda v: tuple(map(int, v.split(".")))) if found else None
-
-
-def elf_machine(path):
-    d = open(path, "rb").read(20)
-    return {40: "armv7", 62: "x86_64", 183: "aarch64", 3: "x86"}.get(int.from_bytes(d[18:20], "little"), "unknown") if d[:4] == b"\x7fELF" else "not-elf"
 
 
 def walk(top):
@@ -185,6 +200,20 @@ def walk(top):
         for f in sorted(files + [x for x in dirs if os.path.islink(os.path.join(d, x))]):
             yield os.path.join(d, f)
 
+
+def _json_or_none(path):
+    try:
+        return json.load(open(path))
+    except (OSError, ValueError):
+        return None
+
+
+# which MPC OS generations the skin and library work on: ["2.x", "3.x"] or ["3.x"] (tools/skin_compat.py, docs/OS2_SKINS.md)
+os_compat, os_why = skin_compat.os_compat(max_glibc(a.so), _json_or_none(os.path.join(pdir, "Plugin Skins", "TUI.json")),
+                                          _json_or_none(os.path.join(pdir, "Plugin Skins", "Q-Links.json")))
+if elf_machine(a.so) == "aarch64":
+    os_compat, os_why = ["3.x"], ["Gen2 runs MPC OS 3.x only"]
+print("MPC OS compatibility: %s%s" % (" and ".join(os_compat), "" if "2.x" in os_compat else " only (not 2.x: %s)" % "; ".join(os_why[:2])))
 
 plugin_id = a.id or re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-")
 if not re.fullmatch(r"[a-z0-9]+(-[a-z0-9]+)*", plugin_id):
@@ -205,6 +234,7 @@ manifest = {
     "user_data": a.user_data,
     "arch": elf_machine(a.so),
     "max_glibc": max_glibc(a.so),
+    "os_compat": os_compat,
     "param_compat": int(a.version.split(".")[0]),
     "about": a.about,
     "requires": a.requires,
@@ -213,6 +243,8 @@ manifest = {
     "cpu": {"p99_pct": bench["p99_pct"], "max_pct": bench["max_pct"], "verdict": bench["verdict"]} if bench else None,
 }
 open(os.path.join(root, "mpc-plugin.json"), "w").write(json.dumps(manifest, indent=2) + "\n")
+# a copy travels with the installed folder, so a device-side manager can tell which version is installed
+open(os.path.join(pdir, "mpc-plugin.json"), "w").write(json.dumps(manifest, indent=2) + "\n")
 
 # MODES: the executable files and symlinks inside the plugin folder (tab separated: "x<TAB>path", "l<TAB>path<TAB>target").
 # A zip unpacked on Windows, or copied file by file, loses exec bits and turns symlinks into small text files; install.sh
@@ -235,7 +267,7 @@ for p in walk(root):
 open(os.path.join(root, "SHA256SUMS"), "w").write("\n".join(sums) + "\n")
 
 os.makedirs(a.out, exist_ok=True)
-zpath = os.path.join(a.out, top + "-mpc-armv7.zip")
+zpath = os.path.join(a.out, "%s-mpc-%s.zip" % (top, "aarch64" if manifest["arch"] == "aarch64" else "armv7"))   # -mpc-armv7.zip (Gen1) or -mpc-aarch64.zip (Gen2)
 with zipfile.ZipFile(zpath, "w", zipfile.ZIP_DEFLATED) as z:
     for p in walk(root):
         info = zipfile.ZipInfo(os.path.relpath(p, stage), date_time=(2026, 1, 1, 0, 0, 0))

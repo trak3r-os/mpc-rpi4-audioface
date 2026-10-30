@@ -131,7 +131,7 @@ Tested: SysEx and CCs from a Linux laptop, and CCs from an MPC track. Not tested
 
 ## Akai Force and MPC (optional extras)
 
-These need MockbaMod on the Force: a community modification of the Force's system that loads add-ons into MPC. They are for the Akai Force only. The Pi side works without them. Everything below is installed by you, and not by the Pi installer. Releases and a listing in sd88me's plugin catalog are planned, with two entries, one per zip, built from this repository. Until then, build from source.
+These need a modded Force with root SSH access (tested with MockbaMod: a community modification of the Force's system that loads add-ons into MPC). The Pi side works without them. Everything below is installed by you, and not by the Pi installer. Each one is a zip in the format of sd88me's [mpc-vst-plugins](https://github.com/sd88me/mpc-vst-plugins) catalog, with sd88me's installer, built from this repository. No zips are published yet: build them from source (Docker, g++ and Python 3 with Pillow).
 
 Host notes are in [docs/hosts/akai-force.md](docs/hosts/akai-force.md).
 
@@ -139,20 +139,15 @@ Host notes are in [docs/hosts/akai-force.md](docs/hosts/akai-force.md).
 
 A VST2 plugin for MPC that shows the hub on the Force's screen: each device with its channel range, name, level and mute, the 8 presets, and the link state. It makes no sound. The Q-Links control levels. Details: [docs/hosts/akai-force-panel.md](docs/hosts/akai-force-panel.md).
 
-**Status: tested on an Akai Force (MPC 3.9.1.2, MockbaMod) on 2026-10-30.** It installs with its installer, loads in MPC, connects to the Pi and shows the devices, names, channel names, levels and presets. MUTE, the name picker, presets and a fader drag all reached `rpi-audiod`. Not tested yet: the physical Q-Links, SAVE, "On project load" and reopening a saved project.
+**Status: tested on an Akai Force (MPC 3.9.1.2, MockbaMod) on 2026-10-30.** It installs with its installer, loads in MPC, connects to the Pi and shows the devices, names, channel names, levels and presets. MUTE, the name picker, presets and a fader drag all reached `rpi-audiod`, and it was retested the same day on sd88me's current wrapper. Not tested yet: the physical Q-Links, SAVE, "On project load", reopening a saved project, and a long run: once, after 20 minutes with the panel open, MPC dropped rpi-audio with `capture error -5`, cause not known yet.
 
-To install, copy the release folder to the Force and run its installer as root. Save your MPC project first, because the installer restarts MPC.
-
-```sh
-scp -r rpi-audio-Panel-1.0.0 root@force.local:/tmp/
-ssh root@force.local sh /tmp/rpi-audio-Panel-1.0.0/install.sh -y -t /media/AKAI_SSD/Synths
-```
-
-To build the release folder yourself (needs Docker, g++ and Python 3 with Pillow):
+Build it, copy the folder to the Force and run its installer as root. Save your MPC project first, because the installer restarts MPC.
 
 ```sh
 cd tools/hosts/akai-force-panel
-./build.sh arm && ./package.sh     # the result is in dist/
+./build.sh all && ./package.sh     # tests, armhf build, then dist/rpi-audio-Panel-1.0.0/ and its zip
+scp -r dist/rpi-audio-Panel-1.0.0 root@force.local:/tmp/
+ssh root@force.local sh /tmp/rpi-audio-Panel-1.0.0/install.sh -y -t /media/AKAI_SSD/Synths
 ```
 
 Then add **rpi-audio Panel** to a track from the instrument browser.
@@ -163,15 +158,17 @@ MPC uses one audio device at a time. When it uses the Pi, the Force switches off
 
 **Status:** installed and working on one Force, with the output routing still to be confirmed by ear. No long soak yet.
 
-Use `--host akai-force` when installing on the Pi. That reserves gadget channels IN 25–26 for the add-on.
+Use `--host akai-force` when installing on the Pi. That reserves gadget channels IN 25–26 for the add-on. Save your MPC project first, because the installer restarts MPC.
 
 ```sh
-tools/hosts/akai-force-internal-io/build.sh                                       # armhf .so, in Docker
-FORCE_HOST=root@force.local FORCE_PASS=… tools/hosts/akai-force-internal-io/install.sh enable
-# then restart the Force
+cd tools/hosts/akai-force-internal-io
+./build.sh && ./package.sh 1.0.0    # armhf .so in Docker, then dist/rpi-audio-Internal-IO-1.0.0-mpc-armv7.zip
+cd dist && unzip rpi-audio-Internal-IO-1.0.0-mpc-armv7.zip
+scp -r rpi-audio-Internal-IO-1.0.0 root@force.local:/tmp/
+ssh root@force.local sh /tmp/rpi-audio-Internal-IO-1.0.0/install.sh
 ```
 
-The script writes only to MockbaMod's SD card. To remove it, run `install.sh disable` and restart the Force.
+To remove it: `ssh root@force.local sh /data/mpc-addins/rpi-audio-internal-io/uninstall.sh`. This installer has only been tried in a simulation so far; on the test Force the add-on was installed with a MockbaMod-only script, described with the settings in the add-on's doc.
 
 ### Known MPC behaviour
 

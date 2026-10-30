@@ -57,7 +57,7 @@ class Core {
   void set_param(int i, int v);
   int get_value(int i) const;
   bool get_text(int i, char* out, int n) const;
-  int poll_changes(uint32_t* words, int nwords);  // see wrapper/engine.h
+  int poll_changes(uint32_t* words, int nwords);  // params changed since the last call; 1 if a text changed
   std::string state_string() const;               // what the project stores
   void load_state(const std::string& s);          // project restore
 

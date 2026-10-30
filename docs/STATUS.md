@@ -1,4 +1,4 @@
-# Estado: 2026-10-30 (16:15)
+# Estado: 2026-10-30 (15:35)
 
 **Fase:** F1 cumplida con la Force a 26×26 S16, **siempre que la Pi esté reproduciendo**. F2 en marcha:
 
@@ -111,19 +111,18 @@ Hecho el 2026-10-30 por la tarde, todo en `main` y en GitHub:
 - **`install.sh`** en la raíz, para instalar desde un clon en la Pi; `tools/deploy.sh` lo usa por debajo (probado: despliega igual).
 - **Docs en inglés para usuarios:** README con las líneas de instalación, `docs/MIDI.md` y las docs del panel y de MPC Remote.
 - **La mitigación del incidente,** probada en la Force por `rpi-audio-7d`: limpia. Se quitó la regla.
+- **La librería de sd88me, actualizada y sin tocar** (`adc48a3`, `tools/hosts/vendor/mpc-vst-plugins/`, `sync-mpc-vst-plugins.sh`), compartida por el panel y el add-on. El panel se reconstruyó sobre ella y se **reinstaló y probó en la Force**: pantalla, MUTE, presets, fader y cambios desde la Pi (`docs/hw/2026-10-30-boot-soak.md`, sección 8).
+- **Zips al formato de sd88me, sin publicar:** `tools/hosts/akai-force-panel/package.sh` (catalog_check OK, 0 avisos) y `tools/hosts/akai-force-internal-io/package.sh VERSION` (addin; OK con 1 aviso, glibc 2.34). El zip del add-on solo se ha probado en simulación. README con las líneas para construirlos e instalarlos.
 
 Datos de muestra en la Pi:
 - nombres: CODEC = "Mixer", GP-150 = "Guitar Rig", con "Amp L" y "Amp R";
 - presets 1 "Live" y 2 "Quiet" (GP-150 IN al 60 %).
 
-MPC queda con un proyecto "untitled" sin guardar, con una pista del panel.
+MPC queda en rpi-audio, con un proyecto nuevo sin guardar: la pista Plugin 001 de la plantilla lleva el panel.
 
 Queda:
-1. **Publicar:**
-   - una release de GitHub con el zip del panel, hecho con `release.py --repo trak3r-os/mpc-rpi4-audioface --license GPL-3.0-or-later` y comprobado con `catalog_check`, y con el zip del add-on;
-   - el add-on tiene que empaquetarse al estilo de sd88me (`release_addin.py`, `docs/ADDINS.md` de su repo), porque ahora es solo para MockbaMod;
-   - `gh` necesita sesión como trak3r-os, o la release la crea el usuario.
-2. **Catálogo de sd88me:** dos entradas (`kind: instrument` y `kind: addin`), del mismo repo y la misma release, con su `asset_pattern`. El PR a sd88me es hacia fuera: hay que preguntar antes. Fuera del catálogo, opcionalmente, un único paquete "Force extras" con un solo `install.sh`.
+1. **Un `capture error -5` espontáneo** a los 20 minutos, con el panel abierto (`docs/hw/2026-10-30-boot-soak.md`, sección 8). Separar la causa: soak con el panel abierto y otro sin él.
+2. **Catálogo de sd88me:** dos entradas (`kind: instrument` y `kind: addin`) con su `asset_pattern`. Necesitan zips publicados en una release, y el usuario no quiere release por ahora: no pedirla. El PR a sd88me es hacia fuera: preguntar antes.
 3. **Panel, sin probar en la Force:** los Q-Links físicos, SAVE, "On project load", reabrir un proyecto guardado, y si los bloqueos de la restauración (3 s + 2 s) son adecuados.
 4. **Proponer al usuario un `u_audio.ko` parcheado:** es la causa del `capture error -5` en la primera apertura y de los cortes al reiniciar `rpi-audiod`.
 5. **MPC al arrancar** abre siempre su audio interno. Opción: elegir rpi-audio con MPC Remote al arrancar.

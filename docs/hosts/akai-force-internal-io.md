@@ -33,7 +33,7 @@ The code is in `tools/hosts/akai-force-internal-io/`.
 
 ## Settings
 
-The settings live in `mpc_internal_io.conf`, next to the `.so` in `AddOns/mpcInternalIO/`. Each one can be overridden with `MIO_<KEY>`. The defaults:
+The settings live in `mpc_internal_io.conf`, next to the `.so`: `/data/mpc-addins/rpi-audio-internal-io/` when it is installed from the addin zip, `AddOns/mpcInternalIO/` on MockbaMod's card with the script. Each one can be overridden with `MIO_<KEY>`. The defaults:
 
 | Key | Default | What it does |
 |---|---|---|
@@ -43,11 +43,42 @@ The settings live in `mpc_internal_io.conf`, next to the `.so` in `AddOns/mpcInt
 | `period`, `buffer`, `queue`, `ring` | 64, 1024, 256, 256 | Codec periods and frames in flight (latency of roughly 6–12 ms per direction) |
 | `off` | 0 | 1 = loads, but touches nothing |
 
-## Build, install and roll back
+## Build
 
 ```sh
 make -C tools/hosts/akai-force-internal-io test        # core test, on the laptop
 tools/hosts/akai-force-internal-io/build.sh            # armhf .so in Docker (Debian bookworm), with ABI checks
+tools/hosts/akai-force-internal-io/package.sh 1.0.0    # dist/rpi-audio-Internal-IO-1.0.0-mpc-armv7.zip
+```
+
+`package.sh` packages it as an addin in sd88me's format, with sd88me's `release_addin.py` and shared addin installer
+(vendored unmodified in `tools/hosts/vendor/mpc-vst-plugins/`, see `docs/ADDINS.md` in sd88me/mpc-vst-plugins), and checks
+the zip with their `catalog_check.py`. The build is reproducible: the `.so` built on 2026-10-30 is byte for byte the one
+running on the Force since 2026-10-29.
+
+## Install from the addin zip
+
+```sh
+scp -r rpi-audio-Internal-IO-1.0.0 root@force.local:/tmp/                # the unzipped folder
+ssh root@force.local sh /tmp/rpi-audio-Internal-IO-1.0.0/install.sh      # copies it, adds it to LD_PRELOAD, restarts MPC
+ssh root@force.local sh /data/mpc-addins/rpi-audio-internal-io/uninstall.sh   # to remove it
+```
+
+The installer puts the add-on in `/data/mpc-addins/rpi-audio-internal-io/` and adds the `.so` to MPC's `LD_PRELOAD`
+without dropping what is already there. On a MockbaMod card it also writes `AddOns/run_rpi-audio-internal-io.sh`, so
+MockbaMod's own list gets it too. Your `mpc_internal_io.conf` is kept on upgrade and deleted on uninstall.
+
+- **If you used the MockbaMod script below before,** run its `install.sh disable` first and restart the Force.
+  Otherwise MPC loads the library twice.
+- **Tested in a simulation only [repo]:** install and uninstall against a scratch systemd tree and a fake MockbaMod card
+  with sd88me's test setup (BusyBox). The hook armed the list and kept the other entries; uninstall left it as it was.
+  It has not been installed this way on the Force. sd88me's MockbaMod hook adds the library once, under a lock file;
+  the races described below were seen with MockbaMod's own scripts, which take no lock. If MPC starts without its
+  control surface after a boot, go back to the script.
+
+## Install with the MockbaMod script (Force only)
+
+```sh
 FORCE_HOST=root@force.local FORCE_PASS=… tools/hosts/akai-force-internal-io/install.sh enable    # then restart the Force
 FORCE_HOST=root@force.local FORCE_PASS=… tools/hosts/akai-force-internal-io/install.sh status
 FORCE_HOST=root@force.local FORCE_PASS=… tools/hosts/akai-force-internal-io/install.sh conf FILE # replace the settings; MPC reads them at start

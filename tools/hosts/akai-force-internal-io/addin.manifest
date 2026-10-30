@@ -1,0 +1,8 @@
+# The addin as sd88me's shared installer sees it (docs/ADDINS.md in sd88me/mpc-vst-plugins). package.sh adds
+# ADDIN_VERSION. Only plain assignments of the known keys: the installer sources this file as root.
+ADDIN_ID=rpi-audio-internal-io
+ADDIN_NAME="rpi-audio Internal IO"
+ADDIN_SO=mpc_internal_io.so
+ADDIN_CONF=mpc_internal_io.conf
+ADDIN_FILES=LICENSE
+ADDIN_DONE="With MPC on rpi-audio, the device's own outputs play MPC's main mix and its inputs arrive as inputs 25 and 26. The routing is in mpc_internal_io.conf, read when MPC starts."

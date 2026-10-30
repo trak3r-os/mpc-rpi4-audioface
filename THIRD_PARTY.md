@@ -2,19 +2,21 @@
 
 Reused code keeps its own licence. Everything else in the repository is GPL-3.0-or-later.
 
-## rpi-audio Panel (`tools/hosts/akai-force-panel/`)
-
-### mpc-vst-plugins (MIT)
+## mpc-vst-plugins (MIT), in `tools/hosts/vendor/mpc-vst-plugins/`
 
 - Source: https://github.com/sd88me/mpc-vst-plugins, Copyright (c) 2026 sd88me, MIT. Licence copy:
-  `tools/hosts/akai-force-panel/vendor/mpc-vst-plugins/LICENSE`.
-- What: the VST2 wrapper (`wrapper/`), the parameter-table generator (`tools/gen_vst.py`, `tools/params.py`) and
-  the packager and installer (`tools/release.py`, `tools/release/`).
-- Taken from the copy vendored in the user's own MIT project `barsiren-mcp` (Dub Force Siren by no3z), which is
-  upstream commit `faae55acfbf3ccac88d15df8ab3c45f74002e91c` plus that project's fixes (atomics, typed parameters,
-  input validation, Q-Link refresh). It runs on the Force today. `wrapper/parameter_mapping.h` is that project's own
-  file. Changes made here are listed in `vendor/mpc-vst-plugins/VENDORED.md`.
-- Also adapted from `barsiren-mcp` (MIT): the shape of the native skin generator (`skin.py`: TUI.json components,
+  `tools/hosts/vendor/mpc-vst-plugins/LICENSE`.
+- What: the VST2 wrapper (`wrapper/`), the parameter-table generator (`tools/gen_vst.py`, `tools/params.py`), the plugin
+  and addin packagers and installers (`tools/release.py`, `tools/release_addin.py`, `tools/release/`) and the catalog
+  checker (`tools/catalog_check.py`, `tools/skin_compat.py`, `tools/skin_roles_2x.json`).
+- Copied unmodified from upstream by `tools/hosts/vendor/sync-mpc-vst-plugins.sh`; the commit is in `VENDORED.md`.
+- Used by the rpi-audio Panel (`tools/hosts/akai-force-panel/`, which links the wrapper into its plugin and ships
+  sd88me's installer in its zip) and by the internal I/O add-on (`tools/hosts/akai-force-internal-io/`, whose zip ships
+  sd88me's addin installer).
+
+## rpi-audio Panel (`tools/hosts/akai-force-panel/`)
+
+- Adapted from `barsiren-mcp` (MIT): the shape of the native skin generator (`skin.py`: TUI.json components,
   Q-Link map layout, filmstrip faders) and the armhf build and ABI check (`build.sh`, `Dockerfile.arm`).
 - The format facts behind the skin come from sd88me's `docs/` (MIT) as summarised in `barsiren-mcp/docs/MPC_UI_REFERENCE.md`.
   No stock MPC or Akai asset is copied.

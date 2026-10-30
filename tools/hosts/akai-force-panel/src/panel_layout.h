@@ -68,11 +68,16 @@ inline const char* key_name(int i, char* buf, int n) {
   return buf;
 }
 
-// Index of a parameter key, -1 if unknown.
+// Index of a parameter key, -1 if unknown. The wrapper looks keys up from the audio thread (its text poll), so the
+// names are formatted once.
 inline int key_index(const char* key) {
-  char b[32];
+  struct Names {
+    char k[kParams][32];
+    Names() { for (int i = 0; i < kParams; i++) key_name(i, k[i], sizeof k[i]); }
+  };
+  static const Names names;
   for (int i = 0; i < kParams; i++)
-    if (!std::strcmp(key_name(i, b, sizeof b), key)) return i;
+    if (!std::strcmp(names.k[i], key)) return i;
   return -1;
 }
 
