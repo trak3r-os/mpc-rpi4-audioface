@@ -33,6 +33,7 @@ come from the GADGET_* environment, or from gadget.env.
 import argparse
 import contextlib
 import copy
+import ctypes
 import fcntl
 import glob
 import json
@@ -413,6 +414,63 @@ class Bridge:
             self.child = None
 
 
+class RawMidiOut:
+    """One output of an ALSA raw MIDI device, kept open between writes (libasound through ctypes), so a reply is
+    one write: no process to start and no sequencer subscription to make and drop each time. Non-blocking, with a
+    deadline: a host that stops reading the gadget's MIDI cannot hold the sender up for long."""
+    EAGAIN = 11
+    NONBLOCK = 2   # SND_RAWMIDI_NONBLOCK
+
+    def __init__(self, name, lib=None):
+        self.name, self.handle = name, None
+        self.lib = lib if lib is not None else self.load()
+
+    @staticmethod
+    def load():
+        lib = ctypes.CDLL("libasound.so.2")
+        lib.snd_rawmidi_open.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_void_p), ctypes.c_char_p,
+                                         ctypes.c_int]
+        lib.snd_rawmidi_write.argtypes = [ctypes.c_void_p, ctypes.c_char_p, ctypes.c_size_t]
+        lib.snd_rawmidi_write.restype = ctypes.c_ssize_t
+        lib.snd_rawmidi_close.argtypes = [ctypes.c_void_p]
+        lib.snd_strerror.argtypes = [ctypes.c_int]
+        lib.snd_strerror.restype = ctypes.c_char_p
+        return lib
+
+    def error(self, code):
+        return self.lib.snd_strerror(code).decode(errors="replace")
+
+    def open(self):
+        h = ctypes.c_void_p()
+        r = self.lib.snd_rawmidi_open(None, ctypes.byref(h), self.name.encode(), self.NONBLOCK)
+        if r < 0:
+            raise OSError(-r, f"cannot open {self.name}: {self.error(r)}")
+        self.handle = h
+
+    def close(self):
+        if self.handle is not None:
+            self.lib.snd_rawmidi_close(self.handle)
+            self.handle = None
+
+    def write(self, data, timeout=5.0):
+        """Writes all of data, opening the device first if needed. On an error the device is closed, so the next
+        write opens it again (the gadget may have come back as a new card)."""
+        if self.handle is None:
+            self.open()
+        deadline = time.monotonic() + timeout
+        while data:
+            r = self.lib.snd_rawmidi_write(self.handle, data, len(data))
+            if r == -self.EAGAIN:
+                if time.monotonic() > deadline:
+                    raise TimeoutError(f"{self.name}: the host is not reading")
+                time.sleep(0.005)
+            elif r < 0:
+                self.close()
+                raise OSError(-r, f"{self.name}: {self.error(r)}")
+            else:
+                data = data[r:]
+
+
 class Midi:
     """The gadget's USB MIDI ports (docs/MIDI.md): every MIDI port of a USB device gets a
     port of its own, through kernel sequencer subscriptions, and the control port carries
@@ -433,6 +491,7 @@ class Midi:
         self.listener, self.next_listen, self.heard = None, 0.0, 0.0
         self.events, self.replies = queue.SimpleQueue(), queue.SimpleQueue()
         self.eps, self.assigned, self.parked, self.configured = [], {}, [], False
+        self.raw = None   # RawMidiOut on the control port, once it worked; None: aplaymidi
         threading.Thread(target=self.sender, daemon=True).start()
 
     def port(self, cable):
@@ -562,17 +621,38 @@ class Midi:
             data = midi.sysex_hex(text, reply=True)
         except ValueError:
             data = midi.sysex_hex("error: the reply is not plain ASCII", reply=True)
-        self.replies.put((self.port(self.control), midi.smf_sysex(bytes.fromhex(data.replace(" ", "")))))
+        self.replies.put((self.port(self.control), bytes.fromhex(data.replace(" ", ""))))
+
+    def raw_out(self):
+        """The control port's raw MIDI output (its cable is the device's subdevice), or None to use aplaymidi."""
+        if self.raw is None:
+            try:
+                self.raw = RawMidiOut(f"hw:CARD={self.card_id},DEV=0,SUBDEV={self.control - 1}")
+            except OSError as e:
+                log(f"rpi-audiod: no libasound for MIDI replies ({e}); using aplaymidi")
+                self.raw = False
+        return self.raw or None
 
     def sender(self):
-        """Sends the replies in order, in a thread of its own: each aplaymidi takes about
-        0.2 s, too long for the main loop, which supervises the gadget's feed."""
+        """Sends the replies in order, in a thread of its own, so a slow host never holds up the main loop, which
+        supervises the gadget's feed. Through the raw MIDI device kept open; aplaymidi (about 0.2 s a reply) when
+        that cannot be opened."""
         while True:
-            port, smf = self.replies.get()
+            self.send_one(*self.replies.get())
+
+    def send_one(self, port, sysex):
+        raw = self.raw_out()
+        if raw:
             try:
-                subprocess.run(["aplaymidi", "-d", "0", "-p", port, "-"], input=smf, capture_output=True, timeout=5)
-            except (OSError, subprocess.TimeoutExpired) as e:
-                log(f"rpi-audiod: cannot send the MIDI reply: {e}")
+                raw.write(sysex)
+                return
+            except (OSError, TimeoutError) as e:
+                log(f"rpi-audiod: MIDI reply through {raw.name}: {e}; this one goes through aplaymidi")
+        try:
+            subprocess.run(["aplaymidi", "-d", "0", "-p", port, "-"], input=midi.smf_sysex(sysex),
+                           capture_output=True, timeout=5)
+        except (OSError, subprocess.TimeoutExpired) as e:
+            log(f"rpi-audiod: cannot send the MIDI reply: {e}")
 
     def status(self):
         return {"card": self.card_id, "client": self.client, "ports": self.ports, "control_port": self.control,

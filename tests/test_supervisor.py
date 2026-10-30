@@ -828,16 +828,16 @@ def sysex(text):
     return "sysex", bytes.fromhex(midi.sysex_hex(text).replace(" ", ""))
 
 
-def reply_text(smf):
-    start = smf.index(midi.REPLY_HEAD[1:]) + 3
-    return smf[start:smf.index(b"\xf7", start)].decode()
+def reply_text(sysex):
+    start = sysex.index(midi.REPLY_HEAD[1:]) + 3
+    return sysex[start:sysex.index(b"\xf7", start)].decode()
 
 
 def replies(m):
     out = []
     while not m.replies.empty():
-        port, smf = m.replies.get_nowait()
-        out.append((port, reply_text(smf)))
+        port, sysex = m.replies.get_nowait()
+        out.append((port, reply_text(sysex)))
     return out
 
 
@@ -1097,3 +1097,104 @@ def test_a_status_file_that_cannot_be_written_is_retried_later(monkeypatch, tmp_
     (tmp_path / "run").rmdir()
     w.run_loop(2)
     assert len(logged(w, "cannot write")) == 1 and d.next_status > w.now + 50   # no run dir: try again in a minute
+
+
+# --- the reply sender ---------------------------------------------------------------------------
+
+class FakeAsound:
+    """libasound's raw MIDI calls, scripted: write_results is consumed one call at a time (None: write it all)."""
+
+    def __init__(self, open_result=0, write_results=()):
+        self.open_result, self.write_results = open_result, list(write_results)
+        self.opened, self.closed, self.written = [], 0, b""
+
+    def snd_rawmidi_open(self, inp, href, name, mode):
+        self.opened.append((name, mode))
+        if self.open_result == 0:
+            href._obj.value = 1234
+        return self.open_result
+
+    def snd_rawmidi_write(self, handle, data, n):
+        r = self.write_results.pop(0) if self.write_results else None
+        if r is None or r > 0:
+            k = n if r is None else min(r, n)
+            self.written += data[:k]
+            return k
+        return r
+
+    def snd_rawmidi_close(self, handle):
+        self.closed += 1
+
+    def snd_strerror(self, code):
+        return b"error %d" % code
+
+
+def test_raw_midi_writes_everything_and_keeps_the_device_open():
+    lib = FakeAsound(write_results=[3, None])
+    out = daemon.RawMidiOut("hw:CARD=MIDIGadget,DEV=0,SUBDEV=0", lib)
+    out.write(b"\xf0\x7d\x52\x42ok\xf7")
+    out.write(b"\xf0\x01\xf7")
+    assert lib.written == b"\xf0\x7d\x52\x42ok\xf7\xf0\x01\xf7"
+    assert lib.opened == [(b"hw:CARD=MIDIGadget,DEV=0,SUBDEV=0", daemon.RawMidiOut.NONBLOCK)] and lib.closed == 0
+
+
+def test_raw_midi_waits_while_the_host_is_not_reading_then_gives_up(monkeypatch):
+    lib = FakeAsound(write_results=[-11, -11, None])
+    out = daemon.RawMidiOut("hw:X", lib)
+    monkeypatch.setattr(daemon.time, "sleep", lambda s: None)
+    out.write(b"\xf0\xf7")
+    assert lib.written == b"\xf0\xf7"
+    lib.write_results = [-11] * 1000
+    clock = iter(range(0, 10000))
+    monkeypatch.setattr(daemon.time, "monotonic", lambda: next(clock))
+    with pytest.raises(TimeoutError):
+        out.write(b"\xf0\xf7", timeout=5)
+
+
+def test_raw_midi_reopens_after_an_error():
+    lib = FakeAsound(write_results=[-19])
+    out = daemon.RawMidiOut("hw:X", lib)
+    with pytest.raises(OSError):
+        out.write(b"\xf0\xf7")
+    assert lib.closed == 1 and out.handle is None
+    out.write(b"\xf0\xf7")
+    assert len(lib.opened) == 2 and lib.written == b"\xf0\xf7"
+
+
+def test_raw_midi_open_failure_raises():
+    out = daemon.RawMidiOut("hw:X", FakeAsound(open_result=-16))
+    with pytest.raises(OSError, match="cannot open hw:X: error -16"):
+        out.write(b"\xf0\xf7")
+
+
+def test_replies_go_through_raw_midi_on_the_control_cable(monkeypatch, tmp_path):
+    w, d = make(monkeypatch, tmp_path)
+    m = new_midi(w, control_port=2)
+    lib = FakeAsound()
+    monkeypatch.setattr(daemon.RawMidiOut, "load", staticmethod(lambda: lib))
+    monkeypatch.setattr(daemon.subprocess, "run", lambda *a, **k: pytest.fail("aplaymidi ran"))
+    m.client = 40
+    m.send("ok")
+    m.send_one(*m.replies.get_nowait())
+    assert lib.opened[0][0] == b"hw:CARD=MIDIGadget,DEV=0,SUBDEV=1" and reply_text(lib.written) == "ok"
+
+
+def test_replies_fall_back_to_aplaymidi(monkeypatch, tmp_path):
+    w, d = make(monkeypatch, tmp_path)
+    m = new_midi(w)
+    ran = []
+    monkeypatch.setattr(daemon.subprocess, "run", lambda cmd, **k: ran.append((cmd, k["input"])))
+
+    def no_lib():
+        raise OSError("libasound.so.2: cannot open shared object file")
+    monkeypatch.setattr(daemon.RawMidiOut, "load", staticmethod(no_lib))
+    m.client = 40
+    m.send("ok")
+    m.send_one(*m.replies.get_nowait())
+    assert ran and ran[0][0][:4] == ["aplaymidi", "-d", "0", "-p"] and ran[0][1].startswith(b"MThd")
+    assert logged(w, "using aplaymidi")
+    lib = FakeAsound(write_results=[-19])   # a device error sends that reply through aplaymidi
+    m.raw = daemon.RawMidiOut("hw:X", lib)
+    m.send("ok")
+    m.send_one(*m.replies.get_nowait())
+    assert len(ran) == 2 and logged(w, "goes through aplaymidi")
