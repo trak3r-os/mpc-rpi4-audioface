@@ -21,7 +21,7 @@ jobs:
           python-version: "3.12"
       - run: pip install pytest flake8 numpy
       - run: python3 -m pytest -q tests
-      - run: flake8
+      - run: flake8 . bridge/rpi-audiod/rpi-audiod   # the daemon has no .py extension
 
   shell:
     name: shellcheck and gadget settings

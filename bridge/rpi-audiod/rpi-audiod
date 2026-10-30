@@ -873,7 +873,8 @@ class Daemon:
     def bus_used(self, bridge):
         """Full-speed B per frame the other bridges hold on this bridge's USB bus: running, or waiting to restart
         after a crash, so a bridge that was blocked behind one does not take its place in the meantime."""
-        return sum(b.load for b in self.bridges.values() if b is not bridge and b.dev.bus == bridge.dev.bus and b.holding)
+        return sum(b.load for b in self.bridges.values()
+                   if b is not bridge and b.dev.bus == bridge.dev.bus and b.holding)
 
     def connect_routes(self):
         ports, pairs = audiod.parse_connections(run("jack_lsp", "-c").stdout)
@@ -1074,10 +1075,12 @@ def cmd_doctor(_):
     if govs:
         line("ok" if govs == {"performance"} else "warn", "cpu", "governor " + ", ".join(sorted(govs)))
     throttled = run("vcgencmd", "get_throttled").stdout.strip()
-    if throttled:
-        fine = throttled.endswith("=0x0")
+    if throttled.startswith("throttled="):
+        fine = throttled == "throttled=0x0"
         line("ok" if fine else "warn", "power",
              throttled + ("" if fine else " (under-voltage or throttling since boot: check the power supply)"))
+    elif throttled:
+        line("info", "power", "vcgencmd cannot read it as this user (run doctor with sudo)")
     cmdline = read("/proc/cmdline") or ""
     line("ok" if "threadirqs" in cmdline.split() else "info", "boot",
          "threadirqs " + ("on" if "threadirqs" in cmdline.split() else "off (install.sh --tune-boot)"))
