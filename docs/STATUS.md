@@ -34,7 +34,7 @@ F4 en marcha: **USB MIDI en el gadget** (4 puertos), MIDI de paso por dispositiv
 
 ## Hecho
 
-- **Repo:** rama `main`, un commit (`009ee06`) y cambios sin commitear desde entonces. `LICENSE` (GPL-3.0-or-later), `CLAUDE.md`, `.gitignore` (`out/`), `.flake8`.
+- **Repo:** rama `main` en `github.com/trak3r-os/mpc-rpi4-audioface` (alias SSH `github-trak3r`), autor `trak3r-os` con el correo oculto de GitHub. `LICENSE` (GPL-3.0-or-later), `CLAUDE.md`, `.gitignore` (`out/`), `.flake8`.
 - **Documentación:** `docs/PLAN.md` v2, `docs/hosts/akai-force.md` y las sesiones `docs/hw/2026-10-29-force-baseline.md`, `docs/hw/2026-10-29-f1-laptop.md` y `docs/hw/2026-10-29-f1-force.md`.
 - **La Pi:**
   - sudo sin contraseña para `no3z`;
