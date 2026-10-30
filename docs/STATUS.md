@@ -112,11 +112,12 @@ Queda:
 1. **Con el usuario delante:**
    - si suenan el mezclador y el GP-150 en MPC;
    - por dónde salen Out 1/2 y 3/4. Con eso, `install.sh conf` con la configuración del repo y reiniciar la Force.
-2. **Aislar el incidente del reinicio de la Pi:**
-   - primero con el portátil de host;
-   - luego en la Force, con el usuario delante y AKAI_SSD expulsado: `rpi-audio-gadget down` a mano con MPC transmitiendo, separado del reinicio.
+2. **El incidente del reinicio de la Pi:**
+   - con el portátil ya se ha visto que el gadget se desconecta limpio 1,6 s después de pedir el reinicio, antes del reset del hardware;
+   - la hipótesis es babble al desenlazar el UDC en mitad del stream;
+   - `rpi-audio-gadget down` ahora quita antes el pull-up y espera 0,5 s.
 
-   Si un `down` limpio no tira el hub, que el apagado de la Pi desenlace el gadget antes de parar `rpi-audiod`. Un journal persistente en la Pi daría las horas del apagado.
+   Falta probarlo en la Force, con el usuario delante y AKAI_SSD expulsado. La Pi ya guarda su journal entre arranques (`journalctl -b -1`).
 3. **Con el Tracker enchufado a la Pi:**
    - la aceptación de F4;
    - el presupuesto de verdad: con el Tracker en "8 OUT / 2 IN" más el mezclador, la grabación abre y la reproducción espera.

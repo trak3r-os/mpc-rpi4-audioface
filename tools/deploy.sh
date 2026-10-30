@@ -70,6 +70,14 @@ install -m 644 $stage/bridge/rpi-audiod/audiod.py $stage/bridge/rpi-audiod/midi.
 printf 'snd-seq\nsnd-seq-midi\n' > /etc/modules-load.d/rpi-audio.conf
 modprobe snd-seq
 modprobe snd-seq-midi
+# A persistent journal (capped), so a shutdown can be read after the next boot: journalctl -b -1.
+mkdir -p /etc/systemd/journald.conf.d /var/log/journal
+printf '[Journal]\nStorage=persistent\nSystemMaxUse=64M\n' > /etc/systemd/journald.conf.d/rpi-audio.conf
+if ! ls /var/log/journal/*/system.journal >/dev/null 2>&1; then
+  systemd-tmpfiles --create --prefix /var/log/journal
+  systemctl restart systemd-journald
+  journalctl --flush
+fi
 ln -sf /usr/local/lib/rpi-audio/rpi-audiod /usr/local/bin/rpi-audiod
 install -m 644 $stage/config/gadget.env $stage/config/rpi-audio.toml /etc/rpi-audio/
 # Device profiles: added or replaced, never removed (others may have put theirs there).

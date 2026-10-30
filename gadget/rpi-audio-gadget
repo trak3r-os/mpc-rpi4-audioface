@@ -148,8 +148,15 @@ up() {
 
 down() {
   [[ -d $G ]] || { echo "rpi-audio-gadget: not set up"; return 0; }
-  [[ -z $(< "$G/UDC") ]] || echo "" > "$G/UDC"
-  local p
+  local udc p
+  udc=$(< "$G/UDC")
+  if [[ -n $udc ]]; then
+    # Drop the pull-up first, so the host sees a plain disconnect before the controller
+    # is torn down. A precaution: unbinding with the host streaming may have reset a
+    # Force's whole USB hub (docs/hw/2026-10-30-boot-soak.md).
+    echo disconnect > "/sys/class/udc/$udc/soft_connect" 2>/dev/null && sleep 0.5
+    echo "" > "$G/UDC"
+  fi
   for p in "$C"/*; do [[ -L $p ]] && rm "$p"; done
   for p in "$G"/configs/*/strings/* "$G"/configs/* "$G"/functions/* "$G"/strings/*; do
     rmdir "$p"
