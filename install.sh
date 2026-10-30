@@ -203,7 +203,8 @@ fi
 # file was overwritten with different content.
 config_changed=0
 install_config() {
-  local src=$1 dst=$ETC/$(basename "$1")
+  local src=$1 dst
+  dst=$ETC/$(basename "$1")
   if [[ ! -e $dst ]]; then
     install -m 644 "$src" "$dst"
     say "installed $dst"

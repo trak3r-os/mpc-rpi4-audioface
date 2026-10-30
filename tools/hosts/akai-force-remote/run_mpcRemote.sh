@@ -7,7 +7,9 @@
 # is the same as in run_mpcInternalIO.sh, which explains it: MockbaMod's add-on
 # scripts race for that list.
 
+# shellcheck disable=SC2154  # mmLD_PRELOAD_VAR comes from MockbaMod's env.sh, which is on the device
 mmPath=$(cat /dev/shm/.mmPath)
+# shellcheck source=/dev/null
 . "$mmPath/MockbaMod/env.sh"
 
 LD_LIB="$mmPath/AddOns/mpcRemote/mpc_remote_addin.so"

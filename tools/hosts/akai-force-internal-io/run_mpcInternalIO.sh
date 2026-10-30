@@ -19,7 +19,9 @@
 # surface), so from 0.3 s on it also puts back the library of every enabled
 # add-on, read from the LD_LIB line of its AddOns/run_*.sh.
 
+# shellcheck disable=SC2154  # mmLD_PRELOAD_VAR comes from MockbaMod's env.sh, which is on the device
 mmPath=$(cat /dev/shm/.mmPath)
+# shellcheck source=/dev/null
 . "$mmPath/MockbaMod/env.sh"
 
 LD_LIB="$mmPath/AddOns/mpcInternalIO/mpc_internal_io.so"

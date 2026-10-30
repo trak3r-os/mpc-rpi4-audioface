@@ -1,4 +1,5 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
+# shellcheck shell=bash
 #
 # Sourced by the tools/hosts/akai-force-* scripts: sets up `force_ssh`.
 #
@@ -15,6 +16,7 @@ if [[ -n "${FORCE_PASS:-}" ]]; then
   printf '#!/bin/sh\nprintf "%%s\\n" "$FORCE_PASS"\n' > "$askdir/askpass"
   chmod 700 "$askdir/askpass"
   export FORCE_PASS SSH_ASKPASS="$askdir/askpass" SSH_ASKPASS_REQUIRE=force
+  # shellcheck disable=SC2054  # the commas belong to the ssh option's value, not to the array
   ssh_opts+=(-o PubkeyAuthentication=no -o PreferredAuthentications=password,keyboard-interactive)
 fi
 

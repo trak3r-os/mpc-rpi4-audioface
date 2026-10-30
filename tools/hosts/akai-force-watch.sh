@@ -14,6 +14,7 @@
 
 set -euo pipefail
 
+# shellcheck source=force-ssh.sh
 . "$(dirname "$0")/force-ssh.sh"
 seconds="${1:?usage: $0 SECONDS}"
 card="${GADGET_CARD:-rpiaudio}"

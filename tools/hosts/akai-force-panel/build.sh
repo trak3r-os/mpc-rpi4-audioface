@@ -53,6 +53,7 @@ tests() {
   mkdir -p build/test
   local flavour opts
   for flavour in asan tsan; do
+    # shellcheck disable=SC2054  # the commas belong to the compiler option's value
     if [[ $flavour == asan ]]; then opts=(-fsanitize=address,undefined -fno-omit-frame-pointer -fno-sanitize-recover=all)
     else opts=(-fsanitize=thread); fi
     g++ "${CXXW[@]}" -O1 -g "${opts[@]}" "${INC[@]}" -DPANEL_NO_ALSA -Itests "${CORE[@]}" tests/unit.cpp \

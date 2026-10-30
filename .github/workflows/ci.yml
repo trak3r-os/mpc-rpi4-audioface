@@ -1,0 +1,55 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Checks that need no hardware. The armhf/Docker builds, and anything that touches a Pi or a
+# host, stay out of CI.
+name: ci
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  python:
+    name: pytest and flake8
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install pytest flake8 numpy
+      - run: python3 -m pytest -q tests
+      - run: flake8
+
+  shell:
+    name: shellcheck and gadget settings
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # The repo's own scripts; tools/hosts/vendor is third-party code and has its own style.
+      # -S warning leaves out style notes; -x -P SCRIPTDIR follows the scripts that source each other.
+      - name: shellcheck
+        run: |
+          git ls-files 'gadget/rpi-audio-*' install.sh 'tools/*.sh' \
+            | grep -v '^tools/hosts/vendor/' \
+            | xargs shellcheck -x -P SCRIPTDIR -S warning
+      - name: rpi-audio-gadget check with the repo settings
+        run: (set -a; . config/gadget.env; gadget/rpi-audio-gadget check)
+
+  addins:
+    name: Force add-on and panel host tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install Pillow
+      - name: add-on core
+        run: make -C tools/hosts/akai-force-internal-io test
+      # ASan+UBSan, then TSan (the script turns ASLR off for it), then the wrapper test;
+      # no ALSA headers needed.
+      - name: panel
+        run: tools/hosts/akai-force-panel/build.sh test

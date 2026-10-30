@@ -13,6 +13,7 @@
 
 set -euo pipefail
 
+# shellcheck source=force-ssh.sh
 . "$(dirname "$0")/force-ssh.sh"
 gadget="${GADGET_VIDPID:-1d6b:0104}"
 

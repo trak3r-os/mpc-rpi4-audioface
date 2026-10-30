@@ -70,6 +70,7 @@ status)
 		fi"
 	;;
 tunnel)
+	# shellcheck source=../force-ssh.sh
 	. ../force-ssh.sh
 	ssh "${ssh_opts[@]}" -N -L 6720:127.0.0.1:6720 "$host"   # not exec: force-ssh.sh cleans up on exit
 	;;
