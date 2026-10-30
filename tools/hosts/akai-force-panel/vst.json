@@ -1,0 +1,8 @@
+{
+  "name": "rpi-audio Panel",
+  "vendor": "rpi-audio",
+  "uid": "RpPn",
+  "version": 1000,
+  "so": "rpi_audio_panel.so",
+  "defines": {"MODULE_SUBDIR": "\".\""}
+}

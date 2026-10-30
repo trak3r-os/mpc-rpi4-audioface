@@ -6,3 +6,5 @@ __pycache__/
 tools/hosts/akai-force-internal-io/build/
 # Claude Code worktrees
 .claude/worktrees/
+tools/hosts/akai-force-panel/build/
+tools/hosts/akai-force-panel/dist/
