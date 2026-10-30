@@ -4,9 +4,11 @@ control cable's SysEx and CC commands. Nothing here touches the system: the serv
 in the outputs of aconnect, /proc/asound/seq/clients and aseqdump. tests/test_midi.py checks it."""
 
 import copy
+import json
 import re
 from dataclasses import dataclass
 
+import presets
 from audiod import IN, OUT, allocate
 
 SYSEX_HEAD = bytes((0xF0, 0x7D, 0x52, 0x41))  # non-commercial id 7D, then "RA": a command
@@ -18,7 +20,12 @@ USAGE = {
     "assign": "assign IDENTITY [in=N] [out=N] [midi=K]",
     "mute": "mute IDENTITY in|out on|off",
     "volume": "volume IDENTITY in|out PERCENT",
+    "name": "name IDENTITY [TEXT] | name IDENTITY in|out K [TEXT]",
+    "preset": "preset save N [TEXT] | preset load N | preset clear N",
 }
+STATUS_LIMIT = 4000   # bytes the status reply may take (docs/MIDI.md)
+# Dropped from the reply, one stage at a time, until it fits: (device keys, direction keys)
+STATUS_TRIM = (((), ("fs_load",)), (("usbbus",), ()), ((), ("client",)), (("card",), ()))
 
 
 @dataclass(frozen=True)
@@ -115,14 +122,17 @@ def stale_subscriptions(connections, wanted, gadget_client, device_clients):
 
 
 def parse_aseqdump(line):
-    """("sysex", bytes) or ("cc", channel 1-16, controller, value) from one line of aseqdump;
-    None for any other line."""
+    """("sysex", bytes), ("cc", channel 1-16, controller, value) or ("pc", channel 1-16, program)
+    from one line of aseqdump; None for any other line."""
     m = re.match(r"\s*\d+:\d+\s+System exclusive\s+((?:[0-9A-Fa-f]{2}\s*)+)$", line)
     if m:
         return "sysex", bytes.fromhex(m[1])
     m = re.match(r"\s*\d+:\d+\s+Control change\s+(\d+), controller (\d+), value (\d+)\s*$", line)
     if m:
         return "cc", int(m[1]) + 1, int(m[2]), int(m[3])
+    m = re.match(r"\s*\d+:\d+\s+Program change\s+(\d+), program (\d+)\s*$", line)
+    if m:
+        return "pc", int(m[1]) + 1, int(m[2])
     return None
 
 
@@ -187,6 +197,41 @@ def direction(value):
     return value
 
 
+def label(text, limit, what):
+    """TEXT of a name command, checked."""
+    if not printable(text):
+        raise ValueError(f"{what} must be ASCII 0x20-0x7E")
+    if len(text) > limit:
+        raise ValueError(f"{what} must be at most {limit} characters")
+    return text
+
+
+def parse_name(text, usage):
+    """name IDENTITY [TEXT] or name IDENTITY in|out K [TEXT]; TEXT is the rest of the line, trimmed.
+    The channel form is taken when IDENTITY is followed by in or out and then an integer, so a
+    device name cannot start with "in N" or "out N"."""
+    m = re.fullmatch(r"\s*name\s+(\S+)(?:\s+(.*?))?\s*", text, re.S)
+    if not m:
+        raise usage
+    tail = m[2] or ""
+    ch = re.fullmatch(r"(in|out)\s+(-?\d+)(?:\s+(.*))?", tail, re.S)
+    if ch:
+        k = number("channel", ch[2], 1)
+        return Command("name", m[1], (("direction", ch[1]), ("channel", k),
+                                      ("text", label(ch[3] or "", presets.CHANNEL_NAME_MAX, "channel name"))))
+    return Command("name", m[1], (("text", label(tail, presets.NAME_MAX, "name")),))
+
+
+def parse_preset(text, usage):
+    """preset save N [TEXT], preset load N or preset clear N."""
+    m = re.fullmatch(r"\s*preset\s+(save|load|clear)\s+(\S+)(?:\s+(.*?))?\s*", text, re.S)
+    if not m or (m[3] and m[1] != "save"):
+        raise usage
+    slot = number("slot", m[2], 1, presets.SLOTS)
+    return Command("preset", None, (("action", m[1]), ("slot", slot),
+                                    ("text", label(m[3] or "", presets.NAME_MAX, "preset name"))))
+
+
 def parse_command(text):
     """A Command from the text of a control SysEx (docs/MIDI.md). Raises ValueError with
     the message for the error reply."""
@@ -201,6 +246,10 @@ def parse_command(text):
         if rest:
             raise usage
         return Command(verb)
+    if verb == "name":
+        return parse_name(text, usage)
+    if verb == "preset":
+        return parse_preset(text, usage)
     if verb == "assign":
         if len(rest) < 2:
             raise usage
@@ -219,6 +268,29 @@ def parse_command(text):
         return Command(verb, rest[0], (("direction", direction(rest[1])), ("on", rest[2] == "on")))
     side = direction(rest[1])
     return Command(verb, rest[0], (("direction", side), ("percent", number("percent", rest[2], 0, 100))))
+
+
+def status_reply(data, limit=STATUS_LIMIT):
+    """The status dict as the compact JSON of the status reply. Over `limit` bytes, it first loses
+    diagnostic keys (STATUS_TRIM), never names, levels, routes or presets; /run/rpi-audio/status.json
+    keeps them all."""
+    def dump(d):
+        return json.dumps(d, separators=(",", ":"), sort_keys=True)
+    text = dump(data)
+    if len(text.encode()) <= limit:
+        return text
+    data = copy.deepcopy(data)
+    for dev_keys, dir_keys in STATUS_TRIM:
+        for dev in data.get("devices", []):
+            for key in dev_keys:
+                dev.pop(key, None)
+            for side in (IN, OUT):
+                for key in dir_keys:
+                    dev.get(side, {}).pop(key, None)
+        text = dump(data)
+        if len(text.encode()) <= limit:
+            break
+    return text
 
 
 def cc_percent(value):
@@ -246,6 +318,14 @@ def cc_command(channel, controller, value, channels, starts):
     return Command("mute", ident, (("direction", side), ("on", value >= 64)))
 
 
+def program_command(channel, program, channel_in):
+    """The `preset load` Command for a Program Change on the control channel (programs 0..7 are
+    presets 1..8); None for any other channel or program."""
+    if channel != channel_in or not 0 <= program < presets.SLOTS:
+        return None
+    return Command("preset", None, (("action", "load"), ("slot", program + 1), ("text", "")))
+
+
 def split_endpoint(ident):
     """(device identity, port) from IDENTITY or IDENTITY/P; the port defaults to 0."""
     m = re.fullmatch(r"(.*)/(\d+)", ident)
@@ -253,7 +333,7 @@ def split_endpoint(ident):
 
 
 def apply_command(state, cmd):
-    """(new state, reply) after assign, mute or volume on the slots.json dict, which is not
+    """(new state, reply) after assign, mute, volume or name on the slots.json dict, which is not
     modified. Audio settings are keyed by the device identity, MIDI cables by IDENTITY/P."""
     state = copy.deepcopy(state or {})
     device, port = split_endpoint(cmd.identity or "")
@@ -269,6 +349,24 @@ def apply_command(state, cmd):
         muted[cmd.arg("direction")] = sorted(side | {device} if cmd.arg("on") else side - {device})
     elif cmd.verb == "volume":
         state.setdefault("volume", {}).setdefault(cmd.arg("direction"), {})[device] = cmd.arg("percent")
+    elif cmd.verb == "name":
+        presets.set_name(state, cmd.identity, cmd.arg("text"), cmd.arg("direction"), cmd.arg("channel"))
     else:
         raise ValueError(f"{cmd.verb} is not a state change")
     return state, "ok"
+
+
+def apply_preset(state, store, cmd, saved):
+    """(new slots.json dict, new presets.json dict) after preset save, load or clear; neither is
+    modified. `saved` is the time to record on a save. ValueError when loading an empty slot."""
+    state, store = copy.deepcopy(state or {}), copy.deepcopy(store or {})
+    slot = cmd.arg("slot")
+    if cmd.verb != "preset":
+        raise ValueError(f"{cmd.verb} is not a preset command")
+    if cmd.arg("action") == "save":
+        presets.save_preset(store, state, slot, cmd.arg("text"), saved)
+    elif cmd.arg("action") == "load":
+        presets.load_preset(state, store, slot)
+    else:
+        store.pop(str(slot), None)
+    return state, store

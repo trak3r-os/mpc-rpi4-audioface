@@ -65,7 +65,7 @@ id rpi-audio >/dev/null 2>&1 || useradd --system --gid audio --home-dir /nonexis
 install -d /usr/local/lib/rpi-audio /etc/rpi-audio /etc/rpi-audio/rpi-audio.d /etc/rpi-audio/devices.d
 install -m 755 $stage/gadget/rpi-audio-gadget $stage/gadget/rpi-audio-keepalive /usr/local/lib/rpi-audio/
 install -m 755 $stage/tools/tonegen.py $stage/bridge/rpi-audiod/rpi-audiod /usr/local/lib/rpi-audio/
-install -m 644 $stage/bridge/rpi-audiod/audiod.py $stage/bridge/rpi-audiod/midi.py $stage/bridge/rpi-audiod/usb.py /usr/local/lib/rpi-audio/
+install -m 644 $stage/bridge/rpi-audiod/audiod.py $stage/bridge/rpi-audiod/midi.py $stage/bridge/rpi-audiod/presets.py $stage/bridge/rpi-audiod/usb.py /usr/local/lib/rpi-audio/
 # The ALSA sequencer, for the gadget's MIDI ports and the devices' (docs/MIDI.md).
 printf 'snd-seq\nsnd-seq-midi\n' > /etc/modules-load.d/rpi-audio.conf
 modprobe snd-seq

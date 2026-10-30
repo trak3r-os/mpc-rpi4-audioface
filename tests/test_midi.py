@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """rpi-audiod's MIDI logic (bridge/rpi-audiod/midi.py), on outputs taken from the Pi."""
 
+import json
 import sys
 from pathlib import Path
 
@@ -173,9 +174,11 @@ def test_stale_after_reassignment():
 
 def test_parse_aseqdump():
     assert [midi.parse_aseqdump(line) for line in ASEQDUMP.splitlines()] == [
-        None, None, ("cc", 1, 7, 100), None, None, None,
+        None, None, ("cc", 1, 7, 100), ("pc", 3, 5), None, None,
         ("sysex", bytes.fromhex("F07D5241737461747573F7")), None, None, ("cc", 16, 3, 127)]
     assert midi.parse_aseqdump("") is None
+    assert midi.parse_aseqdump(" 40:1   Program change          15, program 3") == ("pc", 16, 3)
+    assert midi.parse_aseqdump(" 40:1   Program change          15, program") is None
 
 
 def test_sysex_round_trip():
@@ -211,6 +214,21 @@ def test_parse_command():
     assert midi.parse_command(f"mute {GP} in off").arg("on") is False
     assert midi.parse_command(f"volume {GP} in 0") == Command("volume", GP, (("direction", IN), ("percent", 0)))
     assert midi.parse_command(f"volume {GP} out 100").arg("percent") == 100
+    assert midi.parse_command(f"name {GP}  Tracker  Mk 2 ") == Command("name", GP, (("text", "Tracker  Mk 2"),))
+    assert midi.parse_command(f"name {GP}") == Command("name", GP, (("text", ""),))
+    assert midi.parse_command(f"name {GP} in 3  Kick drum") == Command(
+        "name", GP, (("direction", IN), ("channel", 3), ("text", "Kick drum")))
+    assert midi.parse_command(f"name {GP} out 12").args == (("direction", OUT), ("channel", 12), ("text", ""))
+    # Not the channel form: no integer after in/out, or a word that only starts with one.
+    assert midi.parse_command(f"name {GP} in the mix").arg("text") == "in the mix"
+    assert midi.parse_command(f"name {GP} out 2x").arg("text") == "out 2x"
+    assert midi.parse_command(f"name {GP} in").arg("text") == "in"
+    assert midi.parse_command("name x " + "a" * 24).arg("text") == "a" * 24
+    assert midi.parse_command(f"name {GP} in 1 " + "a" * 16).arg("text") == "a" * 16
+    assert midi.parse_command("preset save 3").args == (("action", "save"), ("slot", 3), ("text", ""))
+    assert midi.parse_command("preset save 8  Live  set ").arg("text") == "Live  set"
+    assert midi.parse_command("preset load 1").args == (("action", "load"), ("slot", 1), ("text", ""))
+    assert midi.parse_command("preset clear 5").arg("action") == "clear"
     assert hash(cmd) == hash(Command("assign", GP, (("in", 3), ("midi", 2))))
 
 
@@ -222,6 +240,11 @@ def test_parse_command():
     f"mute {GP}", f"mute {GP} in", f"mute {GP} up on", f"mute {GP} in maybe", f"mute {GP} in on now",
     f"volume {GP} in", f"volume {GP} side 50", f"volume {GP} in 101", f"volume {GP} in -1",
     f"volume {GP} in loud", f"volume {GP} in 50 50",
+    "name", f"name {GP} in 0", f"name {GP} out -2 x", "name x " + "a" * 25, f"name {GP} in 1 " + "a" * 17,
+    "name x caf\u00e9", "name x a\x7fb",
+    "preset", "preset save", "preset save x", "preset save 0", "preset save 9", "preset save 1.5 x",
+    "preset load", "preset load 9", "preset load 1 x", "preset clear 2 x", "preset wipe 1",
+    "preset save 1 " + "a" * 25, "preset save 1 caf\u00e9",
 ])
 def test_parse_command_errors(text):
     with pytest.raises(ValueError):
@@ -241,6 +264,13 @@ def test_parse_command_messages():
     assert message(f"assign {GP} in=x") == "in must be an integer"
     assert message(f"assign {GP} midi=0") == "midi must be 1 or more"
     assert message(f"volume {GP} out 101") == "percent must be 0..100"
+    assert message("name") == "usage: name IDENTITY [TEXT] | name IDENTITY in|out K [TEXT]"
+    assert message("name x " + "a" * 25) == "name must be at most 24 characters"
+    assert message(f"name {GP} out 1 " + "a" * 17) == "channel name must be at most 16 characters"
+    assert message(f"name {GP} in 0 x") == "channel must be 1 or more"
+    assert message("preset save 9") == "slot must be 1..8"
+    assert message("preset load 1 x") == "usage: preset save N [TEXT] | preset load N | preset clear N"
+    assert message("preset save 1 " + "a" * 25) == "preset name must be at most 24 characters"
 
 
 def test_smf_sysex():
@@ -251,6 +281,25 @@ def test_smf_sysex():
     smf = midi.smf_sysex(long)
     assert smf[22:26] == b"\0\xF0\x81\x4C" and smf.endswith(b"\xF7\0\xFF\x2F\0")
     assert int.from_bytes(smf[18:22], "big") == len(smf) - 22
+
+
+def test_status_reply():
+    small = {"devices": [{"identity": GP, "usbbus": "001/002", "in": {"client": "a_in", "fs_load": 196}}], "time": "t"}
+    assert midi.status_reply(small) == json.dumps(small, separators=(",", ":"), sort_keys=True)
+    big = {"devices": [{"identity": f"{GP}{k}", "card": "c", "usbbus": "001/00%d" % k,
+                        "in": {"client": "a_in", "fs_load": 196, "level": 50, "names": ["n" * 16] * 6},
+                        "out": {"client": "a_out", "fs_load": 192, "names": ["n" * 16] * 6}} for k in range(6)],
+           "presets": [{"slot": 1, "name": "p", "saved": "t"}]}
+    full = len(midi.status_reply(big, limit=10**6))
+    stages = []
+    for limit in range(full, 0, -50):
+        reply = json.loads(midi.status_reply(big, limit))
+        stages.append(sorted(set(reply["devices"][0]) | set(reply["devices"][0]["in"])))
+        assert reply["presets"] == big["presets"] and reply["devices"][5]["in"]["names"] == ["n" * 16] * 6
+        assert reply["devices"][5]["in"]["level"] == 50 and reply["devices"][5]["identity"] == f"{GP}5"
+    assert stages[0] != stages[-1] and "fs_load" not in stages[-1] and "usbbus" not in stages[-1]
+    assert "card" not in stages[-1] and "identity" in stages[-1]
+    assert "usbbus" in midi.status_reply(big, full - 1) and "fs_load" not in midi.status_reply(big, full - 1)
 
 
 def test_cc_percent():
@@ -305,6 +354,52 @@ def test_apply_mute_and_volume():
     for cmd in (Command("ping"), Command("status"), Command("reboot", GP)):
         with pytest.raises(ValueError):
             midi.apply_command(state, cmd)
+
+
+def test_apply_name():
+    state = {"in": {GP: 3}}
+    new, reply = midi.apply_command(state, midi.parse_command(f"name {GP} Tracker"))
+    assert reply == "ok" and state == {"in": {GP: 3}}
+    new, _ = midi.apply_command(new, midi.parse_command(f"name {GP} out 2 Bass"))
+    new, _ = midi.apply_command(new, midi.parse_command(f"name {GP}/1 x"))   # the whole text is the identity
+    assert new["names"] == {GP: {"name": "Tracker", "out": {"2": "Bass"}}, f"{GP}/1": {"name": "x"}}
+    new, _ = midi.apply_command(new, midi.parse_command(f"name {GP} out 2"))
+    new, _ = midi.apply_command(new, midi.parse_command(f"name {GP}"))
+    new, _ = midi.apply_command(new, midi.parse_command(f"name {GP}/1"))
+    assert new == {"in": {GP: 3}}
+    assert midi.apply_command(state, midi.parse_command(f"name {GP} in 1"))[0] == state
+
+
+def test_program_command():
+    assert midi.program_command(16, 0, 16) == Command("preset", None, (("action", "load"), ("slot", 1), ("text", "")))
+    assert midi.program_command(16, 7, 16).arg("slot") == 8
+    assert midi.program_command(1, 3, 1).arg("slot") == 4
+    assert midi.program_command(15, 3, 16) is None and midi.program_command(16, 8, 16) is None
+    assert midi.program_command(16, 127, 16) is None
+
+
+def test_apply_preset():
+    state = {"in": {GP: 3}, "mute": {"in": [GP]}, "midi": {f"{GP}/0": 2}, "in_channels": {GP: 6},
+             "names": {GP: {"name": "T"}}}
+    cmd = midi.parse_command("preset save 2 Live")
+    new, store = midi.apply_preset(state, {}, cmd, "2026-10-30 12:00")
+    assert new == state and "names" not in store["2"]["state"]
+    assert store == {"2": {"name": "Live", "saved": "2026-10-30 12:00", "state": {
+        "in": {GP: 3}, "mute": {"in": [GP]}, "midi": {f"{GP}/0": 2}, "in_channels": {GP: 6}}}}
+    changed = {"out": {GP: 1}, "volume": {"in": {GP: 50}}, "names": {GP: {"name": "Renamed"}}}
+    loaded, same = midi.apply_preset(changed, store, midi.parse_command("preset load 2"), "")
+    assert same == store
+    assert loaded == {"in": {GP: 3}, "mute": {"in": [GP]}, "midi": {f"{GP}/0": 2}, "in_channels": {GP: 6},
+                      "names": {GP: {"name": "Renamed"}}}
+    loaded["in"][GP] = 9   # the preset keeps its own copy
+    assert store["2"]["state"]["in"][GP] == 3
+    with pytest.raises(ValueError, match="preset 3 is empty"):
+        midi.apply_preset(state, store, midi.parse_command("preset load 3"), "")
+    _, cleared = midi.apply_preset(state, store, midi.parse_command("preset clear 2"), "")
+    assert cleared == {} and store["2"]["name"] == "Live"
+    assert midi.apply_preset(state, {}, midi.parse_command("preset clear 2"), "")[1] == {}
+    with pytest.raises(ValueError):
+        midi.apply_preset(state, store, Command("ping"), "")
 
 
 def test_reply_header_is_not_a_command():

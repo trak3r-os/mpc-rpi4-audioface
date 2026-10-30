@@ -14,8 +14,14 @@ control port takes the commands below from the host too (docs/MIDI.md).
   rpi-audiod assign IDENTITY [--in N] [--out N] [--midi K]   pin a device's gadget channels or MIDI port
   rpi-audiod mute IDENTITY in|out on|off      cut or restore a device's audio routes
   rpi-audiod volume IDENTITY in|out PERCENT   set a device's own capture or playback level
+  rpi-audiod name IDENTITY [TEXT...]          name a device (empty: clear it)
+  rpi-audiod name IDENTITY in|out K [TEXT...] name its channel K (a device name cannot start with "in N" or "out N")
+  rpi-audiod preset save N [TEXT...]          save the routing state as preset N (1..8)
+  rpi-audiod preset load N | clear N          restore or delete it; Program Change 0..7 on the control
+                                              channel loads presets 1..8
 
-Gadget channels are sticky per device identity (/var/lib/rpi-audio/slots.json). A full-speed
+Gadget channels are sticky per device identity (/var/lib/rpi-audio/slots.json, which also holds
+the names); presets are in presets.json next to it. A full-speed
 device is only bridged while its isochronous load fits [usb] fs_budget on its bus. Settings:
 /etc/rpi-audio/rpi-audio.toml, then /etc/rpi-audio/rpi-audio.d/*.toml; optional per-device
 profiles in /etc/rpi-audio/devices.d/*.toml (config/devices.d/); the gadget's own
@@ -41,11 +47,13 @@ from pathlib import Path
 
 import audiod
 import midi
+import presets
 import usb
 from audiod import IN, OUT
 
 CONFIG = Path(os.environ.get("RPI_AUDIO_CONFIG", "/etc/rpi-audio/rpi-audio.toml"))
 STATE = Path(os.environ.get("STATE_DIRECTORY", "/var/lib/rpi-audio")) / "slots.json"
+PRESETS = STATE.with_name("presets.json")
 STATUS = Path(os.environ.get("RUNTIME_DIRECTORY", "/run/rpi-audio")) / "status.json"
 TICK = 0.1
 STALL_S = 1.5        # gadget playback pointer still for this long: the feeder is stuck
@@ -143,6 +151,14 @@ def load_slots():
         return {}
 
 
+def load_presets():
+    try:
+        data = json.loads(PRESETS.read_text())
+    except (OSError, ValueError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
 def slots_stamp():
     """Changes with every write of slots.json (each one is a new file)."""
     try:
@@ -152,19 +168,47 @@ def slots_stamp():
         return None
 
 
-def update_slots(change):
-    """Applies change(state) -> state to slots.json, holding a lock the service and the
-    command line share, so neither overwrites the other's edit. Returns (state, stamp)."""
+@contextlib.contextmanager
+def locked():
+    """The lock the service and the command line share around slots.json and presets.json."""
     fd = os.open(STATE.with_suffix(".lock"), os.O_RDONLY | os.O_CREAT, 0o644)
     try:
         fcntl.flock(fd, fcntl.LOCK_EX)
+        yield
+    finally:
+        os.close(fd)
+
+
+def update_slots(change):
+    """Applies change(state) -> state to slots.json, holding the lock, so neither the service
+    nor the command line overwrites the other's edit. Returns (state, stamp)."""
+    with locked():
         state = load_slots()
         new = change(copy.deepcopy(state))
         if new != state:
             write_json(STATE, new)
         return new, slots_stamp()
-    finally:
-        os.close(fd)
+
+
+def update_presets(change):
+    """Applies change(state, presets) -> (state, presets) to slots.json and presets.json under
+    the same lock; a file is only written when it changed, and nothing when change raises."""
+    with locked():
+        state, store = load_slots(), load_presets()
+        new, new_store = change(copy.deepcopy(state), copy.deepcopy(store))
+        if new_store != store:
+            write_json(PRESETS, new_store)
+        if new != state:
+            write_json(STATE, new)
+
+
+def save_command(cmd):
+    """Saves the change of an assign, mute, volume, name or preset Command. Raises ValueError
+    (a command that cannot run, like loading an empty preset) or OSError (cannot write)."""
+    if cmd.verb == "preset":
+        update_presets(lambda state, store: midi.apply_preset(state, store, cmd, time.strftime("%Y-%m-%d %H:%M")))
+    else:
+        update_slots(lambda state: midi.apply_command(state, cmd)[0])
 
 
 def udc_state():
@@ -462,7 +506,8 @@ class Midi:
 
     def drain(self, daemon):
         """Runs the commands that came in on the control port since the last tick. CCs of
-        one control are coalesced: a Q-Link sweep sets the level once per tick."""
+        one control are coalesced: a Q-Link sweep sets the level once per tick. A Program
+        Change loads a preset, after the CCs that came before it."""
         ccs = {}
         for _ in range(MIDI_COMMANDS):
             try:
@@ -481,6 +526,15 @@ class Midi:
                     log(f"rpi-audiod: MIDI CC {event[2]} on channel {event[1]}: no device there")
                 else:
                     ccs[(cmd.verb, cmd.identity, cmd.arg("direction"))] = cmd
+            elif event[0] == "pc" and event[1] == self.channels[0]:
+                cmd = midi.program_command(event[1], event[2], self.channels[0])
+                if cmd is None:
+                    log(f"rpi-audiod: MIDI program {event[2]} on channel {event[1]}: no preset there")
+                    continue
+                for pending in ccs.values():
+                    daemon.apply(pending)
+                ccs.clear()
+                log(f"rpi-audiod: MIDI program {event[2]}: preset {cmd.arg('slot')}: {daemon.apply(cmd)}")
         for cmd in ccs.values():
             daemon.apply(cmd)
 
@@ -749,7 +803,7 @@ class Daemon:
             if cmd.verb == "ping":
                 return "ok rpi-audio"
             if cmd.verb == "status":
-                return json.dumps(self.status_data(), separators=(",", ":"), sort_keys=True)
+                return midi.status_reply(self.status_data())
             return self.apply(cmd)
         except ValueError as e:
             return f"error: {e}"
@@ -757,18 +811,23 @@ class Daemon:
     def apply(self, cmd):
         """Saves a command's change; scan_devices sees the new state and applies it."""
         try:
-            update_slots(lambda state: midi.apply_command(state, cmd)[0])
+            save_command(cmd)
+        except ValueError as e:
+            return f"error: {e}"
         except OSError as e:
             return f"error: cannot save the change: {e}"
         return "ok"
 
     def status_data(self):
         playback_rate, capture_rate = self.rates
+        custom = load_slots().get("names", {})
         devices = []
         for i, dev in self.devices.items():
+            mine = custom.get(i, {})
             entry = {"identity": i, "card": dev.id, "usbbus": dev.usbbus}
-            if dev.profile and dev.profile.name:
-                entry["name"] = dev.profile.name
+            name = presets.device_name(dev.profile.name if dev.profile else "", mine)
+            if name:
+                entry["name"] = name
             for direction in (IN, OUT):
                 b = self.bridges.get((i, direction))
                 if b:
@@ -778,13 +837,14 @@ class Daemon:
                                         "level": self.volumes.get((i, direction))}
                     extra = {"slots": b.size if b.size != b.channels else None,
                              "ignored": [k for k in range(1, b.channels + 1) if k not in b.kept] or None,
-                             "names": [*dev.profile.get("names", direction)][:b.channels] if dev.profile else None,
+                             "names": presets.channel_names(dev.profile.get("names", direction) if dev.profile else (),
+                                                            mine.get(direction), b.channels),
                              "fs_load": b.load or None, "blocked": b.blocked}
                     entry[direction].update({k: v for k, v in extra.items() if v})
             devices.append(entry)
         return {"time": time.strftime("%Y-%m-%d %H:%M:%S"), "host_playback_rate": playback_rate,
                 "host_capture_rate": capture_rate, "feeder": self.mode, "jack_ready": self.jack_ready,
-                "gadget_channels": self.channels, "devices": devices,
+                "gadget_channels": self.channels, "devices": devices, "presets": presets.summary(load_presets()),
                 "midi": self.midi.status() if self.midi else None}
 
     # --- main loop ---------------------------------------------------------------------
@@ -861,6 +921,8 @@ def cmd_status(_):
                       f"  {'running' if b['running'] else 'not running'}{extra}")
                 if b.get("blocked"):
                     print(f"      waiting: {b['blocked']}")
+    if s.get("presets"):
+        print("  presets: " + ", ".join(f"{p['slot']} {p['name']} ({p['saved']})" for p in s["presets"]))
     m = s.get("midi")
     if m:
         state = ("on client %s" % m["client"]) if m["client"] is not None else "not found"
@@ -871,11 +933,10 @@ def cmd_status(_):
 
 
 def cmd_change(text):
-    """assign, mute and volume from the command line: the same commands, and the same
-    checks, as on the MIDI control port (docs/MIDI.md)."""
+    """assign, mute, volume, name and preset from the command line: the same commands, and the
+    same checks, as on the MIDI control port (docs/MIDI.md)."""
     try:
-        cmd = midi.parse_command(text)
-        update_slots(lambda state: midi.apply_command(state, cmd)[0])
+        save_command(midi.parse_command(text))
     except ValueError as e:
         sys.exit(f"rpi-audiod: {e}")
     except OSError as e:
@@ -898,6 +959,13 @@ def main():
         v.add_argument("identity")
         v.add_argument("direction", help="in|out")
         v.add_argument("value", metavar=last)
+    n = sub.add_parser("name")
+    n.add_argument("identity")
+    n.add_argument("words", nargs="*", metavar="WORD", help="channel form, then the name; empty clears it")
+    r = sub.add_parser("preset")
+    r.add_argument("action", choices=("save", "load", "clear"))
+    r.add_argument("slot", help="1..8")
+    r.add_argument("words", nargs="*", metavar="TEXT", help="the preset's name, for save")
     args = p.parse_args()
     if args.cmd == "status":
         return cmd_status(args)
@@ -906,6 +974,10 @@ def main():
         return cmd_change(" ".join(["assign", args.identity, *keys]))
     if args.cmd in ("mute", "volume"):
         return cmd_change(" ".join([args.cmd, args.identity, args.direction, args.value]))
+    if args.cmd == "name":
+        return cmd_change(" ".join(["name", args.identity, *args.words]))
+    if args.cmd == "preset":
+        return cmd_change(" ".join(["preset", args.action, args.slot, *args.words]))
     daemon = Daemon(load_config())
 
     def stop(*_):

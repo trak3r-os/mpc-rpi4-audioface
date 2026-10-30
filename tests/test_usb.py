@@ -4,10 +4,13 @@ and the budget bookkeeping of the daemon's bridges."""
 
 import importlib.machinery
 import importlib.util
+import json
 import signal
 import sys
 import types
 from pathlib import Path
+
+import pytest
 
 BRIDGE = Path(__file__).resolve().parent.parent / "bridge" / "rpi-audiod"
 sys.path.insert(0, str(BRIDGE))
@@ -277,3 +280,164 @@ def test_child_stop_sends_its_signal(monkeypatch):
     c = daemon.Child("sleep", ["sleep", "5"], stop_signal=signal.SIGINT)
     c.stop()
     assert c.proc.returncode == -signal.SIGINT
+
+
+# --- names, presets and their files ----------------------------------------------------------
+
+def stateful(monkeypatch, tmp_path):
+    """The daemon module with its slots.json and presets.json in tmp_path."""
+    monkeypatch.setattr(daemon, "STATE", tmp_path / "slots.json")
+    monkeypatch.setattr(daemon, "PRESETS", tmp_path / "presets.json")
+    monkeypatch.setattr(daemon, "log", lambda msg: None)
+
+
+def command_daemon(monkeypatch, tmp_path):
+    stateful(monkeypatch, tmp_path)
+    d = daemon.Daemon.__new__(daemon.Daemon)
+    d.bridges, d.devices, d.rates, d.mode, d.jack_ready, d.channels, d.midi = {}, {}, (0, 0), None, False, 26, None
+    d.muted, d.volumes = {IN: set(), OUT: set()}, {}
+    return d
+
+
+def control_midi():
+    m = daemon.Midi.__new__(daemon.Midi)
+    m.channels = (16, 15)
+    m.events = daemon.queue.SimpleQueue()
+    return m
+
+
+def test_name_and_preset_commands_through_the_daemon(monkeypatch, tmp_path):
+    d = command_daemon(monkeypatch, tmp_path)
+    assert d.command("assign usb-a in=3 out=5") == "ok"
+    assert d.command("volume usb-a out 80") == "ok"
+    assert d.command("name usb-a  My  box") == "ok"
+    assert d.command("name usb-a in 2 Kick") == "ok"
+    assert daemon.load_slots()["names"] == {"usb-a": {"name": "My  box", "in": {"2": "Kick"}}}
+    assert d.command("preset load 1") == "error: preset 1 is empty"
+    assert d.command("preset save 1 Live") == "ok"
+    saved = daemon.load_presets()["1"]
+    assert saved["name"] == "Live" and len(saved["saved"]) == 16
+    assert saved["state"] == {"in": {"usb-a": 3}, "out": {"usb-a": 5}, "volume": {"out": {"usb-a": 80}}}
+    assert (tmp_path / "presets.json").stat().st_mode & 0o777 == 0o644
+    assert d.command("assign usb-a in=9") == "ok"
+    assert d.command("name usb-a Renamed") == "ok"
+    stamp = daemon.slots_stamp()
+    assert d.command("preset load 1") == "ok"
+    slots = daemon.load_slots()
+    assert slots["in"] == {"usb-a": 3} and slots["names"]["usb-a"]["name"] == "Renamed"
+    assert daemon.slots_stamp() != stamp   # the service sees the change and re-applies it
+    assert d.command("preset save 1") == "ok" and daemon.load_presets()["1"]["name"] == "Live"
+    assert d.command("preset save 2") == "ok" and daemon.load_presets()["2"]["name"] == "Preset 2"
+    assert d.command("preset clear 1") == "ok" and sorted(daemon.load_presets()) == ["2"]
+    assert d.command("preset load 9").startswith("error: slot must be")
+    assert d.command("name usb-a " + "x" * 25) == "error: name must be at most 24 characters"
+    status = json.loads(d.command("status"))
+    assert status["presets"] == [{"slot": 2, "name": "Preset 2", "saved": daemon.load_presets()["2"]["saved"]}]
+
+
+def test_empty_preset_load_writes_nothing(monkeypatch, tmp_path):
+    d = command_daemon(monkeypatch, tmp_path)
+    assert d.command("preset load 4") == "error: preset 4 is empty"
+    assert d.command("preset clear 4") == "ok"
+    assert not (tmp_path / "slots.json").exists() and not (tmp_path / "presets.json").exists()
+
+
+def test_presets_file_of_junk_is_empty(monkeypatch, tmp_path):
+    d = command_daemon(monkeypatch, tmp_path)
+    (tmp_path / "presets.json").write_text("[1, 2")
+    assert daemon.load_presets() == {}
+    (tmp_path / "presets.json").write_text("[1]")
+    assert daemon.load_presets() == {}
+    assert d.command("preset save 1") == "ok" and list(daemon.load_presets()) == ["1"]
+
+
+def test_cli_changes_use_the_same_commands(monkeypatch, tmp_path):
+    stateful(monkeypatch, tmp_path)
+    daemon.cmd_change("name usb-a out 1 Main L")
+    daemon.cmd_change("preset save 3 Gig")
+    assert daemon.load_slots()["names"]["usb-a"]["out"] == {"1": "Main L"}
+    assert daemon.load_presets()["3"]["name"] == "Gig"
+    for text in ("preset load 5", "name usb-a " + "x" * 25):
+        with pytest.raises(SystemExit):
+            daemon.cmd_change(text)
+
+
+def test_program_change_loads_presets(monkeypatch, tmp_path):
+    d = command_daemon(monkeypatch, tmp_path)
+    d.command("assign usb-a in=3")
+    d.command("preset save 2 Two")
+    d.command("assign usb-a in=7")
+    m = control_midi()
+    for event in (("pc", 15, 1), ("pc", 16, 9), ("pc", 16, 5)):   # other channel, no such program, empty preset
+        m.events.put(event)
+    m.drain(d)
+    assert daemon.load_slots()["in"] == {"usb-a": 7}
+    m.events.put(("pc", 16, 1))
+    m.drain(d)
+    assert daemon.load_slots()["in"] == {"usb-a": 3}
+
+
+def test_program_change_comes_after_earlier_ccs(monkeypatch, tmp_path):
+    d = command_daemon(monkeypatch, tmp_path)
+    d.starts = lambda: {IN: {3: "usb-a"}, OUT: {}}
+    d.command("volume usb-a in 10")
+    d.command("preset save 1")
+    m = control_midi()
+    m.events.put(("cc", 16, 35, 127))   # level 100, applied before the preset restores 10
+    m.events.put(("pc", 16, 0))
+    m.drain(d)
+    assert daemon.load_slots()["volume"] == {"in": {"usb-a": 10}}
+
+
+def test_status_names(monkeypatch, tmp_path):
+    d = command_daemon(monkeypatch, tmp_path)
+    profile = audiod.Profile("1234:5678", "a.toml", name="Dev", names_in=("L", "R"))
+    dev = daemon.Device(1, "a", "001/002", "usb-a", {IN: (48000, 3), OUT: (48000, 2)}, profile)
+    d.bridges = {("usb-a", IN): daemon.Bridge(dev, IN), ("usb-a", OUT): daemon.Bridge(dev, OUT)}
+    d.devices = {"usb-a": dev}
+    entry = d.status_data()["devices"][0]
+    assert entry["name"] == "Dev" and entry[IN]["names"] == ["L", "R", ""] and "names" not in entry[OUT]
+    assert d.status_data()["presets"] == []
+    d.command("name usb-a Mine")
+    d.command("name usb-a in 2 Mic")
+    d.command("name usb-a in 3 Aux")
+    d.command("name usb-a out 2 Right")
+    entry = d.status_data()["devices"][0]
+    assert entry["name"] == "Mine" and entry[IN]["names"] == ["L", "Mic", "Aux"]
+    assert entry[OUT]["names"] == ["", "Right"]
+    d.command("name usb-a")
+    assert d.status_data()["devices"][0]["name"] == "Dev"
+
+
+def test_status_with_everything_named_fits_one_sysex(monkeypatch, tmp_path):
+    d = command_daemon(monkeypatch, tmp_path)
+    d.midi = types.SimpleNamespace(status=lambda: {
+        "card": "MIDIGadget", "client": 40, "ports": 4, "control_port": 1, "host_connected": True,
+        "listening": True,
+        "endpoints": [{"endpoint": f"usb-84ef:0186-A1B2C3{k}/0", "port": k % 3 + 2} for k in range(6)]})
+    for k in range(6):
+        profile = audiod.Profile("1234:5678", "a.toml", name="Profile name")
+        dev = daemon.Device(k + 1, f"Device{k}", f"001/00{k}", f"usb-84ef:0186-A1B2C3{k}",
+                            {IN: (48000, 6), OUT: (48000, 6)}, profile, speed="12", bus="1",
+                            loads={IN: 196, OUT: 192})
+        d.devices[dev.identity] = dev
+        for direction in (IN, OUT):
+            b = daemon.Bridge(dev, direction)
+            b.start, b.child = 1 + 6 * k, FakeChild("zita", [])
+            d.bridges[(dev.identity, direction)] = b
+            d.volumes[(dev.identity, direction)] = 100
+        d.command(f"name {dev.identity} " + "N" * 16)
+        for direction in (IN, OUT):
+            for ch in range(1, 7):
+                d.command(f"name {dev.identity} {direction} {ch} " + "c" * 16)
+    for slot in range(1, 9):
+        d.command(f"preset save {slot} " + "P" * 16)
+    full = json.dumps(d.status_data(), separators=(",", ":"), sort_keys=True)
+    reply = d.command("status")
+    status = json.loads(reply)
+    print("status bytes:", len(full.encode()), "reply bytes:", len(reply.encode()))
+    assert len(full.encode()) > 4000   # the full status does not fit: the reply drops diagnostics
+    assert len(reply.encode()) < 4000
+    assert len(status["presets"]) == 8 and status["devices"][5][OUT]["names"] == ["c" * 16] * 6
+    assert status["devices"][0]["name"] == "N" * 16 and status["devices"][0][IN]["level"] == 100
+    assert status["midi"]["endpoints"][5]["port"] == 4
