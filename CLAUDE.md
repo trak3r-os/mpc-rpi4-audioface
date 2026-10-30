@@ -15,7 +15,7 @@ Al empezar cada sesión, lee `docs/STATUS.md` (estado y traspaso) y la fase en c
      - Siempre con `bind=127.0.0.1` y por túnel SSH.
 
   Las contraseñas van en variables de entorno (`FORCE_PASS`), nunca en un fichero. La Force se resuelve como `force.local`.
-- **Pi.** `no3z@192.168.1.106`, con clave SSH. Los cambios de sistema van por `tools/deploy.sh` (idempotente) y se anotan en `docs/hw/`. Nada destructivo sin preguntar: formatear, borrar datos, cambiar la red o el arranque. **No reinicies ni apagues la Pi, ni desenlaces el gadget, con la Force conectada y MPC transmitiendo**, salvo con el usuario delante: una vez tiró el hub USB interno de la Force y desmontó en sucio su SSD (`docs/hw/2026-10-30-boot-soak.md`).
+- **Pi.** `no3z@192.168.1.106`, con clave SSH. Los cambios de sistema van por `tools/deploy.sh` (idempotente) y se anotan en `docs/hw/`. Nada destructivo sin preguntar: formatear, borrar datos, cambiar la red o el arranque.
 - **Gadget.** Se monta una vez al arrancar (`rpi-audio-gadget.service`). No reenlaces el UDC en bucle: los reenlaces repetidos pueden bloquear el dwc2.
 - **No editar** `../track3r-os`, `../o3-sdk` ni `../o3-303`. Lo que necesite el Tracker se anota en `docs/PLAN.md` §7.
 - **Privacidad.** Nada de contraseñas, números de serie ni salidas en bruto en git: van a `out/`, que está ignorado. En `docs/hw/` solo van resúmenes.

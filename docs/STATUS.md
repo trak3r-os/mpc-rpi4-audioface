@@ -16,7 +16,7 @@ F4 en marcha: **USB MIDI en el gadget** (4 puertos), MIDI de paso por dispositiv
 
 ## Estado ahora mismo
 
-- **⚠️ No reiniciar ni apagar la Pi con la Force conectada y MPC transmitiendo** sin el usuario delante. El 2026-10-30, un reinicio de la Pi tiró todo el hub USB interno de la Force (`usb2-port1: disabled by hub (EMI?)`). Con él se fueron la superficie, la SD de MockbaMod y AKAI_SSD, que se desmontaron en sucio. La causa está por aislar: `docs/hw/2026-10-30-boot-soak.md`.
+- **Reinicio de la Pi con la Force conectada:** el 2026-10-30 un reinicio con MPC transmitiendo tiró una vez todo el hub USB interno de la Force (`usb2-port1: disabled by hub (EMI?)`) y desmontó en sucio la SD de MockbaMod y AKAI_SSD. Con la mitigación de `rpi-audio-gadget down` (1f7a421), la parada del gadget y un reinicio completo con MPC transmitiendo salieron limpios (dos pruebas, con el SSD expulsado). La causa no está aislada; si vuelve a pasar, hay que reponer la regla. `docs/hw/2026-10-30-boot-soak.md`.
 - **La Force:** `mpc_internal_io` está instalado en la SD de MockbaMod y se carga en cada arranque.
   - **Ajustes temporales de la prueba de salidas:** MPC Out 1/2 → códec 1/2 y Out 3/4 → códec 3/4. Al acabar, volver a `mpc_internal_io.conf` del repo con `install.sh conf` y reiniciar la Force.
   - MPC arranca con su audio interno: hay que elegir rpi-audio tras cada arranque, a mano o con MPC Remote. MPC guarda "Internal" aunque se elija rpi-audio [Force] (`docs/hw/2026-10-30-boot-soak.md`, sección 5).
@@ -112,12 +112,10 @@ Queda:
 1. **Con el usuario delante:**
    - si suenan el mezclador y el GP-150 en MPC;
    - por dónde salen Out 1/2 y 3/4. Con eso, `install.sh conf` con la configuración del repo y reiniciar la Force.
-2. **El incidente del reinicio de la Pi:**
-   - con el portátil ya se ha visto que el gadget se desconecta limpio 1,6 s después de pedir el reinicio, antes del reset del hardware;
-   - la hipótesis es babble al desenlazar el UDC en mitad del stream;
-   - `rpi-audio-gadget down` ahora quita antes el pull-up y espera 0,5 s.
-
-   Falta probarlo en la Force, con el usuario delante y AKAI_SSD expulsado. La Pi ya guarda su journal entre arranques (`journalctl -b -1`).
+2. **El incidente del reinicio de la Pi:** probado en la Force (2026-10-30, con el usuario delante y AKAI_SSD expulsado): parada del gadget y reinicio completo de la Pi con MPC transmitiendo, los dos limpios, sin `EMI?`.
+   - Son dos pruebas y la causa sigue sin aislar; la hipótesis es babble al desenlazar el UDC en mitad del stream.
+   - Queda por ver cómo se comporta con MPC escribiendo, y si la primera apertura del gadget tras enumerar da siempre `capture error -5` (`docs/hw/2026-10-30-boot-soak.md`).
+   - La Pi guarda su journal entre arranques (`journalctl -b -1`) para analizar cualquier repetición.
 3. **Con el Tracker enchufado a la Pi:**
    - la aceptación de F4;
    - el presupuesto de verdad: con el Tracker en "8 OUT / 2 IN" más el mezclador, la grabación abre y la reproducción espera.
