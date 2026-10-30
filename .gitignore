@@ -4,3 +4,5 @@ __pycache__/
 *.pyc
 .pytest_cache/
 tools/hosts/akai-force-internal-io/build/
+# Claude Code worktrees
+.claude/worktrees/

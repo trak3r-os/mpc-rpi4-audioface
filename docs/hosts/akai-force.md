@@ -25,6 +25,7 @@ Ficha de un host concreto. El código de rpi-audio no depende de ella; aquí se 
 - Las actualizaciones de firmware han roto interfaces que antes funcionaban (las notas de la 3.8, 3.9.1 y 3.10 citan modelos concretos): hay que repetir la prueba tras cada actualización. [ext]
 - MIDI en el mismo dispositivo USB que el audio: hay un caso de chasquidos con una XR18 que se arreglaron quitando el envío de clock a ese puerto. A tener en cuenta en F4. [ext] mpc-forums, agosto de 2026
 - **Con el gadget compuesto** (audio y 4 puertos MIDI), la Force lo ve como una sola tarjeta y MPC sigue abriendo el audio a 26×26. MPC se suscribe solo a los 4 puertos MIDI, en los dos sentidos, sin reiniciarse. [Force] `docs/hw/2026-10-30-f4-midi.md`
+- **Reiniciar la Pi con MPC transmitiendo tiró todo el hub interno de la Force** (`usb2-port1: disabled by hub (EMI?)`). Con él se fueron la superficie, la SD y el SSD, y AKAI_SSD se desmontó en sucio. Hasta aislar la causa, no se reinicia ni se apaga la Pi con la Force conectada sin el usuario delante. [Force] `docs/hw/2026-10-30-boot-soak.md`
 - **El MIDI que sale de un plugin VST lo ignora MPC.** Un plugin que quiera mandar MIDI tiene que abrir su propio puerto ALSA. [ext] sd88me, `docs/NOTES.md`
 
 ## Cómo usa ALSA MPC

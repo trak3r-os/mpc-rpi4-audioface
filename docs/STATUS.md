@@ -1,15 +1,22 @@
-# Estado: 2026-10-30 (mediodía)
+# Estado: 2026-10-30 (12:50)
 
 **Fase:** F1 cumplida con la Force a 26×26 S16, **siempre que la Pi esté reproduciendo**. F2 en marcha:
 
 - banco de JACK con dispositivos USB reales: `docs/hw/2026-10-29-f2-jack-bench.md` y `docs/hw/2026-10-29-f2-usb-devices.md`;
 - **add-on de la Force** que le devuelve su audio interno junto a rpi-audio. Funciona e **instalado**: `docs/hw/2026-10-29-force-internal-io.md`;
-- **`rpi-audiod` v1, primera parte** (`bridge/rpi-audiod/`): jackd ligado al stream del host, puentes zita por tarjeta USB y canales fijos por dispositivo. **45 minutos sin fallos con la Force**, con el add-on activo: `docs/hw/2026-10-30-rpi-audiod.md`. Falta que el usuario lo confirme de oído.
+- **`rpi-audiod` v1** (`bridge/rpi-audiod/`):
+  - jackd ligado al stream del host, puentes zita por tarjeta USB y canales fijos por dispositivo;
+  - presupuesto Full-Speed comprobado antes de abrir cada sentido, y perfiles opcionales en `config/devices.d/`;
+  - **habilitado al arranque**: el gadget y `rpi-audiod` están arriba a los ~9 s;
+  - **soak de 60 minutos con la Force: 0 xruns y 0 underflows**: `docs/hw/2026-10-30-rpi-audiod.md` y `docs/hw/2026-10-30-boot-soak.md`.
+
+  Falta que el usuario lo confirme de oído, y probar el presupuesto con el Tracker.
 
 F4 en marcha: **USB MIDI en el gadget** (4 puertos), MIDI de paso por dispositivo y mapa de control (SysEx de texto y CC), según `docs/MIDI.md`. Probado contra el portátil, y en la Force MPC abre el audio y se suscribe a los 4 puertos: `docs/hw/2026-10-30-f4-midi.md`.
 
 ## Estado ahora mismo
 
+- **⚠️ No reiniciar ni apagar la Pi con la Force conectada y MPC transmitiendo** sin el usuario delante. El 2026-10-30, un reinicio de la Pi tiró todo el hub USB interno de la Force (`usb2-port1: disabled by hub (EMI?)`). Con él se fueron la superficie, la SD de MockbaMod y AKAI_SSD, que se desmontaron en sucio. La causa está por aislar: `docs/hw/2026-10-30-boot-soak.md`.
 - **La Force:** `mpc_internal_io` está instalado en la SD de MockbaMod y se carga en cada arranque.
   - **Ajustes temporales de la prueba de salidas:** MPC Out 1/2 → códec 1/2 y Out 3/4 → códec 3/4. Al acabar, volver a `mpc_internal_io.conf` del repo con `install.sh conf` y reiniciar la Force.
   - MPC arranca con su audio interno: hay que elegir rpi-audio a mano tras cada arranque [?].
@@ -17,11 +24,14 @@ F4 en marcha: **USB MIDI en el gadget** (4 puertos), MIDI de paso por dispositiv
   Para quitar el add-on: `install.sh disable` y reiniciar la Force.
 - **La Pi:**
   - **gadget con MIDI:** `GADGET_MIDI_PORTS=4`. El puerto 1 es el de control y el GP-150 va al 2. Quitar el MIDI: `GADGET_MIDI_PORTS=0`, `deploy.sh` y un reinicio del gadget;
-  - **`rpi-audiod` corre** (arrancado a mano, no habilitado al arranque). Ha sustituido a `rpi-audio-keepalive`, que sigue habilitado al arranque como respaldo;
+  - **`rpi-audiod` y el gadget están habilitados al arranque**; `rpi-audio-keepalive` está deshabilitado (`deploy.sh --enable --host akai-force`);
+  - perfiles instalados en `/etc/rpi-audio/devices.d/`: el Tracker con track3r-os y el GP-150. Límite Full-Speed: 1099 B por bus;
   - el GP-150 tiene niveles guardados de la prueba de CC: captura 100 % y reproducción 80 %, los que ya tenía;
   - canales: mezclador (CODEC) a IN 1–2 y desde OUT 3–4; GP-150 (ahora 6/4 canales) a IN 3–8 y desde OUT 5–8. IN 25–26 están reservados para el add-on (`tools/hosts/akai-force.toml`);
-  - volver al keepalive: `sudo systemctl start rpi-audio-keepalive` (para `rpi-audiod`).
+  - volver al keepalive: `sudo systemctl start rpi-audio-keepalive` (para `rpi-audiod`). Para que dure tras reiniciar: `systemctl disable rpi-audiod` y `systemctl enable rpi-audio-keepalive`.
 - **Pendiente del usuario:**
+  - **revisar AKAI_SSD** tras el desmontaje en sucio (fsck de exFAT en un ordenador, o lo que ofrezca la Force). No se ha tocado desde aquí;
+  - **reiniciar la Force** para probar el arreglo de la carrera de MidiLoop. El clasificador de permisos bloqueó que lo hiciera yo;
   - ¿suenan el mezclador y el GP-150 en MPC?
   - prueba de salidas: ¿por dónde salen en la Force Out 1/2 y Out 3/4?
   - ¿aparecen `rpi-audio MIDI 1–4` en Preferences → MIDI? Los pads, los botones y los Q-Links siguen respondiendo (confirmado);
@@ -41,7 +51,7 @@ F4 en marcha: **USB MIDI en el gadget** (4 puertos), MIDI de paso por dispositiv
   - alimentación por el splitter (fuente → POWER, DATA POWER → Pi, USB2 DATA → host), `throttled=0x0`;
   - red por Ethernet en 192.168.1.106. La Pi 4 no tiene Wi-Fi configurada. Ojo: 192.168.2.154 es **otra** placa, una Pi 2 (`raspberrypi2`).
 - **Gadget:**
-  - `rpi-audio-gadget` instalado con `tools/deploy.sh`. La unit está **activa pero no habilitada** al arranque (`deploy.sh --enable` cuando toque);
+  - `rpi-audio-gadget` instalado con `tools/deploy.sh` y **habilitado al arranque**, junto a `rpi-audiod` (`deploy.sh --enable`);
   - configuración actual: **26×26, 44100, S16, bint 2**, req 4, async.
 - **Pruebas contra el portátil** (detalle en `docs/hw/2026-10-29-f1-laptop.md`), todas bit-transparentes:
   - **16×16 S32**: soak de 10 minutos en dúplex, OK;
@@ -61,7 +71,7 @@ F4 en marcha: **USB MIDI en el gadget** (4 puertos), MIDI de paso por dispositiv
   - `hosts/akai-force-probe.sh`;
   - `gadget-watch.sh`: estado del UDC, ritmos, interrupciones y registros del dwc2 en la Pi. Con `PLAY=26:S16_LE`, reproduce en el gadget mientras el host transmite;
   - `hosts/akai-force-watch.sh`: estado y punteros de los streams de MPC, en solo lectura;
-  - **`rpi-audio-keepalive.service`** (instalado, activo y habilitado al arranque, igual que `rpi-audio-gadget`): reproduce en el gadget mientras el host transmite, con FIFO 70 y un usuario dinámico. Ahora con `KEEPALIVE_SOURCE=silence`; para las pruebas de ida y vuelta, `tones`.
+  - **`rpi-audio-keepalive.service`** (instalado, pero deshabilitado desde que `rpi-audiod` va al arranque): reproduce en el gadget mientras el host transmite, con FIFO 70 y un usuario dinámico. Ahora con `KEEPALIVE_SOURCE=silence`; para las pruebas de ida y vuelta, `tones`.
 
 ## Hechos que conviene recordar
 
@@ -87,23 +97,30 @@ F4 en marcha: **USB MIDI en el gadget** (4 puertos), MIDI de paso por dispositiv
 
 ## Siguiente
 
-El usuario se ha ido y ha dicho "hazlo tú todo" (2026-10-30). Plan, en este orden, avisando antes a `rpi-audio-7d`:
+Hecho el 2026-10-30, con el usuario fuera:
+- `rpi-audiod` al arranque, con reinicio de la Pi;
+- el hotplug del GP-150;
+- el soak de 60 minutos;
+- el presupuesto Full-Speed y los perfiles.
 
-1. **`rpi-audiod` al arranque:** `tools/deploy.sh --enable --host akai-force`, que deshabilita el keepalive al arranque. Después, reiniciar la Pi y comprobar que suben el gadget con MIDI y `rpi-audiod`, y volver a elegir rpi-audio en MPC con MPC Remote (`docs/hosts/akai-force-remote.md`).
-2. **Hotplug del GP-150 por software,** con MPC transmitiendo: `authorized` a 0 y luego a 1 en su dispositivo USB de la Pi, sin tocar el UDC. Comprobar que vuelven los puentes, las rutas, el MIDI y los niveles guardados.
-3. **Reiniciar la Force** para probar el arreglo de la carrera de MidiLoop: que MidiLoop esté cargado y no haya errores ACVX. Volver a elegir rpi-audio con MPC Remote.
-4. **Soak de 60 minutos** con la Force: los registros de `rpi-audiod` y del add-on, con 0 xruns y 0 huecos.
-5. **Lo que falta de la v1 de `rpi-audiod`:**
-   - comprobar el presupuesto Full-Speed antes de abrir un dispositivo;
-   - perfiles en `config/devices.d/`.
+Está todo en `docs/hw/2026-10-30-boot-soak.md`. Queda:
 
-   Se delega en un subagente con tests; luego revisión, despliegue, commit y push.
-6. **Pendiente del usuario, a su vuelta:**
-   - el Q-Link 7 físico (prueba del CC 67);
+1. **Con el usuario delante:**
+   - revisar AKAI_SSD;
+   - reiniciar la Force para probar MidiLoop: que no haya errores ACVX ni reinicios del `midicheck`, y ver si MPC abre rpi-audio solo;
+   - el Q-Link 7 físico (CC 67);
    - si suenan el mezclador y el GP-150;
-   - por dónde salen Out 1/2 y 3/4. Con eso, `install.sh conf` con la configuración del repo y reiniciar la Force;
-   - la aceptación de F4 con el Tracker enchufado a la Pi.
-7. **Después:** F5 y los opcionales (F1b con 32 canales, VST, S32).
+   - por dónde salen Out 1/2 y 3/4. Con eso, `install.sh conf` con la configuración del repo y reiniciar la Force.
+2. **Aislar el incidente del reinicio de la Pi:**
+   - primero con el portátil de host;
+   - luego en la Force, con el usuario delante y AKAI_SSD expulsado: `rpi-audio-gadget down` a mano con MPC transmitiendo, separado del reinicio.
+
+   Si un `down` limpio no tira el hub, que el apagado de la Pi desenlace el gadget antes de parar `rpi-audiod`. Un journal persistente en la Pi daría las horas del apagado.
+3. **Con el Tracker enchufado a la Pi:**
+   - la aceptación de F4;
+   - el presupuesto de verdad: con el Tracker en "8 OUT / 2 IN" más el mezclador, la grabación abre y la reproducción espera.
+4. **Mejora:** al desenchufar un dispositivo, jackd da unos 13 xruns mientras se paran sus zita colgados. Habría que pararlos antes o sin bloquear el grafo.
+5. **Después:** F5 y los opcionales (F1b con 32 canales, VST, S32).
 
 ## Pruebas de tonos
 
