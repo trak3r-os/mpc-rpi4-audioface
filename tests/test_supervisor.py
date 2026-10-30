@@ -1072,12 +1072,13 @@ def test_a_midi_command_through_the_loop_changes_the_routes(monkeypatch, tmp_pat
     d.midi.events.put(("pc", 16, 4))   # an empty preset
     d.midi.events.put(sysex("ping"))
     w.seconds(1.6)
-    assert [text for _, text in replies(d.midi)] == ["ok", "ok rpi-audio"]
+    assert [text for _, text in replies(d.midi)] == ["ok", f"ok rpi-audio {daemon.VERSION}"]
     assert logged(w, "MIDI command 'mute usb-mixer in on': ok") and logged(w, "MIDI program 4: preset 5: error")
     assert w.connections == {frozenset(("system:capture_1", "mixer_out:playback_1")),
                              frozenset(("system:capture_2", "mixer_out:playback_2"))}
     status = d.status_data()
     assert status["midi"]["ports"] == 4 and status["devices"][0][IN]["muted"] is True
+    assert status["version"] == daemon.VERSION
 
 
 def test_the_loop_with_midi_stops_its_listener(monkeypatch, tmp_path):
