@@ -1,38 +1,40 @@
-# Akai Force: MPC Remote, para manejar MPC desde aquí
+# Akai Force: MPC Remote, for driving MPC from here
 
-[MPC Remote](https://github.com/jacob-sabella/mpc-addin-remote) (licencia MIT, de jacob-sabella, en el catálogo de sd88me) es un addin que MPC carga con `LD_PRELOAD`. Sirve su pantalla en el navegador y un servidor MCP. Lo usamos para las pruebas de rpi-audio que necesitan a alguien delante de la Force: elegir rpi-audio tras cada arranque, montar pistas de prueba o mirar la pantalla. Lo autorizó el usuario el 2026-10-30 (`CLAUDE.md`, excepción 2).
+**This is test tooling.** You do not need it to use rpi-audio. We use it so that rpi-audio tests that need someone at the Force can run remotely.
 
-El código propio está en `tools/hosts/akai-force-remote/`.
+[MPC Remote](https://github.com/jacob-sabella/mpc-addin-remote) (MIT licence, by jacob-sabella, listed in sd88me's catalog) is an add-in that MPC loads with `LD_PRELOAD`. It serves MPC's screen in a browser and an MCP server. We use it for tests such as picking rpi-audio after each boot, building test tracks, or looking at the screen. The user authorised this on 2026-10-30 (`CLAUDE.md`, exception 2).
 
-## Instalación
+Our own code is in `tools/hosts/akai-force-remote/`.
 
-- **Versión:** la 1.0.3, fijada por su sha256 en `install.sh`. La v1.1.0 no tiene binario publicado.
-  - La librería necesita glibc 2.17 o posterior, `libc`, `libdl` y `libpthread`.
-  - Solo exporta `mpc_remote_addin_start`, así que no intercepta funciones de ALSA y no choca con MidiLoop ni con `mpc_internal_io` [código].
-- **No se usa su instalador**, porque escribe en `/data`, en `/etc` y en la raíz del sistema. `install.sh enable` copia el `.so` y su configuración a `AddOns/mpcRemote/` en la SD de MockbaMod, con `run_mpcRemote.sh`, igual que nuestro add-on. El addin lee sus ajustes junto al `.so`.
-- **Configuración:** la de serie, con `bind=127.0.0.1` y el puerto 6720. **No tiene contraseña:** solo se entra por túnel SSH y nunca se abre a la red.
+## Installation
+
+- **Version:** 1.0.3, pinned by its sha256 in `install.sh`. v1.1.0 has no published binary.
+  - The library needs glibc 2.17 or later, `libc`, `libdl` and `libpthread`.
+  - It only exports `mpc_remote_addin_start`, so it does not intercept ALSA functions and does not clash with MidiLoop or `mpc_internal_io` [code].
+- **Its own installer is not used**, because it writes to `/data`, to `/etc` and to the system root. `install.sh enable` copies the `.so` and its configuration to `AddOns/mpcRemote/` on the MockbaMod SD card, together with `run_mpcRemote.sh`, the same way our add-on is installed. The add-in reads its settings next to the `.so`.
+- **Configuration:** the default one, with `bind=127.0.0.1` and port 6720. **It has no password.** Reach it only through an SSH tunnel, and never open it to the network.
 
 ```sh
-tools/hosts/akai-force-remote/install.sh fetch                    # descarga y comprueba la versión fijada en out/
-FORCE_HOST=root@force.local FORCE_PASS=… tools/hosts/akai-force-remote/install.sh enable    # luego reiniciar la Force
-FORCE_HOST=root@force.local FORCE_PASS=… tools/hosts/akai-force-remote/install.sh tunnel    # localhost:6720, en primer plano
-tools/hosts/akai-force-remote/mcp.py --list                       # herramientas del MCP
-tools/hosts/akai-force-remote/mcp.py screenshot '{"zoom": 0.5}'   # captura en out/mpc-screen.png
+tools/hosts/akai-force-remote/install.sh fetch                    # downloads and checks the pinned version into out/
+FORCE_HOST=root@force.local FORCE_PASS=… tools/hosts/akai-force-remote/install.sh enable    # then restart the Force
+FORCE_HOST=root@force.local FORCE_PASS=… tools/hosts/akai-force-remote/install.sh tunnel    # localhost:6720, in the foreground
+tools/hosts/akai-force-remote/mcp.py --list                       # the MCP tools
+tools/hosts/akai-force-remote/mcp.py screenshot '{"zoom": 0.5}'   # screenshot to out/mpc-screen.png
 ```
 
-`mcp.py` es un cliente MCP mínimo, solo con la biblioteca estándar. Así no hace falta registrar el servidor en un cliente MCP. Si se prefiere: `claude mcp add --transport http mpc http://localhost:6720/mcp`, con el túnel abierto.
+`mcp.py` is a minimal MCP client that uses only the standard library, so the server does not need to be registered in an MCP client. If you prefer that, open the tunnel and run `claude mcp add --transport http mpc http://localhost:6720/mcp`.
 
-## Lo visto en la Force (2026-10-30)
+## What was seen on the Force (2026-10-30)
 
-- **Carga [Force]:** con el reinicio cargó, y `/info` responde: pantalla de 1280×800, XR24, y la pantalla táctil en `/dev/input/event0`.
-- **Botones [Force]:**
-  - las pulsaciones van al `Virtual RawMIDI` de MockbaMod (cliente 133), que el addin encuentra solo;
-  - MENU abre el menú, aunque no hace nada en el selector de proyectos del arranque.
-- **Manejo [Force]:**
-  - un campo desplegable con el borde rojo se abre con `double_tap`; con un toque sencillo no pasa nada;
-  - así se eligió rpi-audio en Preferences → Audio Device: MENU, PREFERENCES (1094, 720), AUDIO DEVICE (166, 420), doble toque en el campo y la primera línea de la lista. MPC abrió el gadget a 26×26 y el add-on el códec.
-- **Arranque [Force]:** el primer arranque de MPC tras instalarlo se quedó sin MidiLoop y lo reinició el `midicheck` de MockbaMod, a los 15 s. Fue la carrera de la lista `LD_PRELOAD` entre los scripts de los add-ons, no el addin. Está en `docs/hw/2026-10-30-f4-midi.md`.
+- **Loading [Force]:** after a restart it loaded, and `/info` answers: 1280×800 screen, XR24, and the touchscreen on `/dev/input/event0`.
+- **Buttons [Force]:**
+  - button presses go to MockbaMod's `Virtual RawMIDI` (client 133), which the add-in finds by itself;
+  - MENU opens the menu, although it does nothing in the project selector shown at boot.
+- **Operation [Force]:**
+  - a dropdown field with a red border opens with `double_tap`; a single tap does nothing;
+  - this is how rpi-audio was picked in Preferences → Audio Device: MENU, PREFERENCES (1094, 720), AUDIO DEVICE (166, 420), a double tap on the field and the first line of the list. MPC opened the gadget at 26×26 and the add-on opened the codec.
+- **Boot [Force]:** the first MPC boot after installing it came up without MidiLoop, and MockbaMod's `midicheck` restarted it after 15 s. This was the race on the `LD_PRELOAD` list between the add-ons' scripts, not the add-in itself. See `docs/hw/2026-10-30-f4-midi.md`.
 
-## Quitarlo
+## Removing it
 
-`install.sh disable` y reiniciar la Force. La carpeta `AddOns/mpcRemote/` se queda, inactiva.
+Run `install.sh disable` and restart the Force. The `AddOns/mpcRemote/` folder stays, inactive.

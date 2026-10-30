@@ -1,75 +1,75 @@
-# Akai Force / MPC OS: panel de control del hub (rpi-audio Panel)
+# Akai Force / MPC OS: the hub's control panel (rpi-audio Panel)
 
-Un plugin VST2 nativo ARM para MPC OS que muestra y controla el hub desde la pantalla táctil de la Force: dispositivos con su rango de canales, nombres, niveles y silencios, presets y el estado del enlace. No produce sonido: existe por su pantalla. Está en `tools/hosts/akai-force-panel/`, junto a su generador de arte y su empaquetado. Es de la Force, no del proyecto genérico: el protocolo que habla (`docs/MIDI.md`) lo puede usar cualquier host.
+A native ARM VST2 plugin for MPC OS that shows and controls the hub from the Force's touchscreen: devices with their channel ranges, names, levels and mutes, presets, and the link state. It makes no sound: it exists for its screen. It lives in `tools/hosts/akai-force-panel/`, together with its art generator and its packaging. It belongs to the Force, not to the generic project: the protocol it speaks (`docs/MIDI.md`) can be used by any host.
 
-**Estado de la evidencia.** Compila para armhf, pasa sus pruebas en el portátil [repo] y el instalador acepta el paquete contra una copia de `MPC.settings` en el portátil [repo]. **Nada de esto se ha probado en la Force**: ni que MPC cargue el plugin, ni que la skin se vea como la vista previa, ni la comunicación con el hub [?]. Lo que falta está al final.
+**Evidence status.** It builds for armhf, passes its tests on the laptop [repo], and the installer accepts the package against a copy of `MPC.settings` on the laptop [repo]. **None of this has been tested on the Force**: not that MPC loads the plugin, not that the skin looks like the preview, and not the communication with the hub [?]. What is missing is listed at the end.
 
-## Qué muestra
+## What it shows
 
-Una sola página de 1280×628, tema oscuro con un solo acento (menta) y rojo solo para "silenciado".
+One 1280×628 page, dark theme with a single accent colour (mint) and red only for "muted".
 
-- **Cabecera:** título, el estado del enlace y la barra de presets.
-  - Enlace: `44.1 kHz | 26x26` (frecuencia del host y canales del gadget, más `| +N` si hay más de 6 dispositivos), `Pi not found`, `Connecting...`, `No reply`, o el último error de una orden durante 4 s. Va en ASCII y en menos de 24 caracteres porque MPC lee los textos en directo con un búfer de 24 bytes y no está comprobado cómo decodifica UTF-8 [?].
-  - 8 botones de preset, cada uno con el nombre del preset (`Preset N` si se guardó sin nombre, `-` si está vacío). **SAVE** se activa; el siguiente preset que se toca guarda ahí el enrutado actual y SAVE se apaga solo. Sin SAVE, tocar un preset lo carga.
-- **Hasta 6 tiras de dispositivo**, ordenadas por canal IN de inicio y luego por canal OUT (los que no tienen IN, después; los aparcados, al final). Cada una:
-  - nombre (al tocarlo abre un selector: Default, Guitar, Bass, Synth, Keys, Drums, Drum machine, Sampler, Vocal, Mic, Mixer, Line, FX, Tracker; Default borra el nombre) y estado (`running`, `parked`, `waiting: USB budget`, `not running`);
-  - por sentido, IN y OUT: rango (`IN 3-8`, `OUT 5-8`, `-`), nombres de canal unidos (23 caracteres como mucho), fader de nivel 0–100 % con su valor y botón MUTE;
-  - una tira sin dispositivo muestra un hueco vacío; un sentido que el dispositivo no tiene se atenúa.
-- **Pie:** *On project load*: Ninguno o Preset 1–8. Se guarda en el proyecto, y al conectar por primera vez el plugin manda `preset load N` una sola vez.
+- **Header:** title, link state and the preset bar.
+  - Link: `44.1 kHz | 26x26` (host rate and gadget channels, plus `| +N` if there are more than 6 devices), `Pi not found`, `Connecting...`, `No reply`, or the last command error for 4 s. It is ASCII and under 24 characters because MPC reads live texts through a 24-byte buffer, and how it decodes UTF-8 has not been checked [?].
+  - 8 preset buttons, each with the preset's name (`Preset N` if it was saved without a name, `-` if empty). **SAVE** arms itself: the next preset you touch stores the current routing there, and SAVE switches off by itself. Without SAVE, touching a preset loads it.
+- **Up to 6 device strips**, sorted by starting IN channel and then by OUT channel (devices with no IN come after; parked ones last). Each strip has:
+  - the name (touching it opens a picker: Default, Guitar, Bass, Synth, Keys, Drums, Drum machine, Sampler, Vocal, Mic, Mixer, Line, FX, Tracker; Default clears the name) and the state (`running`, `parked`, `waiting: USB budget`, `not running`);
+  - per direction, IN and OUT: the range (`IN 3-8`, `OUT 5-8`, `-`), the channel names joined (23 characters at most), a 0–100 % level fader with its value, and a MUTE button;
+  - a strip with no device shows an empty slot, and a direction the device does not have is dimmed.
+- **Footer:** *On project load*: None or Preset 1–8. It is stored in the project, and on its first connection the plugin sends `preset load N` once.
 
-Q-Links (los 16 de la Force, dos bancos de 8): banco 1 = niveles IN de las tiras 1–6 y niveles OUT de las tiras 1–2; banco 2 = niveles OUT de las tiras 3–6 y los silencios IN de las tiras 1–4. El resto de controles es solo táctil. Las vistas previas (`build/preview*.png`) se generan con `skin.py`; las lecturas en directo se dibujan con la regla "altura de MPC = 1,52 × el tamaño de la letra" [ext: docs de sd88me], que no se ha comprobado en pantalla [?].
+Q-Links (the Force's 16, in two banks of 8): bank 1 = IN levels of strips 1–6 and OUT levels of strips 1–2; bank 2 = OUT levels of strips 3–6 and IN mutes of strips 1–4. Every other control is touch only. The previews (`build/preview*.png`) are generated by `skin.py`. Live readouts are drawn with the rule "MPC height = 1.52 × font size" [ext: sd88me's docs], which has not been checked on the screen [?].
 
-Con el plugin o sin él, el hub también carga el preset N con un Program Change N−1 (0–7) en el canal 16 del cable de control.
+With or without the plugin, the hub also loads preset N on a Program Change N−1 (0–7) on channel 16 of the control cable.
 
-## Cómo habla con rpi-audiod
+## How it talks to rpi-audiod
 
-- Un cliente del secuenciador ALSA, `rpi-audio panel`, con un puerto dúplex, en un hilo propio que arranca `create()` y para `destroy()`. Busca el cliente `rpi-audio` y su puerto `rpi-audio MIDI 1` (el primero si el nombre no aparece), y se suscribe en los dos sentidos. Los dos nombres se pueden cambiar en `panel.conf`, junto al `.so`. Si el cliente no está o desaparece, reintenta cada 2 s y lo muestra.
-- Protocolo: SysEx de texto `F0 7D 52 41 … F7` y respuestas `F0 7D 52 42 … F7`, que pueden llegar partidas en varios eventos del secuenciador y se recomponen hasta el F7.
-- Cada segundo pide `status` y lo interpreta con un lector JSON propio en el árbol. Órdenes que manda: `mute`, `volume`, `name`, `preset save|load N`. Como mucho 10 órdenes por segundo; los niveles se agrupan cada ~100 ms, así que arrastrar un fader no inunda el puerto.
-- **No manda ninguna orden antes del primer `status` válido tras conectar**, ni durante 3 s tras crear la instancia ni 2 s tras restaurar el estado del proyecto (MPC escribe los parámetros guardados al abrir). Lo que MPC escriba antes solo cambia valores locales, y al sincronizar mandan los valores reales de la Pi. Tras un cambio local del usuario, se mantiene su valor 1,5 s (2 s tras salir la orden, porque la Pi la aplica en 1–2 s) antes de aceptar el de `status`.
-- `status` de más de ~4000 bytes: `rpi-audiod` quita `fs_load`, `usbbus`, `client` y `card` y nunca nombres, niveles, silencios, rutas ni presets; el plugin no depende de esos campos (el nombre de la tira es `name`, si no `card`, si no la identidad).
-- **El plugin avisa a MPC de lo que cambia la Pi** (otro host, la línea de órdenes, un preset): `audioMasterAutomate` para los valores numéricos que cambian y `audioMasterUpdateDisplay` si cambia algún texto, solo al cambiar, nunca en cada sondeo. El wrapper de sd88me solo avisaba desde dentro de `setParameter`, así que hubo que añadir un camino del motor al host (abajo).
+- An ALSA sequencer client, `rpi-audio panel`, with one duplex port, on a thread of its own that `create()` starts and `destroy()` stops. It looks for the client `rpi-audio` and its port `rpi-audio MIDI 1` (the first port if that name does not appear), and subscribes in both directions. Both names can be changed in `panel.conf`, next to the `.so`. If the client is missing or goes away, it retries every 2 s and shows it.
+- Protocol: text SysEx `F0 7D 52 41 … F7` and replies `F0 7D 52 42 … F7`, which can arrive split over several sequencer events and are reassembled up to the F7.
+- Once a second it asks for `status` and parses it with a JSON reader of its own, included in the tree. The commands it sends are `mute`, `volume`, `name` and `preset save|load N`. At most 10 commands per second; levels are grouped every ~100 ms, so dragging a fader does not flood the port.
+- **It sends no command before the first valid `status` after connecting**, nor during 3 s after the instance is created, nor 2 s after the project state is restored (MPC writes the saved parameters when it opens a project). Whatever MPC writes before that only changes local values, and once in sync the Pi's real values are what get sent. After a local change by the user, its value is held for 1.5 s (2 s after the command goes out, because the Pi applies it in 1–2 s) before the one from `status` is accepted.
+- `status` over ~4000 bytes: `rpi-audiod` drops `fs_load`, `usbbus`, `client` and `card`, and never names, levels, mutes, routes or presets. The plugin does not depend on those fields (a strip's name is `name`, otherwise `card`, otherwise the identity).
+- **The plugin tells MPC what the Pi changes** (another host, the command line, a preset): `audioMasterAutomate` for numeric values that change and `audioMasterUpdateDisplay` if any text changes. It only does so on change, never on every poll. sd88me's wrapper only notified from inside `setParameter`, so a path from the engine to the host had to be added (see below).
 
-## Parámetros
+## Parameters
 
-109, en un orden que no se reordena nunca (`params.lock`, `src/panel_layout.h`, `panel_def.py`; la prueba compara la tabla generada con la cabecera): enlace, 8 presets (disparador) y sus 8 nombres, SAVE, On project load y 6 × 15 por tira (nombre, estado, presente, visibilidad IN y OUT, rango, nombres, nivel y mute de cada sentido, tipo y la bandera de su lista). Los nombres que ve MPC son `Preset 3`, `S2 IN Level`, `S4 OUT Mute`…
+109, in an order that is never rearranged (`params.lock`, `src/panel_layout.h`, `panel_def.py`; the test compares the generated table with the header): link, 8 presets (trigger) and their 8 names, SAVE, On project load, and 6 × 15 per strip (name, state, present, IN and OUT visibility, range, names, level and mute of each direction, type and the flag of its list). The names MPC sees look like `Preset 3`, `S2 IN Level` and `S4 OUT Mute`.
 
-## Compilar y probar
+## Build and test
 
 ```sh
 cd tools/hosts/akai-force-panel
-./build.sh test      # pruebas en el portátil: ASan+UBSan, TSan y el plugin completo con un enlace simulado
-./build.sh host      # .so nativo (sin ALSA si el portátil no tiene sus cabeceras)
-./build.sh arm       # .so armhf en Docker (imagen rpi-audio-panel-armhf:bullseye, de Dockerfile.arm) y comprobación de ABI
-./package.sh         # dist/: el zip y la carpeta lista para el instalador
+./build.sh test      # laptop tests: ASan+UBSan, TSan and the whole plugin against a simulated link
+./build.sh host      # native .so (without ALSA if the laptop has no headers for it)
+./build.sh arm       # armhf .so in Docker (image rpi-audio-panel-armhf:bullseye, from Dockerfile.arm) and an ABI check
+./package.sh         # dist/: the zip and the folder ready for the installer
 ```
 
-Requisitos: g++, Python 3 con Pillow, Docker. La imagen usa los repositorios de archivo de Debian bullseye (ya no está en los normales). La compilación armhf enlaza `-lasound -lpthread` y libstdc++ en estático, así que no pide ningún `GLIBCXX`; `build.sh arm` falla si algún símbolo pide glibc > 2.32 o si el `.so` exporta algo más que `VSTPluginMain`.
+Requirements: g++, Python 3 with Pillow, Docker. The image uses Debian bullseye's archive repositories (it is no longer in the regular ones). The armhf build links `-lasound -lpthread` and a static libstdc++, so it asks for no `GLIBCXX`. `build.sh arm` fails if any symbol needs glibc > 2.32 or if the `.so` exports anything besides `VSTPluginMain`.
 
-Lo que se prueba: lector JSON, recomposición de SysEx, formato de órdenes, estado → tiras, cola de órdenes (agrupar, ritmo), retención de valores, sincronización antes de mandar nada, reintentos del enlace, y el plugin completo (`VSTPluginMain`, tabla de parámetros, avisos al host, selector de nombres, presets) contra un enlace simulado. Los números de la última pasada están en el informe de la sesión; vuelve a ejecutarlos antes de fiarte.
+What is tested: JSON reader, SysEx reassembly, command format, state → strips, command queue (grouping, rate), value hold, sync before sending anything, link retries, and the whole plugin (`VSTPluginMain`, parameter table, host notifications, name picker, presets) against a simulated link. The numbers from the last run are in the session report. Run them again before trusting them.
 
-## Instalar (lo hace el usuario)
+## Install
 
-El plugin se instala con el instalador de sd88me, en `/media/AKAI_SSD/Synths`, que queda fuera de lo que Claude puede escribir en la Force. Guarda el proyecto antes: el instalador para y arranca MPC.
+The plugin is installed with sd88me's installer, into `/media/AKAI_SSD/Synths`, which is outside what Claude may write on the Force, so you do it yourself. The Force needs MockbaMod. Save your project first: the installer stops and starts MPC.
 
 ```sh
 scp -r dist/rpi-audio-Panel-1.0.0 root@force.local:/tmp/
 ssh root@force.local sh /tmp/rpi-audio-Panel-1.0.0/install.sh -y -t /media/AKAI_SSD/Synths
 ```
 
-Después, añade **rpi-audio Panel** a una pista desde el navegador de instrumentos. `panel.conf` se conserva al actualizar. Para quitarlo, `uninstall.sh` del mismo paquete.
+Then add **rpi-audio Panel** to a track from the instrument browser. `panel.conf` is kept when you update. To remove it, run `uninstall.sh` from the same package.
 
-## Qué ha cambiado en el wrapper de sd88me
+## What changed in sd88me's wrapper
 
-Tres cambios pequeños, anotados en `tools/hosts/akai-force-panel/vendor/mpc-vst-plugins/VENDORED.md` y en `THIRD_PARTY.md`: el gancho de parámetros numéricos pasa a un nombre genérico; `mpc_engine_t` gana `poll_changes`; y `housekeeping()` (desde `processReplacing`) avisa al host de lo que el motor ha cambiado por su cuenta. El wrapper viene de la copia de `barsiren-mcp` (MIT, del usuario), que es el commit `faae55a` de sd88me más arreglos y funciona en la Force, no de la cabeza actual de sd88me.
+Three small changes, recorded in `tools/hosts/akai-force-panel/vendor/mpc-vst-plugins/VENDORED.md` and in `THIRD_PARTY.md`: the numeric-parameter hook gets a generic name; `mpc_engine_t` gains `poll_changes`; and `housekeeping()` (called from `processReplacing`) tells the host what the engine changed on its own. The wrapper comes from the copy in `barsiren-mcp` (MIT, the user's own project), which is sd88me's commit `faae55a` plus fixes and runs on the Force. It is not the current head of sd88me.
 
-## Sin verificar en la Force
+## Not verified on the Force
 
-- Que MPC cargue el `.so` (necesita `libasound.so.2`, que MPC ya usa [Force]) y muestre la skin; el tamaño real de los textos en directo y si cortan los nombres largos (una etiqueta de nombre de 168 px cabe unos 14 caracteres).
-- Que `snd_seq_open("default")` funcione dentro de MPC (JUCE lo usa para su MIDI, así que debería) y que el cliente `rpi-audio` y su puerto 0 aparezcan con esos nombres en la Force.
-- La visibilidad condicional (`IndexedEnabling`) con tres estados, los selectores emergentes con 15 opciones y la tecla de cierre.
-- Que MPC llame a `processReplacing` con la pista parada (de eso depende que los cambios de la Pi lleguen a la pantalla) y que no reconstruya la pantalla de automatización por cada `audioMasterAutomate`. Si registra los avisos como automatización al grabar, hay que ajustar.
-- Que MPC no reescriba parámetros guardados después de los 2 s de bloqueo tras restaurar el estado.
-- Qué hace MPC con el estado del proyecto: el plugin solo guarda *On project load*.
-- Cuánto tarda la Pi en aplicar una orden y si la retención de 2 s basta.
-- Que `name` en `status` sea el nombre personalizado o el del perfil: el selector marca Default solo si no hay `name`, y ninguna opción si hay uno que no es de la lista.
+- That MPC loads the `.so` (it needs `libasound.so.2`, which MPC already uses [Force]) and shows the skin; the real size of live texts and whether they cut long names (a 168 px name label fits about 14 characters).
+- That `snd_seq_open("default")` works inside MPC (JUCE uses it for its MIDI, so it should) and that the `rpi-audio` client and its port 0 appear with those names on the Force.
+- Conditional visibility (`IndexedEnabling`) with three states, popup pickers with 15 options, and the close key.
+- That MPC calls `processReplacing` while the track is stopped (the Pi's changes reaching the screen depend on it) and that it does not rebuild the automation screen on every `audioMasterAutomate`. If it records the notifications as automation when recording, this needs adjusting.
+- That MPC does not rewrite saved parameters after the 2 s lock that follows a state restore.
+- What MPC does with the project state: the plugin only saves *On project load*.
+- How long the Pi takes to apply a command and whether the 2 s hold is enough.
+- That `name` in `status` is the custom name or the profile's: the picker marks Default only if there is no `name`, and no option if there is one that is not in the list.

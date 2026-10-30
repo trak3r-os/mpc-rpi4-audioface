@@ -1,152 +1,152 @@
-# MIDI: puertos del gadget, MIDI de paso y mapa de control
+# MIDI: gadget ports, MIDI pass-through and the control map
 
-Con `GADGET_MIDI_PORTS` mayor que 0, el gadget añade una función USB MIDI (`f_midi`) junto al audio. El host ve un solo dispositivo con N puertos MIDI, que llamaremos cables, en cada sentido. En Linux se llaman `rpi-audio MIDI 1` … `rpi-audio MIDI N`. Cualquier host USB los entiende, y `rpi-audiod` los usa para dos cosas:
+When `GADGET_MIDI_PORTS` is greater than 0, the gadget adds a USB MIDI function (`f_midi`) next to the audio. The host sees one device with N MIDI ports in each direction. We call these ports cables. On Linux they are named `rpi-audio MIDI 1` … `rpi-audio MIDI N`. Any USB host understands them, and `rpi-audiod` uses them for two things:
 
-- **MIDI de paso:** cada puerto MIDI de cada dispositivo USB enchufado a la Pi va a un cable propio, en los dos sentidos.
-- **Control:** un cable lleva órdenes para `rpi-audiod`: asignar canales, silenciar, ajustar niveles, poner nombres y guardar o cargar presets de ruteo. Cualquier host puede mandarlas. Para MPC basta una pista MIDI; un DAW o un VST pueden además leer el estado.
+- **MIDI pass-through:** every MIDI port of every USB device plugged into the Pi goes to a cable of its own, in both directions.
+- **Control:** one cable carries commands for `rpi-audiod`: assign channels, mute, set levels, set names, and save or load routing presets. Any host can send them. On an MPC, a MIDI track is enough. A DAW or a VST can also read the state back.
 
-Estado de la evidencia:
-- probado contra un portátil Linux: los cuatro cables, el MIDI de paso en los dos sentidos, las órdenes SysEx y los CC [Pi][portátil];
-- en la Force, MPC abre el audio y se suscribe a los cuatro cables [Force];
-- el control desde MPC está por probar.
+Evidence status:
+- tested against a Linux laptop: all four cables, pass-through in both directions, SysEx commands and CCs [Pi][laptop];
+- on the Force, MPC opens the audio and subscribes to all four cables [Force];
+- control from MPC, end to end: CCs sent by MPC (a MIDI track, output `rpi-audio MIDI 1`, channel 16) mute the GP-150 and set its level [Force][Pi] (`docs/hw/2026-10-30-boot-soak.md`, section 7). The CCs entered MPC through MPC Remote, not from a Q-Link or a hardware controller, so the physical Q-Link path is still untested [?]. SysEx from MPC is untested too [?].
 
-Detalle en `docs/hw/2026-10-30-f4-midi.md`.
+Details: `docs/hw/2026-10-30-f4-midi.md`.
 
-**Las respuestas salen con `aplaymidi`, no con `aseqsend`.** Un puerto del secuenciador del kernel solo abre su salida cuando alguien está suscrito a él, y `aseqsend` envía sin suscribirse [Pi]. `aplaymidi` sí se suscribe; recibe un fichero MIDI de una pista con el SysEx.
+**Replies must be sent with `aplaymidi`, not `aseqsend`.** A kernel sequencer port only opens its output when something is subscribed to it, and `aseqsend` sends without subscribing [Pi]. `aplaymidi` does subscribe. It takes a one-track MIDI file that contains the SysEx.
 
 ## Gadget
 
-| Ajuste (`gadget.env`) | Por defecto | Qué hace |
+| Setting (`gadget.env`) | Default | What it does |
 |---|---|---|
-| `GADGET_MIDI_PORTS` | 0 | Cables por sentido, de 0 (sin MIDI) a 16 |
-| `GADGET_MIDI_ID` | `MIDIGadget` | Id de la tarjeta ALSA del MIDI en la Pi; `rpi-audiod` busca el gadget por él |
+| `GADGET_MIDI_PORTS` | 0 | Cables per direction, from 0 (no MIDI) to 16 |
+| `GADGET_MIDI_ID` | `MIDIGadget` | ALSA card id of the MIDI function on the Pi. `rpi-audiod` finds the gadget by it |
 
-- La función de audio se enlaza primero, así que los números de sus interfaces no cambian.
-- Con MIDI, `bcdDevice` pasa de 0x0100 a 0x0101. Así, un host que guarda los descriptores por VID, PID y revisión (Windows) los vuelve a leer.
-- En la Pi, el cable k es el puerto k−1 del cliente del secuenciador ALSA de la tarjeta `GADGET_MIDI_ID`. Para que exista, tienen que estar cargados `snd-seq` y `snd-seq-midi`; `deploy.sh` los deja cargándose al arrancar.
+- The audio function is linked first, so its interface numbers do not change.
+- With MIDI, `bcdDevice` goes from 0x0100 to 0x0101. A host that caches descriptors by VID, PID and revision (Windows) then reads them again.
+- On the Pi, cable k is port k−1 of the ALSA sequencer client of the card `GADGET_MIDI_ID`. For that client to exist, `snd-seq` and `snd-seq-midi` must be loaded. `deploy.sh` makes them load at boot.
 
 ## Cables
 
-- El cable de control es `[midi] control_port` (1 por defecto).
-- **Puntos MIDI:** cada puerto del secuenciador de una tarjeta de sonido USB es un punto MIDI. Su identidad es `IDENTIDAD/P`: la identidad del dispositivo (la misma que en el audio) y el número de puerto, por ejemplo `usb-1234:5678-ABC/0`.
-- **Asignación:** cada punto recibe un cable distinto del de control, fijo por identidad. Las asignaciones se guardan en `slots.json` bajo `"midi"` y se reparten como los canales de audio, pero de uno en uno y sin alinear a pares.
-  - Un punto que vuelve recupera su cable.
-  - Un punto nuevo toma el primer cable libre que no tenga guardado un punto ausente; si no hay ninguno, le quita el suyo a un ausente; si tampoco, queda aparcado.
-- **Con un solo cable** (`GADGET_MIDI_PORTS=1`), todos los puntos comparten el cable 1 con el control. Es para hosts que solo usan un cable.
-- `rpi-audiod assign IDENTIDAD/P --midi K` fija un cable. Sin `/P`, se entiende el puerto 0.
+- The control cable is `[midi] control_port` (1 by default).
+- **MIDI endpoints:** every sequencer port of a USB sound card is a MIDI endpoint. Its identity is `IDENTITY/P`: the device identity (the same one the audio uses) and the port number, for example `usb-1234:5678-ABC/0`.
+- **Assignment:** each endpoint gets a cable other than the control cable, fixed per identity. Assignments are stored in `slots.json` under `"midi"`. They are handed out like audio channels, but one at a time and without pair alignment.
+  - An endpoint that comes back gets its cable back.
+  - A new endpoint takes the first free cable that has no saved absent endpoint. If there is none, it takes the cable of an absent endpoint. If that fails too, it is parked.
+- **With a single cable** (`GADGET_MIDI_PORTS=1`), all endpoints share cable 1 with the control. This is for hosts that only use one cable.
+- `rpi-audiod assign IDENTITY/P --midi K` pins a cable. Without `/P`, port 0 is meant.
 
-## Rutas
+## Routes
 
-- **Cuándo:** solo mientras el gadget está conectado a un host (`/sys/class/udc/*/state` es `configured`).
-- **Con qué:** suscripciones del secuenciador en el kernel (`aconnect`), así que no añaden latencia en espacio de usuario.
-- **Qué rutas:** para un punto con el cable k:
-  - si el puerto del dispositivo es legible (R), va del dispositivo al gadget, puerto k−1: el host lo recibe;
-  - si es escribible (W), va del gadget, puerto k−1, al dispositivo: lo que el host manda por ese cable.
-- **Limpieza:** `rpi-audiod` quita las suscripciones entre un puerto del gadget y un cliente de una tarjeta USB que no correspondan a ninguna ruta suya, por ejemplo tras una reasignación. Nunca toca otras: las de `aseqdump`, otros programas o las que pongas a mano entre dispositivos.
+- **When:** only while the gadget is connected to a host (`/sys/class/udc/*/state` is `configured`).
+- **How:** kernel sequencer subscriptions (`aconnect`), so they add no user-space latency.
+- **Which routes:** for an endpoint on cable k:
+  - if the device port is readable (R), the route goes from the device to the gadget, port k−1: the host receives it;
+  - if it is writable (W), the route goes from the gadget, port k−1, to the device: whatever the host sends on that cable.
+- **Cleanup:** `rpi-audiod` removes the subscriptions between a gadget port and a USB card client that do not match any route of its own, for example after a reassignment. It never touches any others: those of `aseqdump`, of other programs, or the ones you add by hand between devices.
 
 ## Control
 
-Todo va por el cable de control, en los dos sentidos.
+Everything goes over the control cable, in both directions.
 
-### SysEx de texto
+### Text SysEx
 
 ```
-F0 7D 52 41 <texto ASCII> F7      orden
-F0 7D 52 42 <texto ASCII> F7      respuesta
+F0 7D 52 41 <ASCII text> F7      command
+F0 7D 52 42 <ASCII text> F7      reply
 ```
 
-- `7D` es el identificador para uso no comercial; `52 41` ("RA") lo separa de otros usos de `7D`.
-- El texto solo puede tener bytes de 0x20 a 0x7E.
-- **La respuesta va por el mismo cable con `52 42` ("RB").** Así, si un host devuelve el cable como eco, por ejemplo con MIDI thru, una respuesta no vuelve a entrar como orden. Su texto empieza por `ok`, por `error: ` o, en el caso de `status`, es un JSON que empieza por `{`.
-- **Ritmo:** se atienden hasta 20 órdenes por décima de segundo, y las respuestas salen en orden desde un hilo aparte. Si se acumulan más de 20 respuestas pendientes, se descarta la nueva.
+- `7D` is the manufacturer ID for non-commercial use. `52 41` ("RA") tells these messages apart from other uses of `7D`.
+- The text may only contain bytes from 0x20 to 0x7E.
+- **The reply goes out on the same cable with `52 42` ("RB").** That way, if a host sends the cable back as an echo (for example through MIDI thru), a reply does not re-enter as a command. Its text starts with `ok` or `error: `, or, for `status`, it is JSON starting with `{`.
+- **Rate:** up to 20 commands are handled per tenth of a second, and replies go out in order from a separate thread. If more than 20 replies are pending, the new one is dropped.
 
-| Orden | Respuesta | Efecto |
+| Command | Reply | Effect |
 |---|---|---|
 | `ping` | `ok rpi-audio` | — |
-| `status` | JSON | El mismo contenido que `/run/rpi-audio/status.json` |
-| `assign IDENTIDAD [in=N] [out=N] [midi=K]` | `ok` | Fija el primer canal IN, el primer canal OUT o el cable MIDI. `midi=` sin `/P` significa `/0` |
-| `mute IDENTIDAD in\|out on\|off` | `ok` | Corta o repone las rutas de audio de ese sentido |
-| `volume IDENTIDAD in\|out PORCENTAJE` | `ok` | Nivel del propio dispositivo, de 0 a 100: `in` es su captura (lo que llega al host) y `out` su reproducción |
-| `name IDENTIDAD [TEXTO]` | `ok` | Nombre del dispositivo. Sin texto, lo borra |
-| `name IDENTIDAD in\|out K [TEXTO]` | `ok` | Nombre del canal K (desde 1) del dispositivo en ese sentido. Sin texto, lo borra |
-| `preset save N [TEXTO]` | `ok` | Guarda el ruteo actual en el preset N (1 a 8) |
-| `preset load N` | `ok` o `error: preset N is empty` | Restaura el ruteo guardado en el preset N |
-| `preset clear N` | `ok` | Borra el preset N |
+| `status` | JSON | The same content as `/run/rpi-audio/status.json` |
+| `assign IDENTITY [in=N] [out=N] [midi=K]` | `ok` | Pins the first IN channel, the first OUT channel or the MIDI cable. `midi=` without `/P` means `/0` |
+| `mute IDENTITY in\|out on\|off` | `ok` | Cuts or restores the audio routes in that direction |
+| `volume IDENTITY in\|out PERCENT` | `ok` | The device's own level, 0 to 100: `in` is its capture (what reaches the host) and `out` its playback |
+| `name IDENTITY [TEXT]` | `ok` | The device name. Without text, it clears it |
+| `name IDENTITY in\|out K [TEXT]` | `ok` | The name of channel K (from 1) of the device in that direction. Without text, it clears it |
+| `preset save N [TEXT]` | `ok` | Saves the current routing in preset N (1 to 8) |
+| `preset load N` | `ok` or `error: preset N is empty` | Restores the routing saved in preset N |
+| `preset clear N` | `ok` | Deletes preset N |
 
-Las órdenes cambian el estado guardado (`slots.json`, y `presets.json` para los presets), igual que la línea de órdenes (`rpi-audiod assign\|mute\|volume\|name\|preset ...`), y el servicio lo aplica en uno o dos segundos. Con una identidad desconocida, la orden se guarda igualmente y se aplica cuando el dispositivo aparece.
+Commands change the stored state (`slots.json`, and `presets.json` for presets), exactly like the command line (`rpi-audiod assign|mute|volume|name|preset ...`). The service applies the change within one or two seconds. With an unknown identity, the command is still stored and applied when the device shows up.
 
-### Nombres
+### Names
 
-- `TEXTO` es todo lo que sigue a `IDENTIDAD` (o a `K`), sin los espacios de los extremos y con los interiores intactos. Solo bytes de 0x20 a 0x7E.
-- **Longitud máxima:** 24 caracteres para el nombre de un dispositivo y 16 para el de un canal. Uno más largo da `error: ...` y no cambia nada.
-- **Forma de canal:** se reconoce cuando la palabra que sigue a `IDENTIDAD` es `in` o `out` y la siguiente es un entero. Un entero menor que 1 da error. **Un nombre de dispositivo no puede empezar por `in N` ni `out N`** (con `N` entero): se tomaría por la forma de canal. `in` o `out` solos, o seguidos de otra cosa (`in the mix`), sí valen.
-- El nombre del dispositivo manda sobre el del perfil (`name` de `devices.d`), y el de un canal sobre el de `names_in` / `names_out`, canal por canal.
-- Los nombres no forman parte de los presets: cargar uno los deja como están.
+- `TEXT` is everything after `IDENTITY` (or after `K`), with leading and trailing spaces removed and inner spaces kept. Only bytes from 0x20 to 0x7E.
+- **Maximum length:** 24 characters for a device name and 16 for a channel name. A longer one gives `error: ...` and changes nothing.
+- **Channel form:** it is recognised when the word after `IDENTITY` is `in` or `out` and the next one is an integer. An integer below 1 is an error. **A device name cannot start with `in N` or `out N`** (with `N` an integer): it would be taken for the channel form. `in` or `out` alone, or followed by something else (`in the mix`), are fine.
+- The device name takes priority over the profile name (`name` in `devices.d`), and a channel name over `names_in` / `names_out`, channel by channel.
+- Names are not part of presets: loading a preset leaves them as they are.
 
 ### Presets
 
-- Un preset guarda el estado de ruteo: las claves `in`, `out`, `midi`, `mute`, `volume`, `in_channels` y `out_channels` de `slots.json`, no los nombres.
-- `preset save N TEXTO` le pone nombre (hasta 24 caracteres, mismos bytes). Sin texto conserva el del preset, o es `Preset N` si el hueco estaba vacío. Guarda también la hora.
-- `preset load N` sustituye esas claves de `slots.json` por las del preset (las que el preset no tiene se quitan) y deja `names` como está. El servicio lo reaplica como cualquier otro cambio: reasigna canales y cables MIDI, y repone niveles y silencios.
-- `save`, `load` y `clear` toman el mismo cerrojo que `slots.json` (`slots.lock`): son atómicos frente a otros escritores.
+- A preset stores the routing state: the `in`, `out`, `midi`, `mute`, `volume`, `in_channels` and `out_channels` keys of `slots.json`. It does not store names.
+- `preset save N TEXT` names it (up to 24 characters, same bytes). Without text it keeps the preset's name, or uses `Preset N` if the slot was empty. It also stores the time.
+- `preset load N` replaces those keys of `slots.json` with the preset's (keys the preset lacks are removed) and leaves `names` alone. The service re-applies it like any other change: it reassigns channels and MIDI cables, and restores levels and mutes.
+- `save`, `load` and `clear` take the same lock as `slots.json` (`slots.lock`), so they are atomic against other writers.
 
 ### Program Change
 
-Un Program Change en el canal `[midi] channel_in` (16 por defecto) del cable de control es `preset load`: el programa p de 0 a 7 carga el preset p+1. Cualquier otro programa se ignora y se anota en el registro, igual que un CC sin dispositivo; en otros canales no hace nada. Si hay CC pendientes en el mismo ciclo, se aplican antes del cambio de programa. No hay respuesta: el resultado queda en el registro.
+A Program Change on channel `[midi] channel_in` (16 by default) of the control cable is `preset load`: program p, from 0 to 7, loads preset p+1. Any other program is ignored and logged, like a CC with no device. On other channels it does nothing. If CCs are pending in the same cycle, they are applied before the program change. There is no reply: the result is in the log.
 
-### CC en los canales de control
+### CCs on the control channels
 
-Sirven para hosts que no mandan SysEx, como una pista MIDI de MPC con automatización o Q-Links. Van por el cable de control: en `[midi] channel_in` (16 por defecto) para lo que entra al host (IN) y en `channel_out` (15) para lo que sale de él (OUT).
+These are for hosts that cannot send SysEx, such as an MPC MIDI track with automation, or Q-Links. They go over the control cable: on `[midi] channel_in` (16 by default) for what goes to the host (IN) and on `channel_out` (15) for what comes from it (OUT).
 
-El número de CC indica a qué dispositivo va la orden: N es el canal del host en el que empieza su bloque en ese sentido, de 1 a 27. Por ejemplo, si el GP-150 entra en MPC por IN 3–8, su nivel de captura es el CC 35 en el canal 16.
+The CC number selects the device: N is the host channel where the device's block starts in that direction, from 1 to 27. For example, if the GP-150 goes into MPC on IN 3–8, its capture level is CC 35 on channel 16.
 
-| Canal | CC | Efecto | Valor |
+| Channel | CC | Effect | Value |
 |---|---|---|---|
-| `channel_in` (16) | 32 + N (33–59) | Nivel de captura del dispositivo cuyo bloque IN empieza en N | 0–127 → 0–100 % |
-| `channel_in` (16) | 64 + N (65–91) | Silencia su entrada (IN) | ≥ 64 silencia, < 64 repone |
-| `channel_out` (15) | 32 + N (33–59) | Nivel de reproducción del dispositivo cuyo bloque OUT empieza en N | 0–127 → 0–100 % |
-| `channel_out` (15) | 64 + N (65–91) | Silencia su salida (OUT) | ≥ 64 silencia, < 64 repone |
+| `channel_in` (16) | 32 + N (33–59) | Capture level of the device whose IN block starts at N | 0–127 → 0–100 % |
+| `channel_in` (16) | 64 + N (65–91) | Mutes its input (IN) | ≥ 64 mutes, < 64 restores |
+| `channel_out` (15) | 32 + N (33–59) | Playback level of the device whose OUT block starts at N | 0–127 → 0–100 % |
+| `channel_out` (15) | 64 + N (65–91) | Mutes its output (OUT) | ≥ 64 mutes, < 64 restores |
 
-Ningún otro CC es una orden. Así quedan fuera los mensajes de modo de canal (120–127, como "All Notes Off"), que muchos hosts mandan al parar, y los CC que suelen reiniciar: 0, 1, 7, 10 y 64. Un CC de esas dos franjas que no corresponde a ningún dispositivo se ignora y se anota en el registro. Con un solo cable, los dispositivos también reciben estos CC y estos SysEx: un aparato que escuche en los canales 15 o 16, o en modo omni, los verá.
+No other CC is a command. That leaves out the channel mode messages (120–127, such as "All Notes Off"), which many hosts send when they stop, and the CCs that often reset things: 0, 1, 7, 10 and 64. A CC in those two ranges that matches no device is ignored and logged. With a single cable, devices also receive these CCs and SysEx messages: a device listening on channels 15 or 16, or in omni mode, will see them.
 
-Una orden SysEx debe caber en unos 200 bytes. El secuenciador corta los SysEx largos en trozos, y una orden partida no se reconoce. Una respuesta de más de unos 4 KB podría llegar cortada [?]: el buffer de salida del puerto en el kernel es de 4 KB. Con dos dispositivos, `status` ocupa menos de 1 KB, y cada dispositivo de audio añade unos 340 bytes, más los nombres que tenga.
+A SysEx command must fit in about 200 bytes. The sequencer splits long SysEx messages into chunks, and a split command is not recognised. A reply longer than about 4 KB might arrive truncated [?]: the kernel's output buffer for the port is 4 KB. With two devices, `status` takes less than 1 KB, and each audio device adds about 340 bytes, plus any names it has.
 
-**Si `status` pasa de 4000 bytes**, la respuesta SysEx (no `status.json`, que queda completo) quita primero claves de diagnóstico, de una en una hasta que quepa: `fs_load` de cada sentido, `usbbus`, `client` de cada sentido y `card`. Nunca quita nombres, niveles, silencios, rutas ni presets. Con 6 dispositivos de 6 canales por sentido, todos con nombre de 16 caracteres, nombres de dispositivo y de 8 presets de 16 y los 6 puntos MIDI, el estado completo mide 4616 bytes y la respuesta, 3962 (`tests/test_usb.py`).
+**If `status` is over 4000 bytes**, the SysEx reply (not `status.json`, which stays complete) drops diagnostic keys first, one at a time until it fits: `fs_load` of each direction, `usbbus`, `client` of each direction and `card`. It never drops names, levels, mutes, routes or presets. With 6 devices of 6 channels per direction, all with 16-character names, device names and 8 preset names of 16 characters, and 6 MIDI endpoints, the full state is 4616 bytes and the reply is 3962 (`tests/test_usb.py`).
 
-## Claves de `status` para nombres y presets
+## `status` keys for names and presets
 
-Además de lo que ya había, `status` (la respuesta SysEx y `status.json`) trae:
+Besides what was already there, `status` (the SysEx reply and `status.json`) carries:
 
-| Clave | Dónde | Qué es |
+| Key | Where | What it is |
 |---|---|---|
-| `name` | cada dispositivo | El nombre propio si lo tiene, si no el del perfil; no aparece si no hay ninguno |
-| `names` | `in` y `out` de cada dispositivo | Nombres de los canales del dispositivo: una lista de tantos textos como `channels`, con `""` para los que no tienen nombre. El propio manda sobre el del perfil, canal por canal. No aparece si todos están vacíos |
-| `presets` | raíz | `[{"slot": N, "name": "...", "saved": "AAAA-MM-DD HH:MM"}]`, solo los presets guardados, por orden de hueco |
+| `name` | each device | The device's own name if it has one, otherwise the profile's. Absent if there is none |
+| `names` | `in` and `out` of each device | Channel names of the device: a list with as many strings as `channels`, with `""` for unnamed ones. The device's own name takes priority over the profile's, channel by channel. Absent if all are empty |
+| `presets` | root | `[{"slot": N, "name": "...", "saved": "YYYY-MM-DD HH:MM"}]`, only the saved presets, in slot order |
 
-`rpi-audiod status` muestra los nombres (el del dispositivo y los de sus canales) y los presets guardados.
+`rpi-audiod status` shows the names (the device's and its channels') and the saved presets.
 
-## Estado guardado (`/var/lib/rpi-audio/slots.json`)
+## Stored state (`/var/lib/rpi-audio/slots.json`)
 
 ```json
 {
- "in": {"IDENTIDAD": 3}, "out": {"IDENTIDAD": 5},
- "in_channels": {"IDENTIDAD": 6}, "out_channels": {"IDENTIDAD": 4},
- "midi": {"IDENTIDAD/0": 2},
- "mute": {"in": ["IDENTIDAD"], "out": []},
- "volume": {"in": {"IDENTIDAD": 100}, "out": {"IDENTIDAD": 80}},
- "names": {"IDENTIDAD": {"name": "Mesa", "in": {"1": "Voz"}, "out": {"2": "Monitor R"}}}
+ "in": {"IDENTITY": 3}, "out": {"IDENTITY": 5},
+ "in_channels": {"IDENTITY": 6}, "out_channels": {"IDENTITY": 4},
+ "midi": {"IDENTITY/0": 2},
+ "mute": {"in": ["IDENTITY"], "out": []},
+ "volume": {"in": {"IDENTITY": 100}, "out": {"IDENTITY": 80}},
+ "names": {"IDENTITY": {"name": "Desk", "in": {"1": "Voice"}, "out": {"2": "Monitor R"}}}
 }
 ```
 
-- Un nivel guardado se vuelve a aplicar cada vez que el dispositivo aparece.
-- Sin nivel guardado, rige `[bridge] min_volume`: si la reproducción arranca a 0, se sube a ese nivel.
-- `names` guarda por identidad el nombre del dispositivo (`name`) y los de sus canales (`in` y `out`, con el número de canal como clave de texto). Borrar un nombre quita su entrada, y las entradas vacías no se guardan.
+- A stored level is applied again every time the device shows up.
+- With no stored level, `[bridge] min_volume` applies: if playback starts at 0, it is raised to that level.
+- `names` stores, per identity, the device name (`name`) and its channel names (`in` and `out`, with the channel number as a string key). Clearing a name removes its entry, and empty entries are not stored.
 
-## Presets guardados (`/var/lib/rpi-audio/presets.json`)
+## Stored presets (`/var/lib/rpi-audio/presets.json`)
 
 ```json
-{"1": {"name": "Directo", "saved": "2026-10-30 18:05", "state": {"in": {"IDENTIDAD": 3}, "mute": {"in": [], "out": []}}}}
+{"1": {"name": "Live", "saved": "2026-10-30 18:05", "state": {"in": {"IDENTITY": 3}, "mute": {"in": [], "out": []}}}}
 ```
 
-- La clave es el número de hueco, de "1" a "8". `state` tiene las claves de ruteo de `slots.json` que había al guardar (ver Presets).
-- Se escribe como `slots.json`: un fichero temporal que sustituye al anterior, legible por todos, y bajo el mismo cerrojo (`slots.lock`).
+- The key is the slot number, from "1" to "8". `state` holds the routing keys of `slots.json` that existed when it was saved (see Presets).
+- It is written like `slots.json`: a temporary file that replaces the previous one, readable by all, under the same lock (`slots.lock`).
