@@ -87,20 +87,23 @@ F4 en marcha: **USB MIDI en el gadget** (4 puertos), MIDI de paso por dispositiv
 
 ## Siguiente
 
-1. **F4:**
-   - la confirmación del usuario y el control desde MPC (arriba);
-   - un arranque de la Force con el gadget compuesto ya enchufado, para ver si MidiLoop encuentra la superficie;
-   - el clock de la Force hacia el Tracker, vigilando los chasquidos;
-   - aplicar lo que salga de la revisión del código.
-2. **El add-on de la Force:**
-   - acabar la prueba de salidas, devolver `mpc_internal_io.conf` del repo con `install.sh conf` y reiniciar la Force;
-   - un soak largo;
-   - entender por qué MPC ya no abre rpi-audio solo al arrancar [?].
-3. **`rpi-audiod`:**
-   - hotplug real del GP-150;
-   - habilitarlo al arranque (`deploy.sh --enable`);
-   - lo que falta de v1: presupuesto FS previo, perfiles en `config/devices.d/` y la CLI `rpi-audio`.
-4. Pendiente de F1, opcional: S32 con bint 1.
+El usuario se ha ido y ha dicho "hazlo tú todo" (2026-10-30). Plan, en este orden, avisando antes a `rpi-audio-7d`:
+
+1. **`rpi-audiod` al arranque:** `tools/deploy.sh --enable --host akai-force`, que deshabilita el keepalive al arranque. Después, reiniciar la Pi y comprobar que suben el gadget con MIDI y `rpi-audiod`, y volver a elegir rpi-audio en MPC con MPC Remote (`docs/hosts/akai-force-remote.md`).
+2. **Hotplug del GP-150 por software,** con MPC transmitiendo: `authorized` a 0 y luego a 1 en su dispositivo USB de la Pi, sin tocar el UDC. Comprobar que vuelven los puentes, las rutas, el MIDI y los niveles guardados.
+3. **Reiniciar la Force** para probar el arreglo de la carrera de MidiLoop: que MidiLoop esté cargado y no haya errores ACVX. Volver a elegir rpi-audio con MPC Remote.
+4. **Soak de 60 minutos** con la Force: los registros de `rpi-audiod` y del add-on, con 0 xruns y 0 huecos.
+5. **Lo que falta de la v1 de `rpi-audiod`:**
+   - comprobar el presupuesto Full-Speed antes de abrir un dispositivo;
+   - perfiles en `config/devices.d/`.
+
+   Se delega en un subagente con tests; luego revisión, despliegue, commit y push.
+6. **Pendiente del usuario, a su vuelta:**
+   - el Q-Link 7 físico (prueba del CC 67);
+   - si suenan el mezclador y el GP-150;
+   - por dónde salen Out 1/2 y 3/4. Con eso, `install.sh conf` con la configuración del repo y reiniciar la Force;
+   - la aceptación de F4 con el Tracker enchufado a la Pi.
+7. **Después:** F5 y los opcionales (F1b con 32 canales, VST, S32).
 
 ## Pruebas de tonos
 

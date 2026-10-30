@@ -20,7 +20,7 @@ Al empezar cada sesión, lee `docs/STATUS.md` (estado y traspaso) y la fase en c
 - **No editar** `../track3r-os`, `../o3-sdk` ni `../o3-303`. Lo que necesite el Tracker se anota en `docs/PLAN.md` §7.
 - **Privacidad.** Nada de contraseñas, números de serie ni salidas en bruto en git: van a `out/`, que está ignorado. En `docs/hw/` solo van resúmenes.
 - **Licencia.** GPL-3.0-or-later. El código reutilizado lleva su aviso en `THIRD_PARTY.md`. No uses amidiminder: su autor prohíbe el trabajo derivado con IA.
-- **Git.** Commit o push solo cuando el usuario lo pida.
+- **Git.** El usuario dio permiso total sobre el repo el 2026-10-30: commit y push a `origin` cuando haga falta, sin reescribir historia ya publicada. `origin` es `git@github-trak3r:trak3r-os/mpc-rpi4-audioface.git` (alias SSH `github-trak3r`, no `github.com`).
 
 ## Estructura
 
