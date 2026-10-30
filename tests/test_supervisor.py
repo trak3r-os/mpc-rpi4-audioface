@@ -585,11 +585,9 @@ def test_direction_refused_by_the_budget_is_not_started_until_it_fits(monkeypatc
     assert logged(w, "mixer_in has USB budget again")
 
 
-@pytest.mark.xfail(strict=True, reason="a bridge that crashed is not running while it waits out its backoff, so its "
-                   "bus budget looks free and a bridge that was blocked behind it starts and keeps it "
-                   "(bridge/rpi-audiod/rpi-audiod Bridge.tick and Daemon.bus_used); the order the budget "
-                   "is shared in is only kept when everything starts together")
 def test_a_crashed_bridge_keeps_its_place_in_the_budget_order(monkeypatch, tmp_path):
+    """While a crashed bridge waits out its backoff it still holds its share of the bus: the one blocked behind it
+    does not start in the meantime and take it."""
     w, d = make(monkeypatch, tmp_path)
     one_way = {IN: (48000, 2), OUT: None}
     w.devices = [usb_device(1, "tracker", plans=one_way, loads={IN: 903, OUT: None}),
@@ -666,6 +664,9 @@ def test_a_device_that_does_not_fit_is_parked(monkeypatch, tmp_path):
     assert parked.start is None and parked.routes() == []
     parked.tick({"bridge": {}}, w.now)
     assert parked.child is None   # a parked bridge never starts
+    assert logged(w, "synth_in -> gadget IN parked: no free channels")
+    d.reassign()
+    assert len(logged(w, "synth_in -> gadget IN parked")) == 1   # said once
     status = {e["identity"]: e for e in d.status_data()["devices"]}
     assert status["usb-synth"][IN]["start"] is None
 

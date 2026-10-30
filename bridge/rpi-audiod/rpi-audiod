@@ -370,6 +370,8 @@ class Bridge:
         self.size = len(self.kept)
         self.load = dev.loads[direction] or 0             # full-speed B per frame
         self.blocked = None                               # why it does not start: the USB budget
+        self.holding = False                              # has its share of the budget: started, not stopped
+        self.placed = False                               # its gadget channels (or none) were logged
         self.child, self.backoff, self.next_try, self.start = None, 1.0, 0.0, None
 
     def routes(self):
@@ -404,9 +406,11 @@ class Bridge:
             # zita only leaves JACK cleanly on SIGINT; SIGTERM kills it mid-cycle and
             # jackd logs xruns until it drops the client.
             self.child = Child(self.client, cmd, stop_signal=signal.SIGINT)
+            self.holding = True
 
     def stop(self, disconnect=True):
         """disconnect=False when jackd is going away too: a stuck server could hang it."""
+        self.holding = False
         if self.child:
             for src, dst in self.routes() if disconnect else []:
                 run("jack_disconnect", src, dst)  # avoids xrun bursts in jackd (f2-jack-bench)
@@ -798,10 +802,10 @@ class Daemon:
         for direction in (IN, OUT):
             for i in self.devices:
                 b = self.bridges.get((i, direction))
-                if b and b.start != assigned[direction].get(i):
+                if b and (b.start != assigned[direction].get(i) or not b.placed):
                     if b.start is not None:
                         b.stop()
-                    b.start = assigned[direction].get(i)
+                    b.start, b.placed = assigned[direction].get(i), True
                     log(f"rpi-audiod: {b.client} -> gadget {direction.upper()} "
                         + (f"{b.start}-{b.start + b.size - 1}" if b.start else "parked: no free channels"))
         self.muted = {d: set(slots.get("mute", {}).get(d, [])) for d in (IN, OUT)}
@@ -867,9 +871,9 @@ class Daemon:
             self.reassign()
 
     def bus_used(self, bridge):
-        """Full-speed B per frame the other running bridges take on this bridge's USB bus."""
-        return sum(b.load for b in self.bridges.values()
-                   if b is not bridge and b.dev.bus == bridge.dev.bus and b.child and b.child.alive())
+        """Full-speed B per frame the other bridges hold on this bridge's USB bus: running, or waiting to restart
+        after a crash, so a bridge that was blocked behind one does not take its place in the meantime."""
+        return sum(b.load for b in self.bridges.values() if b is not bridge and b.dev.bus == bridge.dev.bus and b.holding)
 
     def connect_routes(self):
         ports, pairs = audiod.parse_connections(run("jack_lsp", "-c").stdout)
