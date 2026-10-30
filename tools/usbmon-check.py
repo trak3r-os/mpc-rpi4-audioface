@@ -33,6 +33,10 @@ def parse(lines):
         yield t, kind, int(ep), f[4:]
 
 
+def urb_status(fields):
+    return int(fields[0].split(":")[0])
+
+
 def iso_packets(fields):
     """From 'status:interval:start:errors N s:o:l ...' -> (errors, [(status, length)])."""
     errors = int(fields[0].split(":")[3]) if fields[0].count(":") == 3 else 0
@@ -75,6 +79,8 @@ def main():
             t0 = t
         s = (t - t0) // 1_000_000
         c = sec[s]
+        if kind in ("Zi", "Zo") and urb_status(fields) == -104:
+            c["unlinked"] += 1   # the host killed its URBs: it stopped or restarted the stream
         if kind == "Zi" and ep == 2:
             errors, pk = iso_packets(fields)
             c["in_errors"] += errors
@@ -113,7 +119,7 @@ def main():
             flags.append(f"IN {c['in_frames']} frames/s")
         if c["out_frames"] and not 44000 <= c["out_frames"] <= 44200:
             flags.append(f"OUT {c['out_frames']} frames/s")
-        for k in ("in_bad", "in_odd", "in_empty", "in_errors", "out_bad", "out_errors"):
+        for k in ("in_bad", "in_odd", "in_empty", "in_errors", "out_bad", "out_errors", "unlinked"):
             if c[k]:
                 flags.append(f"{k} {c[k]}")
         if gap[s] > 3000:
@@ -124,7 +130,12 @@ def main():
                   f"  fb {fb.get(s, 0):8.5f}  midi {c['midi_in']}/{c['midi_out']} B"
                   + ("  <- " + ", ".join(flags) if flags else ""))
     span = (seconds[-1] - seconds[0]) if seconds else 0
-    print(f"{span} s of capture, {odd} odd seconds")
+    total = sum((sec[s] for s in seconds), collections.Counter())
+    restarts = sum(1 for s in seconds if sec[s]["unlinked"])
+    per_min = 60 / span if span else 0
+    print(f"{span} s of capture, {odd} odd seconds; per minute: {total['in_empty'] * per_min:.1f} empty IN packets,"
+          f" {total['in_bad'] * per_min:.1f} IN and {total['out_bad'] * per_min:.1f} OUT packets with an error;"
+          f" {restarts} seconds where the host stopped or restarted its streams")
     if last_any_audio is not None and last_in is not None:
         print(f"audio last seen at {(last_any_audio - t0) / 1e6:.3f} s (IN at {(last_in - t0) / 1e6:.3f} s)")
 
