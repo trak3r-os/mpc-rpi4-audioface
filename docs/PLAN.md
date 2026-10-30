@@ -96,7 +96,7 @@ Marcas de evidencia:
 | Hecho | Fuente |
 |---|---|
 | USB **6 in / 4 out**, 24 bit, **48 kHz**. MIDI por USB, BT y TRS. Batería de 3000 mAh que se carga por USB-C | [doc] Valeton |
-| Si es class-compliant, si es HS o FS (si es FS, a 48 kHz y 24 bit no cabe en el presupuesto del VL805), qué lleva cada canal y si admite 44,1 kHz | [?] Se verá en la Pi |
+| **Medido:** class-compliant UAC2, **High-Speed**, **2 in / 2 out** (no 6/4), 24 bit en S32_LE, **solo 48 kHz**, asíncrono, paquetes cada 125 µs (`docs/hw/2026-10-29-f2-usb-devices.md`) | [Pi] |
 
 ---
 
@@ -175,22 +175,22 @@ Las dos opciones dejan igual lo que escribimos nosotros: identidad, ranuras, rut
 
 **Perfiles opcionales** (`config/devices.d/*.toml`): nombres de canal, PCM o frecuencia preferidos, bloque preferido, canales a ignorar y forma según `bcdDevice`.
 
-### Presupuesto USB Full-Speed en la Pi 4 (unos 1023 B por frame en total)
+### Presupuesto USB Full-Speed en la Pi 4 (medido: el xHCI acepta 1099 B y rechaza ~1270 B por frame)
 
 | Combinación | Carga FS | ¿Cabe? |
 |---|---|---|
-| Tracker "8 OUT / 2 IN" | 903 | Sí, pero deja unos 120 B: ningún otro dispositivo de audio FS cabe al lado |
+| Tracker "8 OUT / 2 IN" | 903 | Sí. **Medido [Pi]:** a su lado cabe un sentido del mezclador PCM2902 (grabación a 48 kHz, 196 B, o reproducción, 192 B), pero no los dos. La grabación del PCM2902 a 44,1 kHz falla con EIO aunque cabría [?] |
 | Tracker "8 OUT" (sin retorno) | 720 | Sí; quedan unos 300 B |
 | Tracker "2 OUT / 2 IN" | 363 | Sí; quedan unos 660 B: un estéreo FS de 16 bit a 48 kHz cabe (unos 400 B dúplex [est]) |
 | Tracker "10 OUT" (sin retorno) | 900 | Sí, pero solo; quedan unos 120 B |
 | **Tracker "10 OUT / 2 IN" (tu disposición)** | 1083 | **No**: pasa del límite él solo. Detrás de un TT ya no abría en dúplex [repo] |
 | Tarjeta USB genérica (FS, estéreo) | unos 200–400 [est] | Sí, sola o con el Tracker en "2 OUT / 2 IN" |
 | Tracker "10 OUT / 2 IN" + tarjeta USB genérica | unos 1300–1500 [est] | **No** |
-| Dispositivos High-Speed (GP-150 [est] y casi todas las interfaces modernas) | 0 | No cuentan |
+| Dispositivos High-Speed (GP-150 [Pi] y casi todas las interfaces modernas) | 0 | No cuentan. Medido: Tracker 8/2 + GP-150 + grabación del mezclador, a la vez y con los bytes exactos |
 
 Consecuencias:
 - En la Pi 4 cabe **un solo** dispositivo de audio FS mediano.
-- **Con tu equipo no cabe todo en la Pi 4.** Tu Tracker en "10 OUT / 2 IN" ya pasa del límite él solo, y la tarjeta USB es otro FS. El GP-150 a 6/4 canales, 24 bit y 48 kHz necesitaría unos 1470 B/ms, más de lo que da FS, así que debe de ser HS y no cuenta [est].
+- **Con tu equipo no cabe todo en la Pi 4.** Tu Tracker en "10 OUT / 2 IN" ya pasa del límite él solo, y la tarjeta USB es otro FS. El GP-150 es HS y no cuenta [Pi].
 - Mientras tanto, en la Pi 4 solo hay opciones con recortes: el Tracker en "10 OUT" sin retorno o en "8 OUT / 2 IN", sin la tarjeta USB; o el Tracker en "2 OUT / 2 IN" con la tarjeta. F2 mide cuál abre de verdad.
 - La monitorización va por el **pHAT DAC (I2S)**, nunca por un DAC USB FS.
 - Un hub Multi-TT **se prueba antes de comprarlo** (si ya tienes uno, mejor); con los informes que hay, no se espera que ayude.
@@ -207,18 +207,18 @@ Consecuencias:
 |---|---|
 | 1–8 | Tracker: stems S1–S8 (pistas 1–8, mono, pre-pan) |
 | 9–10 | Tracker: Master L/R |
-| 11–16 | GP-150 USB 1–6 (canales [?]) |
-| 17–18 | Tarjeta USB genérica: entrada |
+| 11–12 | GP-150 USB 1–2 |
+| 13–14 | Tarjeta USB genérica: entrada |
 
 | Force OUT (Force → Pi) | Destino |
 |---|---|
 | 1–2 | **Monitorización** (reservada: la Force apaga la suya): pHAT DAC |
 | 3–4 | Retorno USB del Tracker (suena por sus salidas y se puede samplear) |
-| 5–8 | GP-150 USB 1–4 |
-| 9–10 | Tarjeta USB genérica: salida (segunda escucha, auriculares o cue) |
+| 5–6 | GP-150 USB 1–2 |
+| 7–8 | Tarjeta USB genérica: salida (segunda escucha, auriculares o cue) |
 | 11–… | Libres |
 
-Son 18 entradas, así que 16×16 se queda corto: el objetivo de F1 es **24×24** (o 26×26), con 16×16 solo como primer escalón. El resto queda libre para más dispositivos.
+Son 14 entradas (eran 18 con el GP-150 supuesto a 6/4), así que 16×16 se queda justo: el objetivo de F1 es **24×24** (o 26×26), con 16×16 solo como primer escalón. El resto queda libre para más dispositivos.
 
 ### Decisiones
 

@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: GPL-3.0-or-later
 #
-# The rpi-audio USB gadget: one UAC2 function on the Pi's USB-C (dwc2),
-# set up through configfs. It runs once at boot from rpi-audio-gadget.service.
+# The rpi-audio USB gadget: one UAC2 function on the Pi's USB-C (dwc2), plus an
+# optional USB MIDI function (docs/MIDI.md), set up through configfs. It runs once at boot from rpi-audio-gadget.service.
 # Do not rebind the UDC in a loop: repeated rebinds can wedge dwc2.
 #
 #   rpi-audio-gadget up | down | status | check
@@ -22,6 +22,9 @@
 #   GADGET_MANUFACTURER  iManufacturer                                      default rpi-audio
 #   GADGET_VID           USB vendor ID (Linux Foundation)                   default 0x1d6b
 #   GADGET_PID           USB product ID (multifunction composite gadget)    default 0x0104
+#   GADGET_MIDI_PORTS    USB MIDI ports (cables) per direction, 0..16;
+#                        0 = no MIDI function                               default 0
+#   GADGET_MIDI_ID       ALSA card id of the MIDI function on the Pi        default MIDIGadget
 
 set -euo pipefail
 shopt -s nullglob
@@ -30,10 +33,12 @@ shopt -s nullglob
 : "${GADGET_REQ_NUMBER:=4}" "${GADGET_C_SYNC:=async}"
 : "${GADGET_PRODUCT:=rpi-audio}" "${GADGET_MANUFACTURER:=rpi-audio}"
 : "${GADGET_VID:=0x1d6b}" "${GADGET_PID:=0x0104}"
+: "${GADGET_MIDI_PORTS:=0}" "${GADGET_MIDI_ID:=MIDIGadget}"
 
 CONFIGFS=/sys/kernel/config
 G=$CONFIGFS/usb_gadget/rpi-audio
 F=$G/functions/uac2.audio
+M=$G/functions/midi.ports
 C=$G/configs/c.1
 
 die() { echo "rpi-audio-gadget: $*" >&2; exit 1; }
@@ -52,6 +57,9 @@ check_settings() {
   [[ $GADGET_SSIZE =~ ^[234]$ ]] || die "GADGET_SSIZE must be 2, 3 or 4"
   [[ $GADGET_HS_BINT =~ ^[0-4]$ ]] || die "GADGET_HS_BINT must be 0..4"
   [[ $GADGET_C_SYNC == async || $GADGET_C_SYNC == adaptive ]] || die "GADGET_C_SYNC must be async or adaptive"
+  [[ $GADGET_MIDI_PORTS =~ ^[0-9]+$ ]] && (( GADGET_MIDI_PORTS <= 16 )) ||
+    die "GADGET_MIDI_PORTS must be 0..16 (f_midi's limit)"
+  [[ $GADGET_MIDI_ID =~ ^[A-Za-z0-9_]{1,15}$ ]] || die "GADGET_MIDI_ID must be 1..15 letters, digits or _ (an ALSA card id)"
   [[ $GADGET_PRODUCT != *UAC2_Gadget* && $GADGET_MANUFACTURER != *UAC2_Gadget* ]] ||
     die "do not name the gadget UAC2_Gadget: some hosts (Akai MPC/Force) ignore that card"
   if (( GADGET_HS_BINT > 0 )); then
@@ -86,9 +94,11 @@ up() {
   mkdir "$G"
   put "$G/idVendor" "$GADGET_VID"
   put "$G/idProduct" "$GADGET_PID"
-  put "$G/bcdDevice" 0x0100
+  # A new revision with MIDI: hosts that cache descriptors per VID/PID/revision re-read them.
+  # Only MIDI on/off changes it, not the number of channels or MIDI ports.
+  put "$G/bcdDevice" "$( (( GADGET_MIDI_PORTS )) && echo 0x0101 || echo 0x0100)"
   put "$G/bcdUSB" 0x0200
-  # Miscellaneous / Common / Interface Association: UAC2 uses an IAD, and so will MIDI.
+  # Miscellaneous / Common / Interface Association: UAC2 uses an IAD (f_midi sends none).
   put "$G/bDeviceClass" 0xEF
   put "$G/bDeviceSubClass" 0x02
   put "$G/bDeviceProtocol" 0x01
@@ -114,17 +124,26 @@ up() {
     put_opt "$F/$a" 0
   done
   put_opt "$F/function_name" "$GADGET_PRODUCT"
+  if (( GADGET_MIDI_PORTS )); then
+    mkdir "$M"
+    put "$M/in_ports" "$GADGET_MIDI_PORTS"
+    put "$M/out_ports" "$GADGET_MIDI_PORTS"
+    put "$M/id" "$GADGET_MIDI_ID"
+  fi
 
   mkdir "$C"
   mkdir "$C/strings/0x409"
   put "$C/strings/0x409/configuration" "audio"
   put "$C/bmAttributes" 0xC0   # self-powered: the Pi has its own supply
   put "$C/MaxPower" 2
+  # Audio first, so its interface numbers are the same with or without MIDI.
   ln -s "$F" "$C/"
+  if (( GADGET_MIDI_PORTS )); then ln -s "$M" "$C/"; fi
 
   put "$G/UDC" "${udc[0]##*/}"
   echo "rpi-audio-gadget: up on ${udc[0]##*/}: ${GADGET_CHANNELS}x${GADGET_CHANNELS} ch, ${GADGET_SRATE} Hz," \
-       "${GADGET_SSIZE} B/sample, bint ${GADGET_HS_BINT}, req ${GADGET_REQ_NUMBER}, ${GADGET_C_SYNC}"
+       "${GADGET_SSIZE} B/sample, bint ${GADGET_HS_BINT}, req ${GADGET_REQ_NUMBER}, ${GADGET_C_SYNC}," \
+       "MIDI ports ${GADGET_MIDI_PORTS}"
 }
 
 down() {
@@ -148,6 +167,9 @@ status() {
   for a in p_chmask c_chmask p_srate c_srate p_ssize c_ssize c_sync req_number p_hs_bint c_hs_bint; do
     [[ -e $F/$a ]] && printf '  %-11s %s\n' "$a" "$(< "$F/$a")"
   done
+  if [[ -d $M ]]; then
+    echo "MIDI: $(< "$M/in_ports") in / $(< "$M/out_ports") out ports, card id $(< "$M/id")"
+  fi
   echo "ALSA:"
   sed 's/^/  /' /proc/asound/cards
   local card

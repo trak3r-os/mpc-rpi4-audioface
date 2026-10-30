@@ -1,0 +1,25 @@
+[Unit]
+Description=rpi-audio: feed the gadget and bridge USB audio devices to it
+# Replaces rpi-audio-keepalive: it also plays into the gadget whenever the host streams.
+After=rpi-audio-gadget.service sound.target
+BindsTo=rpi-audio-gadget.service
+Conflicts=rpi-audio-keepalive.service
+
+[Service]
+EnvironmentFile=-/etc/rpi-audio/gadget.env
+ExecStart=/usr/local/lib/rpi-audio/rpi-audiod
+Restart=always
+RestartSec=1
+User=rpi-audio
+Group=audio
+StateDirectory=rpi-audio
+RuntimeDirectory=rpi-audio
+# jackd and the zita bridges run realtime and lock their memory.
+LimitRTPRIO=95
+LimitMEMLOCK=infinity
+# rpi-audiod stops the bridges, then jackd, in that order.
+KillMode=mixed
+TimeoutStopSec=10
+
+[Install]
+WantedBy=multi-user.target

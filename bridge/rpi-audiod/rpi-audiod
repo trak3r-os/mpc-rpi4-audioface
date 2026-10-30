@@ -1,0 +1,804 @@
+#!/usr/bin/env python3
+# SPDX-License-Identifier: GPL-3.0-or-later
+"""rpi-audiod: keeps the gadget fed and bridges USB audio and MIDI devices to it (docs/PLAN.md).
+
+While the host streams both ways, it runs jackd on the gadget (mode A) and, for every USB
+audio card, a zita-a2j / zita-j2a bridge per direction, connected to that device's gadget
+channels. While the host only records from the Pi, it plays silence instead: some hosts
+drop the gadget when nothing plays into it (docs/hw/2026-10-29-f1-force.md). When the
+gadget has USB MIDI ports, every MIDI port of a USB device gets one of them, and the
+control port takes the commands below from the host too (docs/MIDI.md).
+
+  rpi-audiod [run]                            the service (rpi-audiod.service)
+  rpi-audiod status                           what the service is doing
+  rpi-audiod assign IDENTITY [--in N] [--out N] [--midi K]   pin a device's gadget channels or MIDI port
+  rpi-audiod mute IDENTITY in|out on|off      cut or restore a device's audio routes
+  rpi-audiod volume IDENTITY in|out PERCENT   set a device's own capture or playback level
+
+Gadget channels are sticky per device identity (/var/lib/rpi-audio/slots.json). Settings:
+/etc/rpi-audio/rpi-audio.toml, then /etc/rpi-audio/rpi-audio.d/*.toml; the gadget's own
+come from the GADGET_* environment, or from gadget.env.
+"""
+
+import argparse
+import contextlib
+import copy
+import fcntl
+import glob
+import json
+import os
+import queue
+import signal
+import subprocess
+import sys
+import tempfile
+import threading
+import time
+import tomllib
+from pathlib import Path
+
+import audiod
+import midi
+from audiod import IN, OUT
+
+CONFIG = Path(os.environ.get("RPI_AUDIO_CONFIG", "/etc/rpi-audio/rpi-audio.toml"))
+STATE = Path(os.environ.get("STATE_DIRECTORY", "/var/lib/rpi-audio")) / "slots.json"
+STATUS = Path(os.environ.get("RUNTIME_DIRECTORY", "/run/rpi-audio")) / "status.json"
+TICK = 0.1
+STALL_S = 1.5        # gadget playback pointer still for this long: the feeder is stuck
+STARTUP_S = 4.0      # time a new feeder gets before the pointer has to move
+JACK_FAILS = 3       # jackd failures in a row before falling back to silence for a while
+FALLBACK_S = 10.0
+MIDI_COMMANDS = 20   # control-port commands run per tick, at most; the rest wait for the next
+os.environ["JACK_NO_START_SERVER"] = "1"   # a JACK tool must never start a server of its own
+os.environ["JACK_NO_AUDIO_RESERVATION"] = "1"   # no D-Bus session to reserve the card through
+
+
+def log(msg):
+    print(msg, flush=True)
+
+
+def load_config():
+    cfg = {"gadget": {}, "engine": {}, "bridge": {}, "slots": {}, "midi": {}}
+    for path in [CONFIG, *sorted(CONFIG.parent.glob(CONFIG.stem + ".d/*.toml"))]:
+        if path.exists():
+            with open(path, "rb") as f:
+                for table, values in tomllib.load(f).items():
+                    cfg.setdefault(table, {}).update(values)
+    return cfg
+
+
+def gadget_setting(name, default):
+    """GADGET_* from the environment (the unit's EnvironmentFile), else from gadget.env
+    next to the config, so a run by hand sees the same gadget."""
+    if name in os.environ:
+        return os.environ[name]
+    for line in read(CONFIG.parent / "gadget.env").splitlines():
+        key, _, value = line.partition("=")
+        if key.strip() == name:
+            return value.strip().strip('"')
+    return default
+
+
+def run(*cmd, timeout=2):
+    try:
+        return subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+    except (OSError, subprocess.TimeoutExpired) as e:
+        return subprocess.CompletedProcess(cmd, 1, "", str(e))
+
+
+def read(path):
+    try:
+        return Path(path).read_text()
+    except OSError:
+        return ""
+
+
+def write_json(path, data):
+    """Replaces the file at once, through a temporary file of its own: two writers never
+    share one. Readable by all, whoever writes it (the service or root at the command line)."""
+    fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=path.name + ".")
+    try:
+        with os.fdopen(fd, "w") as f:
+            f.write(json.dumps(data, indent=1, sort_keys=True) + "\n")
+        os.chmod(tmp, 0o644)
+        os.replace(tmp, path)
+    except BaseException:
+        with contextlib.suppress(OSError):
+            os.unlink(tmp)
+        raise
+
+
+def load_slots():
+    try:
+        return json.loads(STATE.read_text())
+    except (OSError, ValueError):
+        return {}
+
+
+def slots_stamp():
+    """Changes with every write of slots.json (each one is a new file)."""
+    try:
+        st = STATE.stat()
+        return st.st_ino, st.st_mtime_ns
+    except OSError:
+        return None
+
+
+def update_slots(change):
+    """Applies change(state) -> state to slots.json, holding a lock the service and the
+    command line share, so neither overwrites the other's edit. Returns (state, stamp)."""
+    fd = os.open(STATE.with_suffix(".lock"), os.O_RDONLY | os.O_CREAT, 0o644)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        state = load_slots()
+        new = change(copy.deepcopy(state))
+        if new != state:
+            write_json(STATE, new)
+        return new, slots_stamp()
+    finally:
+        os.close(fd)
+
+
+def udc_state():
+    return next((read(p).strip() for p in glob.glob("/sys/class/udc/*/state")), "")
+
+
+class Child:
+    """A process whose output goes to the log with a prefix; a line repeated in a row
+    is logged once with a count (a stuck zita says "Starting synchronisation." forever).
+    With on_line, each line goes to it instead."""
+
+    def __init__(self, name, cmd, on_line=None):
+        self.name, self.cmd, self.started, self.on_line = name, cmd, time.monotonic(), on_line
+        self.proc = subprocess.Popen(cmd, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                                     stderr=subprocess.STDOUT, text=True, errors="replace")
+        threading.Thread(target=self._pump, daemon=True).start()
+
+    def _pump(self):
+        last, count = None, 0
+        for line in self.proc.stdout:
+            line = line.rstrip()
+            if self.on_line:
+                self.on_line(line)
+                continue
+            if line == last:
+                count += 1
+                continue
+            if count:
+                log(f"[{self.name}] (previous line {count} more times)")
+            log(f"[{self.name}] {line}")
+            last, count = line, 0
+        if count:
+            log(f"[{self.name}] (previous line {count} more times)")
+
+    def alive(self):
+        return self.proc.poll() is None
+
+    def stop(self, grace=1.0):
+        if self.alive():
+            self.proc.terminate()
+            try:
+                self.proc.wait(grace)
+            except subprocess.TimeoutExpired:
+                log(f"rpi-audiod: {self.name} ignored SIGTERM, killing it")
+                self.proc.kill()
+                self.proc.wait()
+
+
+class Device:
+    """A USB audio card as found in /proc/asound."""
+
+    def __init__(self, card, card_id, usbbus, ident, plans):
+        self.card, self.id, self.usbbus, self.identity = card, card_id, usbbus, ident
+        self.plans = plans  # {IN: (rate, channels) or None, OUT: ...}
+
+
+def usb_attr(card, name):
+    dev = os.path.realpath(f"/sys/class/sound/card{card}/device")
+    for _ in range(3):  # the card hangs off the interface; the attributes are on the device
+        dev = os.path.dirname(dev)
+        if os.path.exists(f"{dev}/idVendor"):
+            return read(f"{dev}/{name}").strip(), os.path.basename(dev)
+    return "", ""
+
+
+def usb_cards(cfg):
+    """(card, card_id, usbbus, identity) for every USB sound card, in card order."""
+    found, ignore = [], set(cfg["bridge"].get("ignore", []))
+    for d in sorted(glob.glob("/proc/asound/card[0-9]*"), key=lambda p: int(Path(p).name[4:])):
+        usbbus = read(f"{d}/usbbus").strip()
+        card_id = read(f"{d}/id").strip()
+        if not usbbus or card_id in ignore:
+            continue
+        card = int(Path(d).name[4:])
+        vendor, port = usb_attr(card, "idVendor")
+        product, _ = usb_attr(card, "idProduct")
+        serial, _ = usb_attr(card, "serial")
+        found.append((card, card_id, usbbus, audiod.identity(vendor, product, serial, port)))
+    return [(*c[:3], ident) for c, ident in zip(found, audiod.dedupe([c[3] for c in found]))]
+
+
+def scan(cfg):
+    """The USB cards with at least one PCM direction, and {card: identity} for every USB
+    card, MIDI-only ones included."""
+    rates = cfg["bridge"].get("rates", [48000, 44100])
+    found, cards = [], {}
+    for card, card_id, usbbus, ident in usb_cards(cfg):
+        cards[card] = ident
+        stream = audiod.parse_stream(read(f"/proc/asound/card{card}/stream0"))
+        plans = {IN: audiod.plan_direction(stream["capture"], rates),
+                 OUT: audiod.plan_direction(stream["playback"], rates)}
+        if any(plans.values()):
+            found.append(Device(card, card_id, usbbus, ident, plans))
+    return found, cards
+
+
+class Bridge:
+    """One direction of one device: a zita process, restarted with backoff."""
+
+    def __init__(self, dev, direction):
+        self.dev, self.direction = dev, direction
+        self.client = audiod.client_name(dev.id, direction)
+        self.rate, self.channels = dev.plans[direction]
+        self.child, self.backoff, self.next_try, self.start = None, 1.0, 0.0, None
+
+    def routes(self):
+        if self.start is None:
+            return []
+        return audiod.routes(self.client, self.direction, self.start, self.channels)
+
+    def tick(self, cfg, now):
+        if self.child and not self.child.alive():
+            lived = now - self.child.started
+            log(f"rpi-audiod: {self.client} exited after {lived:.1f} s (code {self.child.proc.returncode})")
+            self.child = None
+            self.backoff = 1.0 if lived > 60 else min(self.backoff * 2, 30.0)
+            self.next_try = now + self.backoff
+        if self.child is None and self.start is not None and now >= self.next_try:
+            b = cfg["bridge"]
+            tool = "zita-a2j" if self.direction == IN else "zita-j2a"
+            cmd = [tool, "-j", self.client, "-d", f"hw:CARD={self.dev.id}", "-r", str(self.rate),
+                   "-c", str(self.channels), "-p", str(b.get("period", 256)), "-n", str(b.get("periods", 2))]
+            log(f"rpi-audiod: starting {' '.join(cmd)}")
+            self.child = Child(self.client, cmd)
+
+    def stop(self, disconnect=True):
+        """disconnect=False when jackd is going away too: a stuck server could hang it."""
+        if self.child:
+            for src, dst in self.routes() if disconnect else []:
+                run("jack_disconnect", src, dst)  # avoids xrun bursts in jackd (f2-jack-bench)
+            self.child.stop()
+            self.child = None
+
+
+class Midi:
+    """The gadget's USB MIDI ports (docs/MIDI.md): every MIDI port of a USB device gets a
+    port of its own, through kernel sequencer subscriptions, and the control port carries
+    commands for rpi-audiod."""
+
+    def __init__(self, cfg, ports, card_id):
+        m = cfg["midi"]
+        self.card_id, self.ports = card_id, ports
+        self.control = int(m.get("control_port", 1))
+        if not 1 <= self.control <= ports:
+            log(f"rpi-audiod: [midi] control_port {self.control} is not one of the gadget's {ports} ports; using 1")
+            self.control = 1
+        self.channels = (int(m.get("channel_in", 16)), int(m.get("channel_out", 15)))
+        if not all(1 <= c <= 16 for c in self.channels) or self.channels[0] == self.channels[1]:
+            log(f"rpi-audiod: [midi] channel_in/channel_out {self.channels} must be two channels 1..16; using 16, 15")
+            self.channels = (16, 15)
+        self.client = None   # the gadget's sequencer client
+        self.listener, self.next_listen, self.heard = None, 0.0, 0.0
+        self.events, self.replies = queue.SimpleQueue(), queue.SimpleQueue()
+        self.eps, self.assigned, self.parked, self.configured = [], {}, [], False
+        threading.Thread(target=self.sender, daemon=True).start()
+
+    def port(self, cable):
+        return f"{self.client}:{cable - 1}"
+
+    def gadget_client(self, clients):
+        card = os.path.basename(os.path.realpath(f"/proc/asound/{self.card_id}"))
+        if not card.startswith("card"):
+            return None
+        return next((c.number for c in clients.values() if c.card == int(card[4:])), None)
+
+    def on_line(self, line):   # the listener's thread
+        event = midi.parse_aseqdump(line)
+        if event:
+            self.events.put(event)
+
+    def listen(self, clients, conns, now):
+        """Keeps aseqdump subscribed to the control port; restarts it when it dies or
+        loses its subscription (the gadget came back as a new client)."""
+        if self.listener and self.listener.alive():
+            src = (self.client, self.control - 1)
+            if any(s == src and d[0] in clients and clients[d[0]].pid == self.listener.proc.pid for s, d in conns):
+                self.heard = now
+                return
+            if now - self.heard < 3:
+                return
+            log("rpi-audiod: the MIDI control listener lost its subscription, restarting it")
+        elif self.listener:
+            log(f"rpi-audiod: the MIDI control listener exited (code {self.listener.proc.returncode})")
+        if self.listener:
+            self.stop_listener()
+        if now >= self.next_listen:
+            self.listener = Child("midi-control", ["aseqdump", "-p", self.port(self.control)], self.on_line)
+            self.heard, self.next_listen = now, now + 2.0
+
+    def stop_listener(self):
+        if self.listener:
+            self.listener.stop()
+            self.listener = None
+
+    def tick(self, cards, now):
+        clients, conns = midi.parse_aconnect(run("aconnect", "-l").stdout)
+        client = self.gadget_client(clients)
+        if client != self.client:
+            log(f"rpi-audiod: gadget MIDI {f'on sequencer client {client}' if client is not None else 'gone'}")
+            self.stop_listener()
+            self.client = client
+        if client is None:
+            return
+        self.listen(clients, conns, now)
+        eps = midi.endpoints(clients, cards)
+        out = {}
+
+        def cables(state):
+            saved = state.get("midi", {})
+            out["assigned"], out["parked"], new = midi.assign_cables([e for e, _, _ in eps], saved,
+                                                                     self.ports, self.control)
+            if new != saved:
+                state["midi"] = new
+            return state
+
+        try:
+            update_slots(cables)
+        except OSError as e:
+            log(f"rpi-audiod: cannot save {STATE}: {e}")
+            cables(load_slots())
+        assigned, parked = out["assigned"], out["parked"]
+        for e, c, _ in eps:
+            if assigned.get(e) != self.assigned.get(e) or (e in parked) != (e in self.parked):
+                where = f"port {assigned[e]}" if e in assigned else "parked: no free port"
+                log(f"rpi-audiod: MIDI {clients[c].name} ({e}) -> gadget MIDI {where}")
+        self.eps, self.assigned, self.parked = eps, assigned, parked
+        configured = udc_state() == "configured"
+        if configured != self.configured:
+            log(f"rpi-audiod: host {'connected: routing' if configured else 'gone: unrouting'} MIDI")
+            self.configured = configured
+        caps = midi.parse_seq_caps(read("/proc/asound/seq/clients"))
+        wanted = midi.wanted_subscriptions(eps, assigned, caps, client, configured)
+        devices = {c.number for c in clients.values() if c.card in cards}
+        for src, dst in midi.stale_subscriptions(conns, wanted, client, devices):
+            if run("aconnect", "-d", "%d:%d" % src, "%d:%d" % dst).returncode == 0:
+                log("rpi-audiod: unsubscribed MIDI %d:%d -> %d:%d" % (*src, *dst))
+        for src, dst in wanted - conns:
+            if run("aconnect", "%d:%d" % src, "%d:%d" % dst).returncode == 0:
+                log("rpi-audiod: subscribed MIDI %d:%d -> %d:%d" % (*src, *dst))
+
+    def drain(self, daemon):
+        """Runs the commands that came in on the control port since the last tick. CCs of
+        one control are coalesced: a Q-Link sweep sets the level once per tick."""
+        ccs = {}
+        for _ in range(MIDI_COMMANDS):
+            try:
+                event = self.events.get_nowait()
+            except queue.Empty:
+                break
+            if event[0] == "sysex":
+                text = midi.sysex_text(event[1])
+                if text is not None:
+                    reply = daemon.command(text)
+                    log(f"rpi-audiod: MIDI command '{text}': {reply[:60]}")
+                    self.send(reply)
+            elif event[0] == "cc" and event[1] in self.channels:
+                cmd = midi.cc_command(*event[1:], self.channels, daemon.starts())
+                if cmd is None:
+                    log(f"rpi-audiod: MIDI CC {event[2]} on channel {event[1]}: no device there")
+                else:
+                    ccs[(cmd.verb, cmd.identity, cmd.arg("direction"))] = cmd
+        for cmd in ccs.values():
+            daemon.apply(cmd)
+
+    def send(self, text):
+        if self.replies.qsize() >= MIDI_COMMANDS:
+            log("rpi-audiod: MIDI replies are piling up; dropping one")
+            return
+        try:
+            data = midi.sysex_hex(text, reply=True)
+        except ValueError:
+            data = midi.sysex_hex("error: the reply is not plain ASCII", reply=True)
+        self.replies.put((self.port(self.control), midi.smf_sysex(bytes.fromhex(data.replace(" ", "")))))
+
+    def sender(self):
+        """Sends the replies in order, in a thread of its own: each aplaymidi takes about
+        0.2 s, too long for the main loop, which supervises the gadget's feed."""
+        while True:
+            port, smf = self.replies.get()
+            try:
+                subprocess.run(["aplaymidi", "-d", "0", "-p", port, "-"], input=smf, capture_output=True, timeout=5)
+            except (OSError, subprocess.TimeoutExpired) as e:
+                log(f"rpi-audiod: cannot send the MIDI reply: {e}")
+
+    def status(self):
+        return {"card": self.card_id, "client": self.client, "ports": self.ports, "control_port": self.control,
+                "host_connected": self.configured, "listening": bool(self.listener and self.listener.alive()),
+                "endpoints": [{"endpoint": e, "port": self.assigned.get(e)} for e, _, _ in self.eps]}
+
+
+class Daemon:
+    def __init__(self, cfg):
+        self.cfg = cfg
+        g = cfg["gadget"]
+        self.card = g.get("card", "UAC2Gadget")
+        self.channels = int(gadget_setting("GADGET_CHANNELS", g.get("channels", 2)))
+        self.ssize = int(gadget_setting("GADGET_SSIZE", g.get("sample_size", 4)))
+        self.pending = None          # feeder seen on the last tick
+        self.target = None           # feeder the host's rates call for, once seen on two ticks
+        self.mode = None             # what feeds the gadget now: "jack", "silence" or None
+        self.rate = 0
+        self.jackd = self.player = None
+        self.jack_ready = False
+        self.jack_fails, self.fallback_until = 0, 0.0
+        self.ptr, self.ptr_moved = None, 0.0
+        self.devices, self.bridges = {}, {}   # identity -> Device; (identity, direction) -> Bridge
+        self.cards = {}                      # card number -> identity, every USB card
+        self.muted = {IN: set(), OUT: set()}
+        self.volumes = {}                    # (identity, direction) -> level last set
+        self.seen_usbbus = set()
+        self.slots_stamp = None
+        ports = int(gadget_setting("GADGET_MIDI_PORTS", 0))
+        midi_id = gadget_setting("GADGET_MIDI_ID", cfg["midi"].get("card", "MIDIGadget"))
+        self.midi = Midi(cfg, ports, midi_id) if ports else None
+        self.rates = (0, 0)
+        self.next_scan = self.next_routes = self.next_status = self.next_midi = 0.0
+        self.stopping = False
+
+    # --- what feeds the gadget -------------------------------------------------------
+
+    def host_rates(self):
+        c = audiod.parse_controls(run("amixer", "-c", self.card, "contents").stdout)
+        return c.get("Playback Rate", 0), c.get("Capture Rate", 0)
+
+    def start_jackd(self):
+        e = self.cfg["engine"]
+        # hw:NAME, not hw:CARD=NAME: jackd's card reservation cannot parse the latter.
+        cmd = ["jackd", "-R", "-P", str(e.get("priority", 70)), "-t", "2000", "-d", "alsa",
+               "-d", f"hw:{self.card}", "-r", str(self.rate), "-p", str(e.get("period", 64)),
+               "-n", str(e.get("periods", 3)), "-i", str(self.channels), "-o", str(self.channels)]
+        if self.ssize == 2:
+            cmd.append("-S")
+        log(f"rpi-audiod: starting {' '.join(cmd)}")
+        self.jackd, self.jack_ready = Child("jackd", cmd), False
+
+    def start_player(self):
+        fmt = {2: "S16_LE", 3: "S24_3LE", 4: "S32_LE"}[self.ssize]
+        cmd = ["aplay", "-q", "-D", f"hw:CARD={self.card}", "-t", "raw", "-f", fmt,
+               "-c", str(self.channels), "-r", str(self.rate), "/dev/zero"]
+        log(f"rpi-audiod: playing silence ({self.channels} ch {fmt} {self.rate} Hz)")
+        self.player = Child("silence", cmd)
+
+    def stop_feeder(self):
+        for b in self.bridges.values():
+            b.stop(disconnect=False)
+        if self.jackd:
+            self.jackd.stop()
+        if self.player:
+            self.player.stop()
+        self.jackd = self.player = None
+        self.jack_ready = False
+
+    def set_mode(self, mode, now):
+        if mode == "jack" and now < self.fallback_until:
+            mode = "silence"
+        if mode == self.mode and (self.jackd or self.player or mode is None):
+            return
+        self.stop_feeder()
+        self.mode, self.ptr, self.ptr_moved = mode, None, now
+        if mode == "jack":
+            self.start_jackd()
+        elif mode == "silence":
+            self.start_player()
+
+    def check_feeder(self, now):
+        """Restarts the feeder when it died or the gadget's playback pointer stopped:
+        jackd's ALSA driver can stop while the process lives on (f2-jack-bench)."""
+        child = self.jackd or self.player
+        if child is None:
+            return
+        state, ptr = audiod.pcm_status(read(f"/proc/asound/{self.card}/pcm0p/sub0/status"))
+        if ptr != self.ptr:
+            self.ptr, self.ptr_moved = ptr, now
+        died = not child.alive()
+        stalled = now - child.started > STARTUP_S and now - self.ptr_moved > STALL_S
+        if not died and not stalled:
+            if self.jackd and now - child.started > 5:
+                self.jack_fails = 0
+            return
+        log(f"rpi-audiod: {child.name} {'exited' if died else f'stalled ({state}, pointer still)'}, restarting")
+        if self.jackd:
+            self.jack_fails += 1
+            if self.jack_fails >= JACK_FAILS:
+                log(f"rpi-audiod: jackd failed {self.jack_fails} times in a row; silence for {FALLBACK_S:.0f} s")
+                self.jack_fails, self.fallback_until = 0, now + FALLBACK_S
+        self.stop_feeder()
+        self.mode = None   # set_mode starts it again on the next tick
+
+    def check_jack_ready(self):
+        if self.jackd and not self.jack_ready and run("jack_lsp").returncode == 0:
+            self.jack_ready = True
+            log("rpi-audiod: jackd is up")
+
+    # --- devices, slots and routes -----------------------------------------------------
+
+    def reassign(self):
+        """Gives the devices their gadget channels: decided and saved under the lock, then the
+        bridges move (stopping one can take a second; nothing waits for that under the lock)."""
+        reserved = {IN: self.cfg["slots"].get("reserve_in", []),
+                    OUT: self.cfg["slots"].get("reserve_out", [])}
+        assigned = {}
+
+        def allocate(slots):
+            for direction in (IN, OUT):
+                sizes = slots.setdefault(direction + "_channels", {})
+                present = {i: dev.plans[direction][1] for i, dev in self.devices.items() if dev.plans[direction]}
+                assigned[direction], _, slots[direction] = audiod.allocate(
+                    present, slots.get(direction, {}), sizes, self.channels, reserved[direction])
+                sizes.update(present)
+            return slots
+
+        try:
+            slots, self.slots_stamp = update_slots(allocate)
+        except OSError as e:
+            log(f"rpi-audiod: cannot save {STATE}: {e}")
+            slots, self.slots_stamp = allocate(load_slots()), slots_stamp()
+        for direction in (IN, OUT):
+            for i in self.devices:
+                b = self.bridges.get((i, direction))
+                if b and b.start != assigned[direction].get(i):
+                    if b.start is not None:
+                        b.stop()
+                    b.start = assigned[direction].get(i)
+                    log(f"rpi-audiod: {b.client} -> gadget {direction.upper()} "
+                        + (f"{b.start}-{b.start + b.channels - 1}" if b.start else "parked: no free channels"))
+        self.muted = {d: set(slots.get("mute", {}).get(d, [])) for d in (IN, OUT)}
+        self.set_volumes(slots.get("volume", {}))
+
+    def set_volumes(self, saved):
+        """Sets each device's saved levels (docs/MIDI.md) when they changed or it came back."""
+        for i, dev in self.devices.items():
+            for direction, kind in ((IN, "capture"), (OUT, "playback")):
+                level = saved.get(direction, {}).get(i)
+                if level is None or self.volumes.get((i, direction)) == level:
+                    continue
+                controls = audiod.volume_controls(run("amixer", "-c", dev.id, "scontents").stdout, direction)
+                for control in controls:
+                    run("amixer", "-q", "-c", dev.id, "sset", control, kind, f"{level}%")
+                log(f"rpi-audiod: {dev.id}: {kind} level {level}% on {', '.join(controls) or 'no control'}")
+                self.volumes[(i, direction)] = level
+
+    def raise_volumes(self, dev):
+        if dev.identity in load_slots().get("volume", {}).get(OUT, {}):
+            return   # set_volumes sets the saved level instead
+        floor = self.cfg["bridge"].get("min_volume", "80%")
+        for control in audiod.silent_volumes(run("amixer", "-c", dev.id, "scontents").stdout):
+            log(f"rpi-audiod: {dev.id}: '{control}' playback volume was 0, setting {floor}")
+            run("amixer", "-q", "-c", dev.id, "sset", control, floor, "unmute")
+
+    def scan_devices(self):
+        found, self.cards = scan(self.cfg)
+        found = {d.identity: d for d in found}
+        changed = False
+        for i, dev in list(self.devices.items()):
+            new = found.get(i)
+            if new is None or new.usbbus != dev.usbbus or new.card != dev.card:
+                why = "unplugged" if new is None else "re-enumerated"
+                log(f"rpi-audiod: {dev.id} ({i}) {why}")
+                for direction in (IN, OUT):
+                    b = self.bridges.pop((i, direction), None)
+                    if b:
+                        b.stop()
+                    self.volumes.pop((i, direction), None)
+                del self.devices[i]
+                changed = True
+        for i, dev in found.items():
+            if i in self.devices:
+                continue
+            plans = ", ".join(f"{d} {p[1]} ch {p[0]} Hz" for d, p in dev.plans.items() if p)
+            log(f"rpi-audiod: {dev.id} ({i}) on card {dev.card}: {plans}")
+            self.devices[i] = dev
+            for direction in (IN, OUT):
+                if dev.plans[direction]:
+                    self.bridges[(i, direction)] = Bridge(dev, direction)
+            if dev.usbbus not in self.seen_usbbus:
+                self.seen_usbbus.add(dev.usbbus)
+                self.raise_volumes(dev)
+            changed = True
+        if changed or slots_stamp() != self.slots_stamp:
+            self.reassign()
+
+    def connect_routes(self):
+        ports, pairs = audiod.parse_connections(run("jack_lsp", "-c").stdout)
+        for (i, direction), b in self.bridges.items():
+            muted = i in self.muted[direction]
+            for src, dst in b.routes():
+                connected = frozenset((src, dst)) in pairs
+                if muted and connected:
+                    if run("jack_disconnect", src, dst).returncode == 0:
+                        log(f"rpi-audiod: muted {src} -> {dst}")
+                elif not muted and not connected and src in ports and dst in ports:
+                    if run("jack_connect", src, dst).returncode == 0:
+                        log(f"rpi-audiod: connected {src} -> {dst}")
+
+    def starts(self):
+        """{direction: {first gadget channel: identity}}, for the control CCs."""
+        out = {IN: {}, OUT: {}}
+        for (i, direction), b in self.bridges.items():
+            if b.start is not None:
+                out[direction][b.start] = i
+        return out
+
+    def command(self, text):
+        """Runs a text command from the MIDI control port (docs/MIDI.md); returns the reply."""
+        try:
+            cmd = midi.parse_command(text)
+            if cmd.verb == "ping":
+                return "ok rpi-audio"
+            if cmd.verb == "status":
+                return json.dumps(self.status_data(), separators=(",", ":"), sort_keys=True)
+            return self.apply(cmd)
+        except ValueError as e:
+            return f"error: {e}"
+
+    def apply(self, cmd):
+        """Saves a command's change; scan_devices sees the new state and applies it."""
+        try:
+            update_slots(lambda state: midi.apply_command(state, cmd)[0])
+        except OSError as e:
+            return f"error: cannot save the change: {e}"
+        return "ok"
+
+    def status_data(self):
+        playback_rate, capture_rate = self.rates
+        devices = []
+        for i, dev in self.devices.items():
+            entry = {"identity": i, "card": dev.id, "usbbus": dev.usbbus}
+            for direction in (IN, OUT):
+                b = self.bridges.get((i, direction))
+                if b:
+                    entry[direction] = {"client": b.client, "rate": b.rate, "channels": b.channels,
+                                        "start": b.start, "running": bool(b.child and b.child.alive()),
+                                        "muted": i in self.muted[direction],
+                                        "level": self.volumes.get((i, direction))}
+            devices.append(entry)
+        return {"time": time.strftime("%Y-%m-%d %H:%M:%S"), "host_playback_rate": playback_rate,
+                "host_capture_rate": capture_rate, "feeder": self.mode, "jack_ready": self.jack_ready,
+                "gadget_channels": self.channels, "devices": devices,
+                "midi": self.midi.status() if self.midi else None}
+
+    # --- main loop ---------------------------------------------------------------------
+
+    def loop(self):
+        log(f"rpi-audiod: gadget {self.card}, {self.channels} ch, sample size {self.ssize}")
+        while not self.stopping:
+            now = time.monotonic()
+            playback_rate, capture_rate = self.rates = self.host_rates()
+            want = audiod.feeder(playback_rate, capture_rate)
+            if want == self.pending and (want != self.target or (want and playback_rate != self.rate)):
+                if want:   # the same on two ticks in a row
+                    log(f"rpi-audiod: host streaming at {playback_rate} Hz (capture {capture_rate}): {want}")
+                else:
+                    log("rpi-audiod: the host stopped streaming")
+                if self.rate and playback_rate != self.rate:
+                    self.stop_feeder()
+                    self.mode = None
+                self.target, self.rate = want, playback_rate
+            self.pending = want
+            if self.target != self.mode or (self.target and not (self.jackd or self.player)):
+                self.set_mode(self.target, now)
+            self.check_feeder(now)
+            self.check_jack_ready()
+            if now >= self.next_scan:
+                self.scan_devices()
+                self.next_scan = now + 0.5
+            if self.jack_ready:
+                for b in self.bridges.values():
+                    b.tick(self.cfg, now)
+                if now >= self.next_routes:
+                    self.connect_routes()
+                    self.next_routes = now + 1.0
+            if self.midi:
+                if now >= self.next_midi:
+                    self.midi.tick(self.cards, now)
+                    self.next_midi = now + 1.0
+                self.midi.drain(self)
+            if now >= self.next_status:
+                try:
+                    write_json(STATUS, self.status_data())
+                except OSError as e:
+                    log(f"rpi-audiod: cannot write {STATUS}: {e}")
+                self.next_status = now + 60.0 if not STATUS.parent.is_dir() else now + 2.0
+            time.sleep(TICK)
+        self.stop_feeder()
+        if self.midi:
+            self.midi.stop_listener()
+        log("rpi-audiod: stopped")
+
+
+def cmd_status(_):
+    try:
+        s = json.loads(STATUS.read_text())
+    except (OSError, ValueError):
+        sys.exit("rpi-audiod: no status; is rpi-audiod.service running?")
+    print(f"{s['time']}  host: playback {s['host_playback_rate']} Hz, capture {s['host_capture_rate']} Hz;"
+          f" feeder: {s['feeder']}{' (jack up)' if s['jack_ready'] else ''}")
+    for d in s["devices"]:
+        print(f"  {d['card']:12} {d['identity']}")
+        for direction, label in ((IN, "to host IN"), (OUT, "from host OUT")):
+            b = d.get(direction)
+            if b:
+                where = f"{b['start']}-{b['start'] + b['channels'] - 1}" if b["start"] else "parked"
+                extra = ", muted" if b.get("muted") else ""
+                if b.get("level") is not None:
+                    extra += f", level {b['level']}%"
+                print(f"    {b['client']:16} {b['channels']} ch {b['rate']} Hz  {label} {where}"
+                      f"  {'running' if b['running'] else 'not running'}{extra}")
+    m = s.get("midi")
+    if m:
+        state = ("on client %s" % m["client"]) if m["client"] is not None else "not found"
+        print(f"  MIDI: {m['ports']} gadget ports ({m['card']} {state}), control on port {m['control_port']}"
+              f"{', host connected' if m['host_connected'] else ''}{'' if m['listening'] else ', not listening'}")
+        for e in m["endpoints"]:
+            print(f"    {e['endpoint']:40} {'port %d' % e['port'] if e['port'] else 'parked'}")
+
+
+def cmd_change(text):
+    """assign, mute and volume from the command line: the same commands, and the same
+    checks, as on the MIDI control port (docs/MIDI.md)."""
+    try:
+        cmd = midi.parse_command(text)
+        update_slots(lambda state: midi.apply_command(state, cmd)[0])
+    except ValueError as e:
+        sys.exit(f"rpi-audiod: {e}")
+    except OSError as e:
+        sys.exit(f"rpi-audiod: cannot save {STATE}: {e} (run it as root or as the rpi-audio user)")
+    print("rpi-audiod: saved; the service applies it within a second or two")
+
+
+def main():
+    p = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
+    sub = p.add_subparsers(dest="cmd")
+    sub.add_parser("run")
+    sub.add_parser("status")
+    a = sub.add_parser("assign")
+    a.add_argument("identity")
+    a.add_argument("--in", dest="in_", type=int, help="first gadget IN channel (Pi -> host)")
+    a.add_argument("--out", type=int, help="first gadget OUT channel (host -> Pi)")
+    a.add_argument("--midi", type=int, help="gadget MIDI port, for IDENTITY/P (P defaults to 0)")
+    for verb, last in (("mute", "on|off"), ("volume", "PERCENT")):
+        v = sub.add_parser(verb)
+        v.add_argument("identity")
+        v.add_argument("direction", help="in|out")
+        v.add_argument("value", metavar=last)
+    args = p.parse_args()
+    if args.cmd == "status":
+        return cmd_status(args)
+    if args.cmd == "assign":
+        keys = [f"{k}={v}" for k, v in (("in", args.in_), ("out", args.out), ("midi", args.midi)) if v is not None]
+        return cmd_change(" ".join(["assign", args.identity, *keys]))
+    if args.cmd in ("mute", "volume"):
+        return cmd_change(" ".join([args.cmd, args.identity, args.direction, args.value]))
+    daemon = Daemon(load_config())
+
+    def stop(*_):
+        daemon.stopping = True
+
+    signal.signal(signal.SIGTERM, stop)
+    signal.signal(signal.SIGINT, stop)
+    daemon.loop()
+
+
+if __name__ == "__main__":
+    main()

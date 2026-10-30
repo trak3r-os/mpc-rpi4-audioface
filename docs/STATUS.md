@@ -1,10 +1,40 @@
-# Estado: 2026-10-29 (noche)
+# Estado: 2026-10-30 (mediodía)
 
-**Fase:** F1 cumplida con la Force a 26×26 S16: canales en orden, 30 minutos de ida y vuelta sin cortes y los dos órdenes de arranque probados, **siempre que la Pi esté reproduciendo** (`rpi-audio-keepalive`). Quedan pruebas opcionales: auriculares y S32.
+**Fase:** F1 cumplida con la Force a 26×26 S16, **siempre que la Pi esté reproduciendo**. F2 en marcha:
+
+- banco de JACK con dispositivos USB reales: `docs/hw/2026-10-29-f2-jack-bench.md` y `docs/hw/2026-10-29-f2-usb-devices.md`;
+- **add-on de la Force** que le devuelve su audio interno junto a rpi-audio. Funciona e **instalado**: `docs/hw/2026-10-29-force-internal-io.md`;
+- **`rpi-audiod` v1, primera parte** (`bridge/rpi-audiod/`): jackd ligado al stream del host, puentes zita por tarjeta USB y canales fijos por dispositivo. **45 minutos sin fallos con la Force**, con el add-on activo: `docs/hw/2026-10-30-rpi-audiod.md`. Falta que el usuario lo confirme de oído.
+
+F4 en marcha: **USB MIDI en el gadget** (4 puertos), MIDI de paso por dispositivo y mapa de control (SysEx de texto y CC), según `docs/MIDI.md`. Probado contra el portátil, y en la Force MPC abre el audio y se suscribe a los 4 puertos: `docs/hw/2026-10-30-f4-midi.md`.
+
+## Estado ahora mismo
+
+- **La Force:** `mpc_internal_io` está instalado en la SD de MockbaMod y se carga en cada arranque.
+  - **Ajustes temporales de la prueba de salidas:** MPC Out 1/2 → códec 1/2 y Out 3/4 → códec 3/4. Al acabar, volver a `mpc_internal_io.conf` del repo con `install.sh conf` y reiniciar la Force.
+  - MPC arranca con su audio interno: hay que elegir rpi-audio a mano tras cada arranque [?].
+
+  Para quitar el add-on: `install.sh disable` y reiniciar la Force.
+- **La Pi:**
+  - **gadget con MIDI:** `GADGET_MIDI_PORTS=4`. El puerto 1 es el de control y el GP-150 va al 2. Quitar el MIDI: `GADGET_MIDI_PORTS=0`, `deploy.sh` y un reinicio del gadget;
+  - **`rpi-audiod` corre** (arrancado a mano, no habilitado al arranque). Ha sustituido a `rpi-audio-keepalive`, que sigue habilitado al arranque como respaldo;
+  - el GP-150 tiene niveles guardados de la prueba de CC: captura 100 % y reproducción 80 %, los que ya tenía;
+  - canales: mezclador (CODEC) a IN 1–2 y desde OUT 3–4; GP-150 (ahora 6/4 canales) a IN 3–8 y desde OUT 5–8. IN 25–26 están reservados para el add-on (`tools/hosts/akai-force.toml`);
+  - volver al keepalive: `sudo systemctl start rpi-audio-keepalive` (para `rpi-audiod`).
+- **Pendiente del usuario:**
+  - ¿suenan el mezclador y el GP-150 en MPC?
+  - prueba de salidas: ¿por dónde salen en la Force Out 1/2 y Out 3/4?
+  - ¿aparecen `rpi-audio MIDI 1–4` en Preferences → MIDI? Los pads, los botones y los Q-Links siguen respondiendo (confirmado);
+  - el control desde MPC: la pista y los Q-Links ya están preparados (`docs/hw/2026-10-30-f4-midi.md`). Falta girar el Q-Link 7 físico a tope y volverlo a 0: silencia la entrada del GP-150 y la repone.
+- **MPC Remote** está instalado en la Force y se maneja desde aquí por túnel (`docs/hosts/akai-force-remote.md`, `CLAUDE.md`, excepción 2).
+- **Control desde el host (decidido con el usuario):** por USB y genérico, **no por red ni con un VST como base**. Hecho como función USB MIDI del gadget (`docs/MIDI.md`):
+  - **órdenes de texto en SysEx:** `ping`, `status`, `assign`, `mute` y `volume`, con respuesta. Desde un host Linux: `tools/midictl.py`;
+  - **CC en los canales 16 (IN) y 15 (OUT)** del puerto 1: nivel en 32+N y silencio en 64+N, siendo N el primer canal del dispositivo;
+  - en MPC, el control irá por una pista MIDI o por Q-Links. Un VST instrumento sería solo una interfaz opcional, en `tools/hosts/`: MPC ignora el MIDI que sale de un plugin, pero el plugin puede abrir su propio puerto ALSA [ext] (sd88me, `docs/NOTES.md`). Lo instalaría el usuario.
 
 ## Hecho
 
-- **Repo:** `git init` (rama `main`, **sin commits**), `LICENSE` (GPL-3.0-or-later), `CLAUDE.md`, `.gitignore` (`out/`), `.flake8`.
+- **Repo:** rama `main`, un commit (`009ee06`) y cambios sin commitear desde entonces. `LICENSE` (GPL-3.0-or-later), `CLAUDE.md`, `.gitignore` (`out/`), `.flake8`.
 - **Documentación:** `docs/PLAN.md` v2, `docs/hosts/akai-force.md` y las sesiones `docs/hw/2026-10-29-force-baseline.md`, `docs/hw/2026-10-29-f1-laptop.md` y `docs/hw/2026-10-29-f1-force.md`.
 - **La Pi:**
   - sudo sin contraseña para `no3z`;
@@ -31,7 +61,7 @@
   - `hosts/akai-force-probe.sh`;
   - `gadget-watch.sh`: estado del UDC, ritmos, interrupciones y registros del dwc2 en la Pi. Con `PLAY=26:S16_LE`, reproduce en el gadget mientras el host transmite;
   - `hosts/akai-force-watch.sh`: estado y punteros de los streams de MPC, en solo lectura;
-  - **`rpi-audio-keepalive.service`** (instalado, activo y habilitado al arranque, igual que `rpi-audio-gadget`): reproduce en el gadget mientras el host transmite, con FIFO 70 y un usuario dinámico. `KEEPALIVE_SOURCE=tones` durante F1, `silence` para el uso normal.
+  - **`rpi-audio-keepalive.service`** (instalado, activo y habilitado al arranque, igual que `rpi-audio-gadget`): reproduce en el gadget mientras el host transmite, con FIFO 70 y un usuario dinámico. Ahora con `KEEPALIVE_SOURCE=silence`; para las pruebas de ida y vuelta, `tones`.
 
 ## Hechos que conviene recordar
 
@@ -50,15 +80,27 @@
   - la Pi siempre ve VBUS (el de su fuente), así que **no puede detectar por VBUS que el host se ha ido**. El motor tiene que fiarse de "Capture/Playback Rate", no del estado del UDC;
   - Pi y host comparten masa, lo que puede dar lazos de masa en las salidas analógicas (el pHAT DAC).
 
+- **Hechos de esta noche [Pi][Force]:**
+  - `boot.sh` de MockbaMod lanza los add-ons en paralelo y se pisan la lista de `LD_PRELOAD`. El script del add-on espera 0,5 s y la reescribe limpia;
+  - **jackd no sobrevive a que el host desaparezca**: el driver para, pero el proceso sigue vivo con el gadget abierto;
+  - MPC arrancó dos veces con su audio interno, sin abrir rpi-audio. Está por ver si es porque la Pi no reproducía [?].
+
 ## Siguiente
 
-1. **Terminar F1 con la Force** (`docs/PLAN.md` F1, punto 3):
-   - comprobar que los auriculares de la Force se apagan al elegir rpi-audio;
-   - opcional: S32 con bint 1 (más bits para el GP-150), con la Pi en tiempo real.
-2. Pasar `KEEPALIVE_SOURCE` a `silence` cuando acaben las pruebas con tonos, para no meter tonos en las entradas de la Force durante el uso normal.
-3. F1b (32 canales y parche de `u_audio` para el IN en reposo) o F2 (motor), a decidir.
-
-Durante las pruebas con la Force, `rpi-audio-keepalive` tiene que estar activo. Si se para, la Force acaba dando error y hay que volver a elegir rpi-audio en sus preferencias. `gadget-watch.sh` sin `PLAY` sirve para observar; con `PLAY` choca con el keepalive.
+1. **F4:**
+   - la confirmación del usuario y el control desde MPC (arriba);
+   - un arranque de la Force con el gadget compuesto ya enchufado, para ver si MidiLoop encuentra la superficie;
+   - el clock de la Force hacia el Tracker, vigilando los chasquidos;
+   - aplicar lo que salga de la revisión del código.
+2. **El add-on de la Force:**
+   - acabar la prueba de salidas, devolver `mpc_internal_io.conf` del repo con `install.sh conf` y reiniciar la Force;
+   - un soak largo;
+   - entender por qué MPC ya no abre rpi-audio solo al arrancar [?].
+3. **`rpi-audiod`:**
+   - hotplug real del GP-150;
+   - habilitarlo al arranque (`deploy.sh --enable`);
+   - lo que falta de v1: presupuesto FS previo, perfiles en `config/devices.d/` y la CLI `rpi-audio`.
+4. Pendiente de F1, opcional: S32 con bint 1.
 
 ## Pruebas de tonos
 

@@ -1,0 +1,40 @@
+# rpi-audiod settings, installed as /etc/rpi-audio/rpi-audio.toml. Files in
+# /etc/rpi-audio/rpi-audio.d/*.toml are read after it and override it, table by
+# table (host-specific ones come from tools/hosts/, e.g. `deploy.sh --host akai-force`).
+# The gadget's channels and sample size come from gadget.env.
+
+[gadget]
+card = "UAC2Gadget"          # ALSA card id of the gadget on the Pi
+
+[engine]
+# jackd on the gadget while the host streams both ways (mode A, docs/PLAN.md §2).
+# 26 ch S16 at 44.1 kHz run at a period of 64 (docs/hw/2026-10-29-f2-jack-bench.md).
+period = 64
+periods = 3
+priority = 70
+
+[bridge]
+# zita-a2j / zita-j2a per device direction: period and number of periods.
+period = 256
+periods = 2
+# Device rate: the first of these the device supports, otherwise its highest.
+# 48000 first: a PCM2902 (Behringer mixers) failed to capture at 44100 next to
+# another full-speed device (docs/hw/2026-10-29-f2-usb-devices.md).
+rates = [48000, 44100]
+# A device whose playback volume comes up at 0 on every channel (the GP-150 does)
+# is raised to this, so it is not silent.
+min_volume = "80%"
+# ALSA card ids never bridged.
+ignore = []
+
+[midi]
+# The gadget's USB MIDI function (GADGET_MIDI_PORTS and GADGET_MIDI_ID in gadget.env, docs/MIDI.md).
+control_port = 1             # the port that carries the control map; devices get the others
+channel_in = 16              # control CCs for what goes to the host (IN) on that port
+channel_out = 15             # and for what comes from it (OUT)
+
+[slots]
+# Gadget channels never given to a device, 1-based. "in" is Pi -> host,
+# "out" is host -> Pi; out 1-2 are usually the host's main mix.
+reserve_in = []
+reserve_out = [1, 2]

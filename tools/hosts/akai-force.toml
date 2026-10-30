@@ -1,0 +1,7 @@
+# rpi-audiod settings for the Akai Force, installed by `tools/deploy.sh --host akai-force`
+# as /etc/rpi-audio/rpi-audio.d/akai-force.toml.
+
+[slots]
+# With the mpc_internal_io add-on, MPC inputs 25/26 are the Force's own inputs
+# and whatever the Pi sends there is replaced (docs/hosts/akai-force-internal-io.md).
+reserve_in = [25, 26]
