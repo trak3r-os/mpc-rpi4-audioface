@@ -1,4 +1,4 @@
-# Estado: 2026-10-30 (15:35)
+# Estado: 2026-10-30 (17:00)
 
 **Fase:** F1 cumplida con la Force a 26×26 S16, **siempre que la Pi esté reproduciendo**. F2 en marcha:
 
@@ -119,6 +119,16 @@ Datos de muestra en la Pi:
 - presets 1 "Live" y 2 "Quiet" (GP-150 IN al 60 %).
 
 MPC queda en rpi-audio, con un proyecto nuevo sin guardar: la pista Plugin 001 de la plantilla lleva el panel.
+
+**En curso (17:00): matriz de soaks para el `-5`** (`docs/hw/2026-10-30-boot-soak.md`, sección 9). Capturas en `out/soak-*/` (usbmon de la Force por minuto, `minutes.txt` con el resumen de `tools/usbmon-check.py`):
+- **A** (panel abierto, `aplaymidi` por respuesta, `ondemand`, req 4): ~6 paquetes IN vacíos por minuto y un rearranque de streams de MPC cada 2–5 min; ningún `-5` en 30 min.
+- **B** (sin panel): **0 vacíos y 0 rearranques en 21 min**. El panel (o su tráfico MIDI) es el disparador.
+- **C1** (panel, emisor MIDI persistente nuevo ya desplegado, 0.1.0): en marcha desde las 16:50.
+- Faltan: **C2** (governor `performance`: `systemctl enable --now rpi-audio-cpu`), **D** (`GADGET_REQ_NUMBER=8`), **E** (parche de `u_audio`: `tools/kernel/u_audio/build.sh build` y `load`, hasta el siguiente reinicio; probar cambiando Internal → rpi-audio varias veces y reiniciando `rpi-audiod`).
+- MPC queda en rpi-audio, proyecto nuevo sin guardar con la pista "Plugin 001" (panel) y "Audio 001".
+- El add-on con el log en hilo propio está compilado pero **no instalado** en la Force (necesita reiniciar MPC).
+
+Hecho también hoy por la tarde (todo en GitHub, CI verde): versión 0.1.0, `rpi-audiod doctor`, `rpi-audio-cpu.service`, `install.sh --tune-boot` (opt-in), parche de `u_audio` (sin cargar aún), 54 tests del supervisor y CI, emisor MIDI por raw MIDI (probado en la Force: el panel funciona), la reserva del presupuesto USB tras un crash.
 
 Queda:
 1. **Un `capture error -5` espontáneo** a los 20 minutos, con el panel abierto (`docs/hw/2026-10-30-boot-soak.md`, sección 8). Separar la causa: soak con el panel abierto y otro sin él.
