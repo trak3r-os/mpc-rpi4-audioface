@@ -1,14 +1,83 @@
 # rpi-audio
 
-A Raspberry Pi 4 that works as a USB audio hub.
+[![CI](https://github.com/trak3r-os/mpc-rpi4-audioface/actions/workflows/ci.yml/badge.svg)](https://github.com/trak3r-os/mpc-rpi4-audioface/actions/workflows/ci.yml)
+![License: GPL-3.0-or-later](https://img.shields.io/badge/license-GPL--3.0--or--later-blue)
 
-To the computer or sampler it is plugged into (the host), the Pi looks like one USB audio interface: **26 in × 26 out at 44.1 kHz, 16-bit by default**, plus **4 USB MIDI ports**. Behind it, the Pi takes the USB audio and MIDI devices you plug into its USB-A ports and bridges them into that one interface.
+**A Raspberry Pi 4 that works as a USB audio hub.** Plug your USB sound cards, guitar processors, mixers and MIDI gear into the Pi, and plug the Pi into a computer or a standalone sampler. The host sees one class-compliant USB audio interface, **26 in × 26 out at 44.1 kHz, 16-bit by default**, plus **4 USB MIDI ports**. Each device gets its own channels.
 
-- Each device gets its own block of channels, and keeps it. A device that comes back after a reboot or a re-plug gets the same slot.
-- You can name devices and channels, set each device's level, mute it, and save routing presets.
-- The host can control all of this over USB MIDI, so nothing needs a network.
+```mermaid
+flowchart LR
+    subgraph gear["Your USB gear"]
+        gp["Guitar processor"]
+        mix["Mixer or sound card"]
+        kb["MIDI keyboard"]
+    end
+    pi["Raspberry Pi 4<br/>running rpi-audio"]
+    host["Host<br/>Akai Force, laptop, ..."]
+    gp -- "audio + MIDI" --> pi
+    mix -- "audio" --> pi
+    kb -- "MIDI" --> pi
+    pi <-->|"USB-C: one audio interface<br/>26 in × 26 out + 4 MIDI ports"| host
+```
 
-rpi-audio is generic. It has been tested with a Linux laptop and an Akai Force as hosts. The Force is the first host we tried, not a requirement. Anything specific to one host lives in `docs/hosts/` and `tools/hosts/`.
+It was built for the Akai Force, which can use only one USB audio interface at a time. Nothing in it is tied to the Force: any host that supports USB Audio Class 2 should work. It has been tested with a Linux laptop and an Akai Force. Anything specific to one host lives in `docs/hosts/` and `tools/hosts/`.
+
+![The rpi-audio Panel inside MPC on an Akai Force: two devices with their channels, levels and mutes, and the 8 routing presets](docs/img/panel-on-force.png)
+
+*The optional rpi-audio Panel inside MPC on an Akai Force. It shows each device plugged into the Pi, its channels on the interface, its levels and mutes, and the 8 routing presets.*
+
+## What it does
+
+- **One interface for many devices.** Every USB audio device on the Pi shows up as a block of channels on the one interface the host sees.
+- **Sticky channels.** Each device keeps its block of channels. A device that comes back after a reboot or a re-plug gets the same slot, so your host project keeps working.
+- **Names, levels, mutes and presets.** You can name devices and channels, set each device's level, mute it, and save up to 8 routing presets.
+- **MIDI goes through too.** The MIDI ports of the devices on the Pi reach the host over the gadget's MIDI cables, in both directions.
+- **Control from the host over USB.** One MIDI cable is a control port that takes SysEx text commands, CCs and Program Changes. No network and no app needed.
+- **USB budget check.** The Pi's USB-A ports can carry only a few full-speed audio devices at once. `rpi-audiod` works out each device's load before opening it and tells you when one does not fit.
+- **Runs without a screen.** Everything starts at boot, and `rpi-audiod doctor` checks the installation.
+
+## How it works
+
+```mermaid
+flowchart LR
+    host["Host"]
+    subgraph pi["Raspberry Pi 4"]
+        gadget["USB gadget<br/>UAC2 audio + USB MIDI"]
+        jack["JACK<br/>runs on the host's clock"]
+        b1["zita bridge<br/>48 → 44.1 kHz"]
+        b2["zita bridge<br/>48 → 44.1 kHz"]
+        ctl["rpi-audiod<br/>commands, levels, presets"]
+        gadget <-->|"26 × 26 channels"| jack
+        jack <--> b1
+        jack <--> b2
+        gadget <-->|"MIDI cable 1<br/>control"| ctl
+    end
+    host <-->|"USB-C"| gadget
+    b1 <-->|"IN 3-8, OUT 5-8"| gp["Guitar processor"]
+    b2 <-->|"IN 1-2, OUT 3-4"| mix["Mixer"]
+    gadget <-->|"MIDI cable 2"| gp
+```
+
+1. **The USB gadget.** The Pi 4's USB-C port can act as a USB *device*. `gadget/` sets up a standard USB Audio Class 2 function and a USB MIDI function through configfs, so the host uses its built-in drivers.
+2. **One clock.** JACK runs on the gadget, so the Pi follows the host's sample clock. Each USB device has its own clock, and often its own rate (48 kHz is common). For each device, `rpi-audiod` starts a pair of zita-ajbridge bridges that resample on the fly to keep it in step.
+3. **rpi-audiod** watches devices come and go and gives each one its block of gadget channels. It starts and stops the bridges, applies levels and mutes, and saves and loads presets. It also keeps the host fed, with silence if nothing else, because some hosts (the Akai Force) reset when the interface goes quiet while they stream.
+4. **MIDI.** Each MIDI port of a device gets a gadget cable of its own, through kernel sequencer connections. Cable 1 goes to `rpi-audiod` as the control port.
+
+The control port is how a host, or the panel shown above, talks to the Pi:
+
+```mermaid
+sequenceDiagram
+    participant H as Host (e.g. rpi-audio Panel in MPC)
+    participant D as rpi-audiod on the Pi
+    H->>D: SysEx "status"
+    D-->>H: devices, channels, levels, presets
+    H->>D: SysEx "mute GP150 in on"
+    D-->>H: "ok"
+    H->>D: CC 32+N on channel 16 (level of the device on IN channel N)
+    H->>D: Program Change 1 on channel 16 (load preset 2)
+```
+
+The full protocol is in [docs/MIDI.md](docs/MIDI.md).
 
 ## What you need
 
@@ -145,7 +214,12 @@ Host notes are in [docs/hosts/akai-force.md](docs/hosts/akai-force.md).
 
 A VST2 plugin for MPC that shows the hub on the Force's screen: each device with its channel range, name, level and mute, the 8 presets, and the link state. It makes no sound. The Q-Links control levels. Details: [docs/hosts/akai-force-panel.md](docs/hosts/akai-force-panel.md).
 
-**Status: tested on an Akai Force (MPC 3.9.1.2, MockbaMod) on 2026-10-30.** It installs with its installer, loads in MPC, connects to the Pi and shows the devices, names, channel names, levels and presets. MUTE, the name picker, presets and a fader drag all reached `rpi-audiod`, and it was retested the same day on sd88me's current wrapper. Not tested yet: the physical Q-Links, SAVE, "On project load", reopening a saved project, and a long run: once, after 20 minutes with the panel open, MPC dropped rpi-audio with `capture error -5`, cause not known yet.
+![The panel's name picker: tap a device name and pick a label such as Guitar, Synth, Keys or Mixer](docs/img/panel-name-picker.png)
+
+**Status: tested on an Akai Force (MPC 3.9.1.2, MockbaMod) on 2026-10-30.**
+- **What works:** it installs with its installer, loads in MPC, connects to the Pi and shows the devices, names, channel names, levels and presets. MUTE, the name picker, presets and a fader drag all reached `rpi-audiod`.
+- **Long runs:** with the panel open, MPC used to restart its streams every few minutes. The panel's status replies went out as 1.5 KB bursts that delayed the gadget's audio on the Pi's USB controller. `rpi-audiod` now sends them in small pieces. In a 20-minute run with the panel open, the Pi did not miss a single audio packet, and MPC restarted its streams once, for a reason not known yet.
+- **Not tested yet:** the physical Q-Links, SAVE, "On project load" and reopening a saved project.
 
 Build it, copy the folder to the Force and run its installer as root. Save your MPC project first, because the installer restarts MPC.
 
@@ -179,7 +253,8 @@ To remove it: `ssh root@force.local sh /data/mpc-addins/rpi-audio-internal-io/un
 ### Known MPC behaviour
 
 - **MPC does not remember the USB audio device across reboots.** It saves "Internal" even when you pick rpi-audio. After each boot, reselect it in **Preferences > Audio Device**.
-- **On the very first open after plugging in, MPC may fall back to internal audio once** (it logs `capture error -5`). Select rpi-audio again. The cause is in the kernel's gadget driver: it does not keep the 44,100 frames per second pace until something plays into the gadget, and jackd takes about half a second to start. It is documented in `docs/hw/2026-10-30-boot-soak.md`.
+- **On the very first open after plugging in, MPC may fall back to internal audio once** (it logs `capture error -5`). Select rpi-audio again. The cause is in the kernel's gadget driver: it does not keep the 44,100 frames per second pace until something plays into the gadget, and jackd takes about half a second to start. It is documented in `docs/hw/2026-10-30-boot-soak.md`. An experimental kernel fix is in `tools/kernel/u_audio/`; it is not installed by default.
+- **MPC refreshes its list of audio devices only when you open Preferences.** If rpi-audio is missing after a re-plug, leave Preferences and open it again.
 - **Do not restart the Pi while MPC is streaming.** Once, a restart took down the Force's whole internal USB hub. Later tests with a gadget shutdown step were clean, but the cause is not isolated. Quit MPC first or stop the gadget first.
 - MPC Remote, a tool for driving MPC from a laptop, is described in `docs/hosts/akai-force-remote.md`. It is test tooling, and you do not need it.
 
