@@ -25,16 +25,18 @@ A change shows as made at once and is confirmed when the service's status catche
 
 ## Wiring (a 9-pin encoder board with an I2C OLED, and a Pimoroni pHAT DAC)
 
-| Board pin | Raspberry Pi pin |
-|---|---|
-| VCC | 1 (3.3 V; do not use 5 V: the buttons may be pulled up to VCC) |
-| GND | 6 |
-| SDA | 3 (GPIO 2) |
-| SCL | 5 (GPIO 3) |
-| TRA | 11 (GPIO 17) |
-| TRB | 13 (GPIO 27) |
-| PUSH | 15 (GPIO 22) |
-| BACK | 16 (GPIO 23) |
-| CONFIRM | 18 (GPIO 24) |
+The pins are the ones the same board used with MiniDexed on a Raspberry Pi 3B, read from the `minidexed.ini` on its SD card (`EncoderPin*`, `ButtonPin*`; BCM numbers). The 3B and the 4B share the 40-pin header.
 
-The pHAT DAC uses GPIO 18, 19 and 21 (I2S), so there is no conflict. Its header is soldered from below: the wires go to the pads on top. Enabling I2C and the pHAT needs `dtparam=i2c_arm=on` and `dtoverlay=hifiberry-dac` in the boot config and a reboot.
+| Board pin | Raspberry Pi pin | MiniDexed setting |
+|---|---|---|
+| VCC | 1 (3.3 V; not 5 V: the buttons may be pulled up to VCC) | |
+| GND | 6 | |
+| SDA | 3 (GPIO 2) | I2C bus 1 |
+| SCL | 5 (GPIO 3) | I2C bus 1 |
+| TRA | 11 (GPIO 17) | `EncoderPinClock` (the board's TRA/TRB order is a guess: swapping them only reverses the turning direction) |
+| TRB | 13 (GPIO 27) | `EncoderPinData` |
+| PUSH | 15 (GPIO 22) | `EncoderPinButton` |
+| CONFIRM | 16 (GPIO 23) | `ButtonPinSelect` |
+| BACK | 18 (GPIO 24) | `ButtonPinBack` |
+
+The OLED is an **SH1106**, 128×64, at I2C address **0x3C** (`SH1106LCDI2CAddress=0x3C` in the same file), not an SSD1306. The pHAT DAC is on I2S (`SoundDevice=i2s`) and uses GPIO 18, 19 and 21, so there is no conflict. Its header is soldered from below: the wires go to the pads on top. Enabling I2C and the pHAT needs `dtparam=i2c_arm=on` and `dtoverlay=hifiberry-dac` in the boot config and a reboot.
