@@ -19,6 +19,7 @@ Eight rows of 21 characters (a 5×7 font in 6×8-pixel cells), the first row a t
 
 - **Presets:** the eight slots. CONFIRM loads one; push saves into it.
 - **Routes:** first a destination (every stereo pair of every device with a playback), then the sources that can feed it, as `[ ]` and `[x]`. `[~]` is a route that waits for a device or for USB bandwidth. A device is never offered to itself.
+- **MIDI:** the same two steps for MIDI: first a destination (every port that receives), then the ports that can feed it as `[ ]` and `[x]` (`midiroute` / `midiunroute`). A device with several ports shows the port number after its name. With a host it is empty: the status lists the MIDI ports only in standalone mode.
 - **Devices:** each device's `In` (what it sends) and `Out` (what it receives) mute and level. A `~` marks a device waiting for USB bandwidth.
 
 A change shows as made at once and is confirmed when the service's status catches up (within a couple of seconds).

@@ -21,6 +21,7 @@ The `[standalone]` table of `rpi-audio.toml` names the card and its format (`car
 - The card appears in `rpi-audiod status` and on the display as a device with an output only. `route usb-mixer local-dac` plays the mixer's capture into it. A route may end in several places at once (the card and another device), and JACK adds what arrives at the same input.
 - `mute local-dac out on` cuts what goes into the card. The card has no volume of its own: use each source device's level. (A PCM5102A board has no mixer controls.)
 - MIDI: the gadget's MIDI ports do not exist without a host, so the control port and the MIDI mapping are off. Commands come from the command line and the display.
+- **MIDI between devices:** `midiroute usb-keys usb-tracker` sends what a keyboard's MIDI port sends into the tracker's, and `midiunroute` removes it (`docs/MIDI.md`, "MIDI routes between devices"). Every MIDI port of every USB device can be an end, audio or not. In this mode `rpi-audiod` keeps the subscriptions between USB devices exactly as the routes say.
 - If `jackd` keeps failing (for example the card is not there yet because the overlay needs a reboot), `rpi-audiod` waits 10 s and tries again.
 - `rpi-audiod doctor` skips the USB device controller check and treats the gadget service as optional.
 

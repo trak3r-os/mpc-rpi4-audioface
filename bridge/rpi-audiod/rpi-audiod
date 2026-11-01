@@ -24,6 +24,8 @@ the device-to-device routes (docs/MIDI.md). The gadget and its slots are not tou
   rpi-audiod name IDENTITY in|out K [TEXT...] name its channel K (a device name cannot start with "in N" or "out N")
   rpi-audiod route SRC DST [--src P] [--dst P]  play what SRC captures into DST (stereo pair P of each, 1 by default)
   rpi-audiod unroute SRC DST [--src P] [--dst P]  remove it (no pair: every route between them)
+  rpi-audiod midiroute SRC DST                send what SRC's MIDI port sends into DST's (IDENTITY or IDENTITY/PORT)
+  rpi-audiod midiunroute SRC DST              remove it (an end without a port is any of its ports)
   rpi-audiod cmd TEXT...                      any command above as one text, as the display service sends it
   rpi-audiod preset save N [TEXT...]          save the routing state as preset N (1..8)
   rpi-audiod preset load N | clear N          restore or delete it; Program Change 0..7 on the control
@@ -57,6 +59,7 @@ from pathlib import Path
 
 import audiod
 import midi
+import midiroute
 import presets
 import routing
 import usb
@@ -715,6 +718,10 @@ class Daemon:
         self.muted = {IN: set(), OUT: set()}
         self.routes = []                     # device-to-device routes (routing.py)
         self.route_state = {}                # Route -> why it is not made yet, "" when it is
+        self.midi_links = []                 # device-to-device MIDI routes (midiroute.py)
+        self.midi_state = {}                 # Link -> why it is not made yet, "" when it is
+        self.midi_ports = []                 # the devices' MIDI ports, for the status
+        self.midi_made = set()               # subscriptions this service made (host mode drops only those)
         self.volumes = {}                    # (identity, direction) -> level last set
         self.seen_usbbus = set()
         self.profiles, self.known = load_profiles(), {}   # device profiles; scan()'s cache
@@ -728,7 +735,7 @@ class Daemon:
         midi_id = gadget_setting("GADGET_MIDI_ID", cfg["midi"].get("card", "MIDIGadget"))
         self.midi = Midi(cfg, ports, midi_id) if ports else None
         self.rates = (0, 0)
-        self.next_scan = self.next_routes = self.next_status = self.next_midi = 0.0
+        self.next_scan = self.next_routes = self.next_status = self.next_midi = self.next_midi_routes = 0.0
         self.stopping = False
 
     # --- what feeds the gadget -------------------------------------------------------
@@ -868,6 +875,7 @@ class Daemon:
         """The saved mutes, device-to-device routes and levels."""
         self.muted = {d: set(slots.get("mute", {}).get(d, [])) for d in (IN, OUT)}
         self.routes = routing.from_state(slots)
+        self.midi_links = midiroute.from_state(slots)
         self.set_volumes(slots.get("volume", {}))
 
     def set_volumes(self, saved):
@@ -968,6 +976,36 @@ class Daemon:
             if run("jack_connect", src, dst).returncode == 0:
                 log(f"rpi-audiod: connected {src} -> {dst}")
 
+    def connect_midi_routes(self):
+        """Brings the sequencer subscriptions between the USB devices' MIDI ports to the stored MIDI routes.
+        Standalone, every subscription between two devices is ours; with a host only the ones made here are, so
+        what someone connected by hand stays."""
+        if not (self.standalone or self.midi_links or self.midi_made):
+            self.midi_state = {}
+            return
+        clients, conns = midi.parse_aconnect(run("aconnect", "-l").stdout)
+        caps = midi.parse_seq_caps(read("/proc/asound/seq/clients"))
+        eps = midi.endpoints(clients, self.cards)
+        subs, pending = midiroute.wanted(self.midi_links, eps, caps)
+        self.midi_state = {link: "" for link in self.midi_links}
+        self.midi_state.update(pending)
+        custom = load_slots().get("names", {})
+        self.midi_ports = [{"identity": ident, "port": port, "name": presets.device_name("", custom.get(ident, {}))
+                            or clients[c].name, "in": caps.get((c, port), (False, False))[0],
+                            "out": caps.get((c, port), (False, False))[1]}
+                           for ep, c, port in eps for ident in [midiroute.split(ep)[0]]
+                           if any(caps.get((c, port), (False, False)))]
+        devices = {c.number for c in clients.values() if c.card in self.cards}
+        connect, disconnect = midiroute.reconcile(subs, conns, devices, None if self.standalone else self.midi_made)
+        for src, dst in disconnect:
+            if run("aconnect", "-d", "%d:%d" % src, "%d:%d" % dst).returncode == 0:
+                self.midi_made.discard((src, dst))
+                log("rpi-audiod: removed MIDI %d:%d -> %d:%d" % (*src, *dst))
+        for src, dst in connect:
+            if run("aconnect", "%d:%d" % src, "%d:%d" % dst).returncode == 0:
+                self.midi_made.add((src, dst))
+                log("rpi-audiod: connected MIDI %d:%d -> %d:%d" % (*src, *dst))
+
     def starts(self):
         """{direction: {first gadget channel: identity}}, for the control CCs."""
         out = {IN: {}, OUT: {}}
@@ -1034,7 +1072,10 @@ class Daemon:
                 **({"routes": [{**routing.entry(r), "waiting": why or None} for r, why in self.route_state.items()]}
                    if self.route_state else {}),
                 **({"standalone": {k: self.sink[k] for k in ("identity", "name", "card", "channels", "rate")}}
-                   if self.standalone else {})}
+                   if self.standalone else {}),
+                **({"midi_routes": [{**midiroute.entry(k), "waiting": why or None}
+                                    for k, why in self.midi_state.items()]} if self.midi_state else {}),
+                **({"midi_ports": self.midi_ports} if self.standalone else {})}
 
     # --- main loop ---------------------------------------------------------------------
 
@@ -1078,6 +1119,9 @@ class Daemon:
                 if now >= self.next_routes:
                     self.connect_routes()
                     self.next_routes = now + 1.0
+            if now >= self.next_midi_routes:
+                self.connect_midi_routes()
+                self.next_midi_routes = now + 1.0
             if self.midi:
                 if now >= self.next_midi:
                     self.midi.tick(self.cards, now)
@@ -1252,6 +1296,10 @@ def main():
         v.add_argument("--dst", dest="dst_pair", type=int, help="stereo pair of the destination, from 1")
     c = sub.add_parser("cmd")
     c.add_argument("words", nargs="+", metavar="TEXT", help="a command of docs/MIDI.md, e.g. mute ID in on")
+    for verb in ("midiroute", "midiunroute"):
+        v = sub.add_parser(verb)
+        v.add_argument("src", help="IDENTITY or IDENTITY/PORT of the MIDI port that sends")
+        v.add_argument("dst", help="IDENTITY or IDENTITY/PORT of the MIDI port that receives")
     r = sub.add_parser("preset")
     r.add_argument("action", choices=("save", "load", "clear"))
     r.add_argument("slot", help="1..8")
@@ -1269,6 +1317,8 @@ def main():
     if args.cmd in ("route", "unroute"):
         keys = [f"{k}={v}" for k, v in (("src", args.src_pair), ("dst", args.dst_pair)) if v is not None]
         return cmd_change(" ".join([args.cmd, args.src, args.dst, *keys]))
+    if args.cmd in ("midiroute", "midiunroute"):
+        return cmd_change(f"{args.cmd} {args.src} {args.dst}")
     if args.cmd == "cmd":
         return cmd_change(" ".join(args.words))
     if args.cmd == "name":

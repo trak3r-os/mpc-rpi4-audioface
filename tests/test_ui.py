@@ -164,6 +164,55 @@ def test_device_mutes_and_levels():
     assert press(u, st, "back") == [] and text(u, st)[0].strip() == "GP-150"
 
 
+def midi_status(routes=None):
+    ports = [{"identity": "usb-keys", "port": 0, "name": "Keys", "in": True, "out": False},
+             {"identity": TRK, "port": 0, "name": "Tracker", "in": True, "out": True},
+             {"identity": "usb-synth", "port": 0, "name": "Synth", "in": True, "out": True},
+             {"identity": "usb-synth", "port": 1, "name": "Synth", "in": True, "out": True}]
+    return status(midi_ports=ports, **({"midi_routes": routes} if routes else {}))
+
+
+def test_midi_routes_pick_a_destination_then_toggle_its_sources():
+    u, st = display.UI(), midi_status()
+    press(u, st, "cw", "cw", "cw", "confirm")   # Home -> MIDI
+    assert text(u, st)[0].strip() == "MIDI to..."
+    assert [r.rstrip() for r in text(u, st)[1:5]] == [">Tracker", " Synth 1", " Synth 2", ""]   # only what receives
+    press(u, st, "confirm")
+    assert text(u, st)[0].strip() == "-> Tracker"
+    assert [r.rstrip() for r in text(u, st)[1:5]] == [">[ ] Keys", " [ ] Synth 1", " [ ] Synth 2", ""]
+    assert press(u, st, "confirm", now=5.0) == [f"midiroute usb-keys/0 {TRK}/0"]
+    assert text(u, st, 5.5)[1].startswith(">[x] Keys")   # shown before the service has it
+    on = midi_status(routes=[{"src": "usb-keys/0", "dst": f"{TRK}/0"}])
+    assert text(u, on, 6.0)[1].startswith(">[x] Keys") and not u.overlay
+    assert press(u, on, "confirm", now=6.0) == [f"midiunroute usb-keys/0 {TRK}/0"]
+    waiting = midi_status(routes=[{"src": "usb-keys/0", "dst": f"{TRK}/0", "waiting": "not here"}])
+    assert text(u, waiting, 30.0)[1].startswith(">[~] Keys")
+
+
+def test_a_device_is_not_offered_its_own_midi_ports():
+    u, st = display.UI(), midi_status()
+    press(u, st, "cw", "cw", "cw", "confirm", "cw", "confirm")   # MIDI -> Synth 1
+    assert [r.strip(">").strip() for r in text(u, st)[1:4]] == ["[ ] Keys", "[ ] Tracker", ""]   # not Synth's own
+    assert press(u, st, "push", now=1.0) == ["midiroute usb-keys/0 usb-synth/0"]
+
+
+def test_the_midi_screen_with_no_ports_is_empty_and_the_commands_are_the_services():
+    u = display.UI()
+    press(u, {}, "cw", "cw", "cw", "confirm")
+    assert text(u, {})[1].strip() == "(nothing here)"
+    st, state = midi_status(), {}
+    for events in (("cw", "cw", "cw", "confirm", "confirm", "confirm"),):
+        (sent,) = press(display.UI(), st, *events)
+        cmd = midi.parse_command(sent)
+        state, _ = midi.apply_command(state, cmd)
+    assert state["midi_routes"] == [{"src": "usb-keys/0", "dst": f"{TRK}/0"}]
+    gone = midi_status()
+    gone["midi_ports"] = [p for p in gone["midi_ports"] if p["identity"] != TRK]
+    v = display.UI()
+    press(v, st, "cw", "cw", "cw", "confirm", "confirm")
+    assert text(v, gone)[0].strip() == "-> (gone)"
+
+
 def test_a_local_dac_has_a_mute_and_no_level():
     st = status()
     st["devices"].append({"identity": "local-dac", "card": "sndrpihifiberry", "name": "pHAT DAC", "local": True,

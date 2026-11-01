@@ -9,7 +9,8 @@ import re
 NAME_MAX = 24          # a device name or a preset name
 CHANNEL_NAME_MAX = 16  # the name of one device channel
 SLOTS = 8              # presets 1..8
-STATE_KEYS = ("in", "out", "midi", "mute", "volume", "in_channels", "out_channels", "routes")  # what a preset keeps
+# What a preset keeps: the gadget slots, mutes, levels, and the audio and MIDI routes between devices.
+STATE_KEYS = ("in", "out", "midi", "mute", "volume", "in_channels", "out_channels", "routes", "midi_routes")
 
 
 def set_name(state, identity, text, side=None, channel=None):

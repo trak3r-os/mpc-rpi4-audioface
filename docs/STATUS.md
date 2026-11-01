@@ -61,6 +61,10 @@ Idea del usuario: la Pi como hub sin host (Tracker en "2 OUT / 2 IN", mezclador,
   - **OLED SH1106 128×64 en 0x3C** funcionando, con el menú de `rpi-audio-ui.service` (habilitado, `deploy.sh --enable --hat`). Fuente 5×7, 21 columnas × 8 filas.
   - **encoder** mueve el cursor; **PUSH** y **BACK** funcionan. La pantalla se apaga a los 60 s sin tocar nada y el primer toque solo la enciende.
   - el pHAT DAC aparece como tarjeta ALSA `sndrpihifiberry` y un tono por ella termina bien; **no sé si se oye** [?].
+- **Modo `standalone` (`docs/STANDALONE.md`):**
+  - jackd con el pHAT como driver (solo reproducción) y sin esperar al host; el pHAT es un destino más de las rutas (`local-dac`). Con la Force no cambia nada: es `[engine] mode`, por defecto `host`.
+  - **probado en la Pi [Pi]:** jackd arranca sobre `sndrpihifiberry` (48 kHz, 256×3) y el usuario dice que `route usb-mixer local-dac` hecho desde la pantalla suena por el pHAT ("funciona", 2026-11-01). Fue una prueba temporal (`systemd-run`, unit `sa-try`), con `rpi-audiod.service` parado; **no está instalado como modo permanente** (`deploy.sh --host standalone` lo haría y la Pi dejaría de servir a la Force hasta quitarlo).
+  - **MIDI entre dispositivos** (`midiroute`/`midiunroute`, `bridge/rpi-audiod/midiroute.py`): suscripciones `aconnect` entre los puertos MIDI de dos dispositivos USB, en los dos modos, guardadas en `slots.json` (`midi_routes`) y en los presets. En standalone el servicio es dueño de todas las suscripciones entre dispositivos; con host solo de las que él hizo. Pantalla: menú MIDI. **Probado solo con el `World` falso**, no con dispositivos MIDI reales [?].
 - **Hecho en el repo [repo]:**
   - **rutas dispositivo→dispositivo** (`bridge/rpi-audiod/routing.py`, comandos `route`/`unroute`, clave `routes` de `slots.json` y de los presets, campo `routes` del status, `docs/MIDI.md`). Son conexiones JACK entre los puentes, por pares estéreo, y no tocan las del gadget. Un dispositivo nunca se enruta a sí mismo. Sin nivel por ruta: JACK suma y los niveles son los del dispositivo (`volume`). **Nunca probadas con aparatos reales**, solo con el `World` falso de `tests/test_supervisor.py`.
   - **pantalla:** modelo (`ui.py`), driver SH1106 sin dependencias salvo smbus2 (`sh1106.py`), fuente y render, decodificador del encoder y botones (`inputs.py`), bucle del servicio (`uiservice.py`) y el programa `rpi-audio-ui`. Los comandos van por `rpi-audiod cmd TEXTO`. Ajustes en `[ui]` de `config/rpi-audio.toml`. El audio no depende de la pantalla. Simulador en `tools/ui-sim.py`, capturas de hardware con `tools/panel-test.py` y `tools/oled-test.py`.
@@ -69,7 +73,6 @@ Idea del usuario: la Pi como hub sin host (Tracker en "2 OUT / 2 IN", mezclador,
 - **Falta:**
   - **CONFIRM (GPIO 23):** no llega ninguna pulsación; el usuario lo arreglará. Mientras, PUSH hace lo mismo salvo en Presets.
   - **sentido del encoder:** la primera versión iba al revés; está corregido y el usuario no lo ha confirmado [?].
-  - **modo `standalone`** de `rpi-audiod`: jackd con el pHAT como driver y sin esperar al host. Hoy el motor solo arranca jackd sobre el gadget (modo A). No es el "modo B" de PipeWire del plan. Con la Force no cambia nada.
   - **el Tracker en 2/2:** consumo desde la Pi 4 (1,2 A en total en los USB-A), enumeración, y si su Master de 2 canales incluye el retorno (posible bucle si se enruta de vuelta) [?]. El usuario no tiene acceso al Tracker ahora.
 - `deploy.sh`/`install.sh` reinician `rpi-audiod` (la Force oye un corte): no se despliega esto con ella transmitiendo.
 

@@ -18,6 +18,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path[:0] = [str(ROOT / "bridge" / "rpi-audio-ui"), str(ROOT / "bridge" / "rpi-audiod")]
 import midi  # noqa: E402
+import midiroute  # noqa: E402
 import presets  # noqa: E402
 import routing  # noqa: E402
 import ui as display  # noqa: E402
@@ -25,6 +26,9 @@ import ui as display  # noqa: E402
 DELAY = 1.0   # seconds before a command shows in the status (the service looks within 0.5 s, writes every 2 s)
 DEMO = [("usb-mixer", "CODEC", "Mixer", 2, 0), ("usb-gp150", "GP150", "GP-150", 2, 2),
         ("usb-tracker", "Tracker", "Tracker", 2, 2), ("usb-keys", "Keys", "Keys", 8, 0)]   # id, card, name, in, out
+# id, name, port, sends, receives
+MIDI_PORTS = [("usb-keys", "Keys", 0, True, False), ("usb-tracker", "Tracker", 0, True, True),
+              ("usb-synth", "Synth", 0, True, True), ("usb-synth", "Synth", 1, True, True)]
 KEYS = {"\x1b[C": "cw", "d": "cw", "\x1b[D": "ccw", "a": "ccw", " ": "push", "p": "push", "\r": "confirm",
         "\n": "confirm", "b": "back", "\x7f": "back", "\x1b": "back"}
 
@@ -59,7 +63,11 @@ class Service:
             devices.append(entry)
         routes = [{**routing.entry(r), "waiting": None if {r.src, r.dst} <= present else "not here"}
                   for r in routing.from_state(self.state)]
-        return {"devices": devices, "presets": presets.summary(self.store), **({"routes": routes} if routes else {})}
+        ports = [{"identity": i, "port": port, "name": name, "in": sends, "out": gets}
+                 for i, name, port, sends, gets in MIDI_PORTS]
+        links = [{**midiroute.entry(k), "waiting": None} for k in midiroute.from_state(self.state)]
+        return {"devices": devices, "presets": presets.summary(self.store), "midi_ports": ports,
+                **({"routes": routes} if routes else {}), **({"midi_routes": links} if links else {})}
 
 
 def draw(rows, service_log):

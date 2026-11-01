@@ -59,6 +59,21 @@ def route_key(src, dst, src_pair, dst_pair):
     return (src, dst, src_pair, dst_pair)
 
 
+def midi_ends(status, side):
+    """[(label, endpoint)] for the MIDI ports that send (`side` "in") or receive ("out"), from the status's
+    midi_ports. The endpoint is IDENTITY/PORT; a device with several such ports gets the port number in its label
+    (from 1), as the sequencer numbers them from 0."""
+    ports = [p for p in status.get("midi_ports", []) if p.get(side)]
+    many = {p["identity"] for p in ports if sum(q["identity"] == p["identity"] for q in ports) > 1}
+    return [((p.get("name") or p["identity"]) + (f" {p['port'] + 1}" if p["identity"] in many else ""),
+             f"{p['identity']}/{p['port']}") for p in ports]
+
+
+def stored_midi_routes(status):
+    """{(src endpoint, dst endpoint): waiting reason or None} from the status."""
+    return {(r["src"], r["dst"]): r.get("waiting") for r in status.get("midi_routes", [])}
+
+
 def stored_routes(status):
     """{(src, dst, src pair, dst pair): waiting reason or None} from the status."""
     return {route_key(r["src"], r["dst"], r.get("src_pair", 1), r.get("dst_pair", 1)): r.get("waiting")
@@ -117,7 +132,7 @@ class Home(Menu):
     title = "rpi-audio"
 
     def items(self, ui, status, now):
-        return [("Presets", Presets), ("Routes", Routes), ("Devices", Devices)]
+        return [("Presets", Presets), ("Routes", Routes), ("Devices", Devices), ("MIDI", MidiTo)]
 
     def select(self, ui, payload, status, now):
         ui.stack.append(payload())
@@ -205,6 +220,46 @@ class Sources(Menu):
         ui.overlay[("route",) + key] = (not on, now + OPTIMISM_S)
         verb = "unroute" if on else "route"
         return [f"{verb} {src} {dst} src={src_pair} dst={dst_pair}"]
+
+
+class MidiTo(Menu):
+    """MIDI destinations: pick the port that should receive, then which ports feed it."""
+    title = "MIDI to..."
+
+    def items(self, ui, status, now):
+        return midi_ends(status, "out")
+
+    def select(self, ui, dst, status, now):
+        ui.stack.append(MidiFrom(dst))
+        return []
+
+
+class MidiFrom(Menu):
+    """The MIDI ports that can feed one destination; CONFIRM turns each on or off."""
+
+    def __init__(self, dst):
+        super().__init__()
+        self.dst = dst
+
+    def heading(self, ui, status):
+        label = next((name for name, end in midi_ends(status, "out") if end == self.dst), None)
+        return "-> " + label if label else "-> (gone)"
+
+    def items(self, ui, status, now):
+        stored = stored_midi_routes(status)
+        out = []
+        for name, src in midi_ends(status, "in"):
+            if src.rpartition("/")[0] == self.dst.rpartition("/")[0]:
+                continue   # a device is never routed to itself
+            on = ui.shown(("midi", src, self.dst), (src, self.dst) in stored, now)
+            waiting = on and stored.get((src, self.dst)) is not None
+            out.append((("[~] " if waiting else "[x] " if on else "[ ] ") + name, (src, on)))
+        return out
+
+    def select(self, ui, payload, status, now):
+        src, on = payload
+        ui.overlay[("midi", src, self.dst)] = (not on, now + OPTIMISM_S)
+        return [f"{'midiunroute' if on else 'midiroute'} {src} {self.dst}"]
 
 
 class Devices(Menu):

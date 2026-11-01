@@ -94,6 +94,7 @@ class World:
         self.connections = set()          # frozensets of two JACK ports
         self.hang_jack = False            # jackd runs but jack_lsp does not answer
         self.aconnect, self.udc, self.gadget_card = "", "", 1
+        self.seq, self.subs, self.extra_cards = {}, set(), {}   # sequencer clients, subscriptions, MIDI-only cards
         self.scontents = {}               # card id -> `amixer scontents`
         self.devices = []
         self.sleeps, self.limit, self.stop_at_limit = 0, 0, False
@@ -127,7 +128,7 @@ class World:
         return child
 
     def scan(self, cfg, profiles, cache):
-        return list(self.devices), {dev.card: dev.identity for dev in self.devices}
+        return list(self.devices), {**self.extra_cards, **{dev.card: dev.identity for dev in self.devices}}
 
     def live(self, name=None):
         return [c for c in self.children if c.alive_ and (name is None or c.name == name)]
@@ -167,8 +168,29 @@ class World:
         elif cmd[0] == "jack_disconnect":
             self.connections.discard(frozenset(cmd[1:]))
         elif cmd[0] == "aconnect" and cmd[1:] == ("-l",):
-            out = self.aconnect
+            out = self.aconnect_text()
+        elif cmd[0] == "aconnect":
+            ends = [tuple(map(int, a.split(":"))) for a in cmd[1:] if a != "-d"]
+            if cmd[1] == "-d":
+                self.subs.discard(tuple(ends))
+            else:
+                self.subs.add(tuple(ends))
         return subprocess.CompletedProcess(cmd, code, out, "")
+
+    def aconnect_text(self):
+        """`aconnect -l` of self.seq ({client: (name, card, ports)}) and self.subs when a test sets them; else the
+        text a test wrote in self.aconnect."""
+        if not self.seq:
+            return self.aconnect
+        lines = []
+        for number, (name, card, ports) in sorted(self.seq.items()):
+            lines.append(f"client {number}: '{name}' [type=kernel,card={card}]")
+            for port in range(ports):
+                lines.append(f"    {port} '{name} {port}'")
+                to = sorted(dst for src, dst in self.subs if src == (number, port))
+                if to:
+                    lines.append("\tConnecting To: " + ", ".join(f"{c}:{q}" for c, q in to))
+        return "\n".join(lines) + "\n"
 
     def set_ptr(self):
         self.files[PCM_STATUS] = self.files[PCM_STATUS_DAC] = (
@@ -817,6 +839,81 @@ def test_status_cli_prints_the_standalone_engine(monkeypatch, tmp_path, capsys):
     assert "standalone: sndrpihifiberry, 2 ch at 48000 Hz; jackd up" in out
     assert "local output  running" in out and "capture  running" in out and "playback  running" in out
     assert "host IN" not in out and "parked" not in out
+
+
+# --- MIDI routes between USB devices -------------------------------------------------------------------------------
+
+SEQ_CAPS = """Client  20 : "Keys" [Kernel Legacy]
+  Port   0 : "Keys MIDI 1" (R-e-) [In]
+Client  24 : "Tracker" [Kernel Legacy]
+  Port   0 : "Tracker MIDI 1" (RWeX) [In/Out]
+"""
+
+
+def midi_pair(w):
+    """A keyboard that only sends and a tracker that does both, as MIDI-only USB cards."""
+    w.seq = {20: ("Keys", 3, 1), 24: ("Tracker", 4, 1)}
+    w.extra_cards = {3: "usb-keys", 4: "usb-trk"}
+    w.files["/proc/asound/seq/clients"] = SEQ_CAPS
+
+
+def test_standalone_midi_route_subscribes_the_ports_and_follows_the_state(monkeypatch, tmp_path):
+    w, d = alone(monkeypatch, tmp_path)
+    midi_pair(w)
+    daemon.cmd_change("midiroute usb-keys usb-trk")
+    w.run_loop(3)
+    w.seconds(1.2)
+    assert w.subs == {((20, 0), (24, 0))} and logged(w, "connected MIDI 20:0 -> 24:0")
+    assert len(w.called("aconnect", "20:0", "24:0")) == 1   # not again on every pass
+    status = d.status_data()
+    assert status["midi_routes"] == [{"src": "usb-keys/0", "dst": "usb-trk/0", "waiting": None}]
+    assert status["midi_ports"] == [{"identity": "usb-keys", "port": 0, "name": "Keys", "in": True, "out": False},
+                                    {"identity": "usb-trk", "port": 0, "name": "Tracker", "in": True, "out": True}]
+    w.subs.add(((24, 0), (20, 0)))   # standalone: every subscription between two devices is ours
+    w.seconds(1.2)
+    assert w.subs == {((20, 0), (24, 0))}
+    daemon.cmd_change("midiunroute usb-keys usb-trk")
+    w.seconds(2.5)
+    assert w.subs == set() and logged(w, "removed MIDI 20:0 -> 24:0")
+
+
+def test_a_midi_route_waits_for_the_device_and_comes_back_with_it(monkeypatch, tmp_path):
+    w, d = alone(monkeypatch, tmp_path)
+    midi_pair(w)
+    daemon.cmd_change("midiroute usb-keys usb-trk")
+    w.run_loop(3)
+    w.seconds(1.2)
+    del w.seq[24], w.extra_cards[4]   # the tracker is unplugged: its client and its subscriptions go
+    w.subs.clear()
+    w.seconds(1.2)
+    assert d.status_data()["midi_routes"][0]["waiting"] == "usb-trk/0 is not here" and w.subs == set()
+    w.seq[24], w.extra_cards[4] = ("Tracker", 4, 1), "usb-trk"
+    w.seconds(1.2)
+    assert w.subs == {((20, 0), (24, 0))} and d.status_data()["midi_routes"][0]["waiting"] is None
+
+
+def test_a_midi_route_to_a_port_that_cannot_receive_waits_with_the_reason(monkeypatch, tmp_path):
+    w, d = alone(monkeypatch, tmp_path)
+    midi_pair(w)
+    daemon.cmd_change("midiroute usb-trk usb-keys")   # the keyboard only sends
+    w.run_loop(3)
+    w.seconds(1.2)
+    assert w.subs == set() and d.status_data()["midi_routes"][0]["waiting"] == "usb-keys/0 cannot receive MIDI"
+
+
+def test_with_a_host_midi_routes_leave_hand_made_subscriptions_alone(monkeypatch, tmp_path):
+    w, d = make(monkeypatch, tmp_path)
+    midi_pair(w)
+    w.run_loop(3)
+    assert not w.called("aconnect")   # no routes: the host mode does not even look
+    w.subs.add(((24, 0), (20, 0)))   # someone's own aconnect between the devices
+    daemon.cmd_change("midiroute usb-keys usb-trk")
+    w.seconds(1.2)
+    assert w.subs == {((24, 0), (20, 0)), ((20, 0), (24, 0))}
+    assert "midi_ports" not in d.status_data() and d.status_data()["midi_routes"][0]["waiting"] is None
+    daemon.cmd_change("midiunroute usb-keys usb-trk")
+    w.seconds(1.2)
+    assert w.subs == {((24, 0), (20, 0))}   # only the one it made went
 
 
 def test_cmd_takes_a_whole_command_the_way_the_display_service_sends_it(monkeypatch, tmp_path, capsys):

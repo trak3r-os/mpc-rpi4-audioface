@@ -183,7 +183,8 @@ install -d "$LIB" "$ETC" "$ETC/rpi-audio.d" "$ETC/devices.d" "$BIN" "$UNITDIR" \
 install -m 755 "$here/gadget/rpi-audio-gadget" "$here/gadget/rpi-audio-keepalive" "$LIB/"
 install -m 755 "$here/tools/tonegen.py" "$here/bridge/rpi-audiod/rpi-audiod" "$LIB/"
 install -m 644 "$here/bridge/rpi-audiod/audiod.py" "$here/bridge/rpi-audiod/midi.py" \
-  "$here/bridge/rpi-audiod/presets.py" "$here/bridge/rpi-audiod/routing.py" "$here/bridge/rpi-audiod/usb.py" "$LIB/"
+  "$here/bridge/rpi-audiod/presets.py" "$here/bridge/rpi-audiod/routing.py" "$here/bridge/rpi-audiod/midiroute.py" \
+  "$here/bridge/rpi-audiod/usb.py" "$LIB/"
 ln -sf /usr/local/lib/rpi-audio/rpi-audiod "$BIN/rpi-audiod"
 # The display service: its own folder, since its module names (ui, inputs, render...) are generic.
 install -d "$LIB/ui"

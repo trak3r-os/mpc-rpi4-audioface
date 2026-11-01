@@ -73,6 +73,8 @@ F0 7D 52 42 <ASCII text> F7      reply
 | `name IDENTITY in\|out K [TEXT]` | `ok` | The name of channel K (from 1) of the device in that direction. Without text, it clears it |
 | `route SRC DST [src=P] [dst=P]` | `ok` or `error: a device cannot be routed to itself` | Plays what SRC captures into DST's playback: stereo pair P of each (pair 1 is channels 1-2, 1 by default). A mono side is copied to, or summed from, both channels of the other |
 | `unroute SRC DST [src=P] [dst=P]` | `ok` | Removes that route; without pairs, every route from SRC to DST |
+| `midiroute SRC DST` | `ok` or `error: a device cannot be routed to itself` | Sends what SRC's MIDI port sends into DST's MIDI port. Each end is `IDENTITY` or `IDENTITY/PORT` (port 0 when left out) |
+| `midiunroute SRC DST` | `ok` | Removes it; an end without a port is any port of that device |
 | `preset save N [TEXT]` | `ok` | Saves the current routing in preset N (1 to 8) |
 | `preset load N` | `ok` or `error: preset N is empty` | Restores the routing saved in preset N |
 | `preset clear N` | `ok` | Deletes preset N |
@@ -86,6 +88,14 @@ Commands change the stored state (`slots.json`, and `presets.json` for presets),
 - Several routes may feed one destination (JACK sums them) and one source may feed several. Levels are the devices' own (`volume`), not per route.
 - A route whose device is absent, muted or still starting waits and is made when it can be. `mute IDENTITY in` cuts the routes it feeds and `mute IDENTITY out` those that reach it.
 - In standalone mode (`docs/STANDALONE.md`) the local DAC is a destination named `local-dac` (settings: `[standalone] identity`): `route usb-mixer local-dac`. It has no capture, no level of its own, and `mute local-dac out on` cuts what reaches it.
+
+### MIDI routes between devices
+
+- `midiroute` joins two USB devices' MIDI ports with no host involved, by a kernel sequencer subscription (`aconnect`), so it adds no user-space latency. The source must be a port that sends (readable) and the destination one that receives (writable). A device is never routed to itself.
+- They work in both modes and are stored in `slots.json` under `midi_routes`; presets keep them next to the audio routes.
+- A route whose device is absent, or whose port cannot send or receive, waits with the reason in `status` (`midi_routes`, `waiting`) and is made when it can be.
+- **Ownership:** in standalone mode (`docs/STANDALONE.md`) every subscription between two USB devices belongs to `rpi-audiod`, so one you add by hand between them is removed within a second. With a host, only the subscriptions `rpi-audiod` made are removed: what you connect by hand stays, as with the gadget's routes.
+- Standalone mode also lists the devices' MIDI ports in `status` (`midi_ports`: identity, port, name, and whether it sends and receives), which is what the display's MIDI screens use.
 
 ### Names
 

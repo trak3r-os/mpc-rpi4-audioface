@@ -8,6 +8,7 @@ import json
 import re
 from dataclasses import dataclass
 
+import midiroute
 import presets
 import routing
 from audiod import IN, OUT, allocate
@@ -25,6 +26,8 @@ USAGE = {
     "preset": "preset save N [TEXT] | preset load N | preset clear N",
     "route": "route SRC DST [src=P] [dst=P]",
     "unroute": "unroute SRC DST [src=P] [dst=P]",
+    "midiroute": "midiroute SRC DST",
+    "midiunroute": "midiunroute SRC DST",
 }
 STATUS_LIMIT = 4000   # bytes the status reply may take (docs/MIDI.md)
 # Dropped from the reply, one stage at a time, until it fits: (device keys, direction keys)
@@ -253,6 +256,10 @@ def parse_command(text):
         return parse_name(text, usage)
     if verb == "preset":
         return parse_preset(text, usage)
+    if verb in ("midiroute", "midiunroute"):
+        if len(rest) != 2:
+            raise usage
+        return Command(verb, rest[0], (("dst", rest[1]),))
     if verb in ("route", "unroute"):
         if len(rest) < 2:
             raise usage
@@ -351,7 +358,11 @@ def apply_command(state, cmd):
     modified. Audio settings are keyed by the device identity, MIDI cables by IDENTITY/P."""
     state = copy.deepcopy(state or {})
     device, port = split_endpoint(cmd.identity or "")
-    if cmd.verb == "route":
+    if cmd.verb == "midiroute":
+        midiroute.add(state, midiroute.Link(cmd.identity, cmd.arg("dst")))
+    elif cmd.verb == "midiunroute":
+        midiroute.remove(state, cmd.identity, cmd.arg("dst"))
+    elif cmd.verb == "route":
         routing.add(state, routing.Route(cmd.identity, cmd.arg("dst"), cmd.arg("src_pair", 1), cmd.arg("dst_pair", 1)))
     elif cmd.verb == "unroute":
         routing.remove(state, cmd.identity, cmd.arg("dst"), cmd.arg("src_pair"), cmd.arg("dst_pair"))
