@@ -40,8 +40,9 @@ def test_clear_and_shapes():
     assert [c.get(x, y) for x, y in ((2, 2), (5, 4), (3, 3), (2, 4))] == [True, True, False, True]
     c.rect(10, 10, 12, 12, fill=True)
     assert c.get(11, 11)
-    c.line(0, 0, 10, 10)
-    assert c.get(0, 0) and c.get(5, 5) and c.get(10, 10) and not c.get(5, 4)
+    d = sh1106.Canvas()
+    d.line(0, 0, 10, 10)
+    assert d.get(0, 0) and d.get(5, 5) and d.get(10, 10) and not d.get(5, 4)
 
 
 def test_show_sends_each_page_at_the_column_offset():
