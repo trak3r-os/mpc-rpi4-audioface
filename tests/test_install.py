@@ -205,12 +205,12 @@ def test_tune_boot_edits_with_backups_once(root):
     assert cl.read_text() == "console=tty1 root=PARTUUID=1234-02 rootwait threadirqs\n"
     assert len(list(cfg.parent.glob("config.txt.rpi-audio-*"))) == 1
     assert len(list(cl.parent.glob("cmdline.txt.rpi-audio-*"))) == 1
-    assert "takes effect at the next reboot" in r.stdout
+    assert "boot changes take effect at the next reboot" in r.stdout
     r = run(root, "--tune-boot")
     assert r.returncode == 0, r.stderr
     assert cl.read_text().count("threadirqs") == 1
     assert cfg.read_text().count("dtparam=audio") == 1
-    assert "takes effect at the next reboot" not in r.stdout
+    assert "boot changes take effect at the next reboot" not in r.stdout
 
 
 def test_tune_boot_adds_audio_off_under_all(root):
@@ -223,3 +223,48 @@ def test_tune_boot_adds_audio_off_under_all(root):
 
 def test_tune_boot_conflicts_with_no_boot_config(root):
     assert run(root, "--tune-boot", "--no-boot-config").returncode == 2
+
+
+def test_hat_only_when_asked(root):
+    cfg = boot(root, "[all]\n" + OVERLAY + "\n")
+    before = cfg.read_text()
+    assert run(root, "-y").returncode == 0
+    assert cfg.read_text() == before
+
+
+def test_hat_adds_i2c_and_the_dac_once_with_a_backup(root):
+    cfg = boot(root, "[all]\ndtparam=audio=on\n" + OVERLAY)
+    r = run(root, "--hat")
+    assert r.returncode == 0, r.stderr
+    assert cfg.read_text() == "[all]\ndtparam=audio=on\n" + OVERLAY + "\ndtparam=i2c_arm=on\ndtoverlay=hifiberry-dac\n"
+    assert len(list(cfg.parent.glob("config.txt.rpi-audio-*"))) == 1
+    assert "boot changes take effect at the next reboot" in r.stdout
+    again = run(root, "--hat")
+    assert again.returncode == 0, again.stderr
+    assert cfg.read_text().count("i2c_arm") == 1 and cfg.read_text().count("hifiberry-dac") == 1
+    assert "boot changes take effect at the next reboot" not in again.stdout
+
+
+def test_hat_leaves_what_is_already_there_and_goes_under_all(root):
+    cfg = boot(root, "dtparam=i2c_arm=on,i2c_arm_baudrate=400000\n[cm4]\notg_mode=1\n[all]\n" + OVERLAY
+               + "\n[pi5]\nfoo=1")
+    r = run(root, "--hat")
+    assert r.returncode == 0, r.stderr
+    text = cfg.read_text()
+    assert text.count("dtparam=i2c_arm=on") == 1   # an existing line, with parameters, counts
+    assert text.endswith("[pi5]\nfoo=1\n[all]\ndtoverlay=hifiberry-dac\n")
+
+
+def test_hat_conflicts_with_no_boot_config(root):
+    assert run(root, "--hat", "--no-boot-config").returncode == 2
+
+
+def test_hat_loads_i2c_dev_at_boot_and_keeps_it(root):
+    boot(root, "[all]\n" + OVERLAY + "\n")
+    modules = root / "etc/modules-load.d/rpi-audio.conf"
+    assert run(root).returncode == 0
+    assert modules.read_text() == "snd-seq\nsnd-seq-midi\n"
+    assert run(root, "--hat").returncode == 0
+    assert modules.read_text() == "snd-seq\nsnd-seq-midi\ni2c-dev\n"
+    assert run(root).returncode == 0   # a later run without --hat does not drop it
+    assert modules.read_text() == "snd-seq\nsnd-seq-midi\ni2c-dev\n"

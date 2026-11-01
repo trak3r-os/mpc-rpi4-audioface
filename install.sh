@@ -6,7 +6,7 @@
 #   git clone https://github.com/trak3r-os/mpc-rpi4-audioface.git
 #   cd mpc-rpi4-audioface && sudo ./install.sh
 #
-#   sudo ./install.sh [--host NAME] [--no-enable] [--force-config] [--no-boot-config] [--tune-boot] [-y]
+#   sudo ./install.sh [--host NAME] [--no-enable] [--force-config] [--no-boot-config] [--tune-boot] [--hat] [-y]
 #   sudo ./install.sh --uninstall [--purge]
 #
 #   --host NAME        also install tools/hosts/NAME.toml as /etc/rpi-audio/rpi-audio.d/NAME.toml
@@ -21,6 +21,9 @@
 #   --tune-boot        also tune the boot for audio: threadirqs in cmdline.txt and
 #                      dtparam=audio=off (the Pi's own analogue audio) in config.txt, with backups.
 #                      Never done without this option, -y included; takes effect after a reboot
+#   --hat              also turn on what a display and a DAC on the 40-pin header need: dtparam=i2c_arm=on
+#                      (the I2C bus of an OLED) and dtoverlay=hifiberry-dac (a PCM5102A board such as the
+#                      Pimoroni pHAT DAC), with a backup. Never done without this option; takes effect after a reboot
 #   -y                 answer yes to the question about the boot config (the gadget overlay)
 #   --uninstall        remove what this script installed; /etc/rpi-audio and /var/lib/rpi-audio stay
 #   --purge            with --uninstall: remove those two as well
@@ -60,7 +63,7 @@ warn() { echo "$tag: $*" >&2; }
 die() { warn "$*"; exit 1; }
 usage() {
   cat >&2 <<'EOF'
-usage: sudo ./install.sh [--host NAME] [--no-enable] [--force-config] [--no-boot-config] [--tune-boot] [-y]
+usage: sudo ./install.sh [--host NAME] [--no-enable] [--force-config] [--no-boot-config] [--tune-boot] [--hat] [-y]
        sudo ./install.sh --uninstall [--purge]
 EOF
   exit 2
@@ -71,7 +74,7 @@ sysrun() { if ((staging)); then say "(test root) skipped: $*"; else "$@"; fi; }
 # Queries about units: nothing to ask under RPI_AUDIO_ROOT.
 unit_active() { ((! staging)) && systemctl is-active --quiet "$1.service"; }
 
-enable=1 force=0 bootcfg=1 tuneboot=0 yes=0 uninstall=0 purge=0 hostconf=
+enable=1 force=0 bootcfg=1 tuneboot=0 hat=0 yes=0 uninstall=0 purge=0 hostconf=
 while (($#)); do
   case $1 in
     --host) hostconf=${2:?--host needs a name}; shift ;;
@@ -79,6 +82,7 @@ while (($#)); do
     --force-config) force=1 ;;
     --no-boot-config) bootcfg=0 ;;
     --tune-boot) tuneboot=1 ;;
+    --hat) hat=1 ;;
     -y|--yes) yes=1 ;;
     --uninstall) uninstall=1 ;;
     --purge) purge=1 ;;
@@ -90,6 +94,7 @@ done
 if ((purge && !uninstall)); then warn "--purge only makes sense with --uninstall"; usage; fi
 if ((uninstall)) && [[ -n $hostconf ]]; then warn "--host does not go with --uninstall"; usage; fi
 if ((tuneboot && !bootcfg)); then warn "--tune-boot does not go with --no-boot-config"; usage; fi
+if ((hat && !bootcfg)); then warn "--hat does not go with --no-boot-config"; usage; fi
 if [[ -n $hostconf ]]; then
   [[ $hostconf =~ ^[A-Za-z0-9._-]+$ ]] || die "invalid host name: $hostconf"
   [[ -f $here/tools/hosts/$hostconf.toml ]] || die "no tools/hosts/$hostconf.toml in this clone"
@@ -183,9 +188,13 @@ commit=${RPI_AUDIO_COMMIT:-$(git -c safe.directory="$here" -C "$here" describe -
 printf '%s%s\n' "$(tr -d '[:space:]' < "$here/VERSION")" "${commit:+ ($commit)}" > "$LIB/VERSION"
 
 # The ALSA sequencer, for the gadget's MIDI ports and the devices' (docs/MIDI.md).
-printf 'snd-seq\nsnd-seq-midi\n' > "$MODULES"
+modules='snd-seq\nsnd-seq-midi\n'
+# i2c-dev gives /dev/i2c-N to a display on the header's I2C bus (--hat); once asked for, it stays.
+if ((hat)) || grep -qx i2c-dev "$MODULES" 2>/dev/null; then modules+='i2c-dev\n'; fi
+printf "$modules" > "$MODULES"
 sysrun modprobe snd-seq
 sysrun modprobe snd-seq-midi
+if [[ $modules == *i2c-dev* ]]; then sysrun modprobe i2c-dev; fi
 
 # A persistent journal (capped), so a shutdown can be read after the next boot: journalctl -b -1.
 printf '[Journal]\nStorage=persistent\nSystemMaxUse=64M\n' > "$JOURNALD"
@@ -334,6 +343,28 @@ if ((tuneboot)); then
   fi
 fi
 
+# --- The 40-pin header's I2C bus and a DAC: only with --hat -----------------
+
+if ((hat)); then
+  ts=${ts:-$(date +%Y%m%d-%H%M%S)}
+  if ! cfg=$(boot_config); then
+    warn "no boot config found: --hat changes nothing"
+  else
+    for line in dtparam=i2c_arm=on dtoverlay=hifiberry-dac; do
+      if ! grep -Eq "^[[:space:]]*${line//./\\.}([,[:space:]]|\$)" "$cfg"; then
+        backup_boot "$cfg"
+        {
+          [[ -s $cfg && -n $(tail -c 1 "$cfg") ]] && echo
+          [[ $(last_section "$cfg") == "[all]" ]] || echo "[all]"
+          echo "$line"
+        } >> "$cfg"
+        say "added $line to $cfg (backup: $cfg.rpi-audio-$ts)"
+        tuned=1
+      fi
+    done
+  fi
+fi
+
 # --- Enable, restart --------------------------------------------------------
 
 if ((enable)); then
@@ -374,7 +405,7 @@ if udc_exists; then
 else
   say "gadget: no UDC (the USB gadget overlay is not active)"
 fi
-if ((tuned)); then say "the boot tuning takes effect at the next reboot."; fi
+if ((tuned)); then say "the boot changes take effect at the next reboot."; fi
 if ((overlay_added)); then
   say "next: reboot the Pi (sudo reboot) so the USB gadget overlay takes effect, then connect its USB-C to the host."
 elif ((overlay_pending)); then

@@ -3,13 +3,15 @@
 #
 # Copy rpi-audio to the Pi and install it. Idempotent: run it after every change.
 #
-#   PI_HOST=no3z@192.168.1.106 tools/deploy.sh [--enable] [--host NAME]
+#   PI_HOST=no3z@192.168.1.106 tools/deploy.sh [--enable] [--host NAME] [--hat]
 #
 # --enable also enables rpi-audio-gadget.service and rpi-audiod.service at boot
 # (and disables rpi-audio-keepalive.service, which rpi-audiod replaces). Without
 # it they are started by hand (`sudo systemctl start rpi-audio-gadget rpi-audiod`).
 # --host NAME installs tools/hosts/NAME.toml as /etc/rpi-audio/rpi-audio.d/NAME.toml
 # (rpi-audiod settings for that host, e.g. akai-force).
+# --hat also turns on the I2C bus and the hifiberry-dac overlay (a display and a DAC on the 40-pin header; install.sh --hat,
+# with a backup of config.txt; takes effect after a reboot, which this script never does).
 # A running rpi-audiod is restarted so it runs the new code: the host hears a gap.
 # Needs passwordless sudo for the SSH user on the Pi (see docs/STATUS.md).
 # This is a thin wrapper: it copies the repo to the Pi and runs install.sh there as root with
@@ -21,12 +23,13 @@ set -euo pipefail
 host="${PI_HOST:-no3z@192.168.1.106}"
 root="$(cd "$(dirname "$0")/.." && pwd)"
 stage=rpi-audio-stage
-enable=0 hostconf=
+enable=0 hat=0 hostconf=
 while (($#)); do
   case $1 in
     --enable) enable=1 ;;
+    --hat) hat=1 ;;
     --host) hostconf=${2:?--host needs a name}; shift ;;
-    *) echo "usage: $0 [--enable] [--host NAME]" >&2; exit 2 ;;
+    *) echo "usage: $0 [--enable] [--host NAME] [--hat]" >&2; exit 2 ;;
   esac
   shift
 done
@@ -48,6 +51,7 @@ rsync -a --delete "$root/gadget" "$root/systemd" "$root/config" "$root/tools" "$
 
 args=(--force-config -y)
 ((enable)) || args+=(--no-enable)
+((hat)) && args+=(--hat)
 [[ -z $hostconf ]] || args+=(--host "$hostconf")
 # install.sh does the work on the Pi; RPI_AUDIO_TAG keeps its messages prefixed "deploy:". The copy has no .git, so
 # the commit goes along for the version.
