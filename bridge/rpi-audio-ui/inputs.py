@@ -11,8 +11,9 @@ PINS = {"a": 17, "b": 27, "push": 22, "confirm": 23, "back": 24}   # BCM; docs/D
 BUTTONS = {"push": "push", "confirm": "confirm", "back": "back"}   # line -> event
 DEBOUNCE_S = 0.03
 # Gray code: the step (+1 or -1) for a move from the previous (a, b) to the new one, indexed prev << 2 | new.
-# +1 is the order of the CW constant in tests/test_inputs.py; the knob's real direction depends on the wiring.
-STEP = (0, 1, -1, 0, -1, 0, 0, 1, 1, 0, 0, -1, 0, -1, 1, 0)
+# +1 (clockwise) is `a` changing before `b`, as on a KY-040 (its CLK is `a`); checked on the real knob
+# (docs/hw/2026-11-01-hat-oled.md). `invert` is for an encoder wired the other way round.
+STEP = (0, -1, 1, 0, 1, 0, 0, -1, -1, 0, 0, 1, 0, 1, -1, 0)
 
 
 class Encoder:

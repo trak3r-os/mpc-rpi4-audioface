@@ -77,8 +77,8 @@ class Rig:
     def turn(self, detents):
         """The encoder, one detent per unit: positive clockwise (the edges of tests/test_inputs.py)."""
         for _ in range(abs(detents)):
-            edges = (("b", 0), ("a", 0), ("b", 1), ("a", 1)) if detents > 0 else \
-                    (("a", 0), ("b", 0), ("a", 1), ("b", 1))
+            edges = (("a", 0), ("b", 0), ("a", 1), ("b", 1)) if detents > 0 else \
+                    (("b", 0), ("a", 0), ("b", 1), ("a", 1))
             for edge in edges:
                 self.reader.feed(edge)
                 self.step(0.01)

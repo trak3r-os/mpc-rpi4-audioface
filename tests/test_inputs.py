@@ -7,9 +7,9 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "bridge" / "rpi-audio-ui"))
 import inputs  # noqa: E402
 
-# One detent clockwise on a KY-040-like encoder: both lines low in turn, then both high again.
-CW = [(1, 0), (0, 0), (0, 1), (1, 1)]
-CCW = [(0, 1), (0, 0), (1, 0), (1, 1)]
+# One detent clockwise on a KY-040-like encoder: `a` goes low first, then `b`; both come back high in that order.
+CW = [(0, 1), (0, 0), (1, 0), (1, 1)]
+CCW = [(1, 0), (0, 0), (0, 1), (1, 1)]
 
 
 def steps(encoder, moves):
@@ -32,14 +32,14 @@ def test_bounce_and_partial_turns_make_no_step():
     e = inputs.Encoder()
     assert sum(steps(e, [(1, 0), (1, 1), (1, 0), (1, 1)])) == 0        # a click that went back
     assert sum(steps(e, [(1, 0), (0, 0), (1, 0), (1, 1)])) == 0        # half a detent and back
-    assert sum(steps(e, [(1, 0), (1, 0), (0, 0), (0, 1), (0, 0), (0, 1), (1, 1)])) == 1   # bounce inside a detent
+    assert sum(steps(e, [(0, 1), (0, 1), (0, 0), (1, 0), (0, 0), (1, 0), (1, 1)])) == 1   # bounce inside a detent
     assert e.feed(1, 1) == 0
 
 
 def test_an_encoder_that_rests_low_works_too():
     e = inputs.Encoder()
     e.sync(0, 0)
-    turn = [(0, 1), (1, 1), (1, 0), (0, 0)]   # the same turning, from the other rest
+    turn = [(1, 0), (1, 1), (0, 1), (0, 0)]   # the same turning, from the other rest
     assert steps(e, turn) == [0, 0, 0, 1] and steps(e, turn[::-1][1:] + [(0, 0)])[-1] == -1
     assert sum(steps(e, turn * 3)) == 3
 
@@ -47,7 +47,7 @@ def test_an_encoder_that_rests_low_works_too():
 def test_it_learns_the_rest_from_where_the_knob_stops():
     e = inputs.Encoder()   # starts expecting a rest of (1, 1) but the knob sits at (0, 0)
     assert e.feed(0, 0, 0.0) == 0 and e.state == 0b00
-    got = [e.feed(a, b, 1.0 + n * 0.01) for n, (a, b) in enumerate([(0, 1), (1, 1), (1, 0), (0, 0)])]
+    got = [e.feed(a, b, 1.0 + n * 0.01) for n, (a, b) in enumerate([(1, 0), (1, 1), (0, 1), (0, 0)])]
     assert got == [0, 0, 0, 1]
 
 
