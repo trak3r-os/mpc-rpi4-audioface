@@ -66,6 +66,18 @@ def test_home_and_navigation():
         u.handle("long", st)
 
 
+def test_push_does_what_confirm_does_except_where_a_screen_has_its_own_use():
+    u, st = display.UI(), status()
+    press(u, st, "push")   # Home -> Presets, like CONFIRM
+    assert text(u, st)[0].strip() == "Presets"
+    press(u, st, "back", "cw", "cw", "push", "push")   # Devices -> Mixer -> its In mute
+    assert text(u, st)[0].strip() == "Mixer"
+    assert press(u, st, "push", now=1.0) == [f"mute {MIXER} in on"]
+    press(u, st, "back", "back", "ccw", "push")   # Routes
+    assert text(u, st)[0].strip() == "Route to..."
+    assert press(u, st, "push", "push") == [f"route {MIXER} {GP} src=1 dst=1"]   # Routes -> GP-150 -> Mixer on
+
+
 def test_routes_screen_toggles_a_route_and_shows_it_at_once():
     u, st = display.UI(), status()
     press(u, st, "cw", "confirm")   # Routes

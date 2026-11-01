@@ -66,7 +66,7 @@ def stored_routes(status):
 
 
 class Menu:
-    """A list the encoder moves through; CONFIRM acts on the row, PUSH is the screen's own action."""
+    """A list the encoder moves through; CONFIRM acts on the row, PUSH does too unless the screen says otherwise."""
     title = ""
 
     def __init__(self):
@@ -80,7 +80,8 @@ class Menu:
         return []
 
     def press(self, ui, payload, status, now):
-        return []
+        """The encoder's push: the same as CONFIRM unless the screen has its own use for it."""
+        return self.select(ui, payload, status, now)
 
     def heading(self, ui, status):
         return self.title

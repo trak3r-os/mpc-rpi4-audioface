@@ -10,7 +10,7 @@ A 128×64 OLED, a rotary encoder with a push button, and two more buttons contro
 |---|---|
 | Encoder turn | Moves through a list, or changes a level while editing |
 | CONFIRM | Opens a row, toggles a route or a mute, starts a level edit, sets it, loads a preset |
-| Encoder push | In Presets: saves the current routing into the slot (it asks first). In a level edit: sets it |
+| Encoder push | The same as CONFIRM, except in Presets, where it saves the current routing into the slot (it asks first) |
 | BACK | Goes back, drops an edit, answers "no" |
 
 ## Screens
