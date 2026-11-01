@@ -713,6 +713,19 @@ def test_a_change_from_the_command_line_moves_the_bridge(monkeypatch, tmp_path):
     assert d.bridges[("usb-mixer", OUT)].start == 1
 
 
+def test_cmd_takes_a_whole_command_the_way_the_display_service_sends_it(monkeypatch, tmp_path, capsys):
+    make(monkeypatch, tmp_path)
+    monkeypatch.setattr(sys, "argv", ["rpi-audiod", "cmd", "route", "usb-a", "usb-b", "src=1", "dst=2"])
+    daemon.main()
+    saved = json.loads((tmp_path / "slots.json").read_text())
+    assert saved["routes"] == [{"src": "usb-a", "dst": "usb-b", "dst_pair": 2}]
+    assert "saved" in capsys.readouterr().out
+    monkeypatch.setattr(sys, "argv", ["rpi-audiod", "cmd", "route", "usb-a", "usb-a"])
+    with pytest.raises(SystemExit) as stopped:
+        daemon.main()
+    assert str(stopped.value).startswith("rpi-audiod: ") and "itself" in str(stopped.value)
+
+
 def test_slots_that_cannot_be_written_are_still_applied_in_memory(monkeypatch, tmp_path):
     w, d = make(monkeypatch, tmp_path)
     w.devices = [usb_device(1, "mixer")]

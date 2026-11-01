@@ -1,0 +1,16 @@
+[Unit]
+Description=rpi-audio: OLED display and rotary encoder (docs/DISPLAY.md)
+# Another client of rpi-audiod, which never depends on it: no Requires, no BindsTo.
+After=rpi-audiod.service
+
+[Service]
+ExecStart=/usr/local/lib/rpi-audio/ui/rpi-audio-ui
+Restart=always
+RestartSec=5
+User=rpi-audio
+Group=audio
+# /dev/gpiochip0 is root:gpio and /dev/i2c-N root:i2c.
+SupplementaryGroups=gpio i2c
+
+[Install]
+WantedBy=multi-user.target

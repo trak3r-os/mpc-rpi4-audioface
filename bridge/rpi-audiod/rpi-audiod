@@ -20,6 +20,7 @@ control port takes the commands below from the host too (docs/MIDI.md).
   rpi-audiod name IDENTITY in|out K [TEXT...] name its channel K (a device name cannot start with "in N" or "out N")
   rpi-audiod route SRC DST [--src P] [--dst P]  play what SRC captures into DST (stereo pair P of each, 1 by default)
   rpi-audiod unroute SRC DST [--src P] [--dst P]  remove it (no pair: every route between them)
+  rpi-audiod cmd TEXT...                      any command above as one text, as the display service sends it
   rpi-audiod preset save N [TEXT...]          save the routing state as preset N (1..8)
   rpi-audiod preset load N | clear N          restore or delete it; Program Change 0..7 on the control
                                               channel loads presets 1..8
@@ -1165,6 +1166,8 @@ def main():
         v.add_argument("dst", help="identity of the device whose playback receives it")
         v.add_argument("--src", dest="src_pair", type=int, help="stereo pair of the source, from 1")
         v.add_argument("--dst", dest="dst_pair", type=int, help="stereo pair of the destination, from 1")
+    c = sub.add_parser("cmd")
+    c.add_argument("words", nargs="+", metavar="TEXT", help="a command of docs/MIDI.md, e.g. mute ID in on")
     r = sub.add_parser("preset")
     r.add_argument("action", choices=("save", "load", "clear"))
     r.add_argument("slot", help="1..8")
@@ -1182,6 +1185,8 @@ def main():
     if args.cmd in ("route", "unroute"):
         keys = [f"{k}={v}" for k, v in (("src", args.src_pair), ("dst", args.dst_pair)) if v is not None]
         return cmd_change(" ".join([args.cmd, args.src, args.dst, *keys]))
+    if args.cmd == "cmd":
+        return cmd_change(" ".join(args.words))
     if args.cmd == "name":
         return cmd_change(" ".join(["name", args.identity, *args.words]))
     if args.cmd == "preset":

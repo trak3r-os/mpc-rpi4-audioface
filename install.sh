@@ -21,9 +21,11 @@
 #   --tune-boot        also tune the boot for audio: threadirqs in cmdline.txt and
 #                      dtparam=audio=off (the Pi's own analogue audio) in config.txt, with backups.
 #                      Never done without this option, -y included; takes effect after a reboot
-#   --hat              also turn on what a display and a DAC on the 40-pin header need: dtparam=i2c_arm=on
-#                      (the I2C bus of an OLED) and dtoverlay=hifiberry-dac (a PCM5102A board such as the
-#                      Pimoroni pHAT DAC), with a backup. Never done without this option; takes effect after a reboot
+#   --hat              also set up a display and a DAC on the 40-pin header: dtparam=i2c_arm=on (the I2C bus
+#                      of an OLED) and dtoverlay=hifiberry-dac (a PCM5102A board such as the Pimoroni pHAT
+#                      DAC), with a backup, and enable rpi-audio-ui.service (the OLED and its encoder; its
+#                      files are always installed, it only runs with this option). Never done without it;
+#                      the boot changes take effect after a reboot
 #   -y                 answer yes to the question about the boot config (the gadget overlay)
 #   --uninstall        remove what this script installed; /etc/rpi-audio and /var/lib/rpi-audio stay
 #   --purge            with --uninstall: remove those two as well
@@ -55,7 +57,7 @@ JOURNALD=$R/etc/systemd/journald.conf.d/rpi-audio.conf
 STATE=$R/var/lib/rpi-audio
 UDCDIR=$R/sys/class/udc
 OVERLAY='dtoverlay=dwc2,dr_mode=peripheral'
-units="rpi-audio-gadget rpi-audiod rpi-audio-keepalive rpi-audio-cpu"
+units="rpi-audio-gadget rpi-audiod rpi-audio-keepalive rpi-audio-cpu rpi-audio-ui"
 packages="jackd2 jack-example-tools zita-ajbridge"
 
 say() { echo "$tag: $*"; }
@@ -95,6 +97,7 @@ if ((purge && !uninstall)); then warn "--purge only makes sense with --uninstall
 if ((uninstall)) && [[ -n $hostconf ]]; then warn "--host does not go with --uninstall"; usage; fi
 if ((tuneboot && !bootcfg)); then warn "--tune-boot does not go with --no-boot-config"; usage; fi
 if ((hat && !bootcfg)); then warn "--hat does not go with --no-boot-config"; usage; fi
+if ((hat)); then packages="$packages python3-smbus2 python3-libgpiod"; fi   # the OLED's I2C and the encoder's GPIO
 if [[ -n $hostconf ]]; then
   [[ $hostconf =~ ^[A-Za-z0-9._-]+$ ]] || die "invalid host name: $hostconf"
   [[ -f $here/tools/hosts/$hostconf.toml ]] || die "no tools/hosts/$hostconf.toml in this clone"
@@ -182,6 +185,10 @@ install -m 755 "$here/tools/tonegen.py" "$here/bridge/rpi-audiod/rpi-audiod" "$L
 install -m 644 "$here/bridge/rpi-audiod/audiod.py" "$here/bridge/rpi-audiod/midi.py" \
   "$here/bridge/rpi-audiod/presets.py" "$here/bridge/rpi-audiod/routing.py" "$here/bridge/rpi-audiod/usb.py" "$LIB/"
 ln -sf /usr/local/lib/rpi-audio/rpi-audiod "$BIN/rpi-audiod"
+# The display service: its own folder, since its module names (ui, inputs, render...) are generic.
+install -d "$LIB/ui"
+install -m 755 "$here/bridge/rpi-audio-ui/rpi-audio-ui" "$LIB/ui/"
+install -m 644 "$here"/bridge/rpi-audio-ui/{font5x7,inputs,render,sh1106,ui,uiservice}.py "$LIB/ui/"
 # The version, for `rpi-audiod --version`, `ping` and `status`: the release, then the commit when known
 # (deploy.sh passes it; a clone has its own).
 commit=${RPI_AUDIO_COMMIT:-$(git -c safe.directory="$here" -C "$here" describe --always --dirty 2>/dev/null || true)}
@@ -241,7 +248,8 @@ done
 if [[ -n $hostconf ]]; then install -m 644 "$here/tools/hosts/$hostconf.toml" "$ETC/rpi-audio.d/"; fi
 
 install -m 644 "$here/systemd/rpi-audio-gadget.service" "$here/systemd/rpi-audio-keepalive.service" \
-  "$here/systemd/rpi-audiod.service" "$here/systemd/rpi-audio-cpu.service" "$UNITDIR/"
+  "$here/systemd/rpi-audiod.service" "$here/systemd/rpi-audio-cpu.service" "$here/systemd/rpi-audio-ui.service" \
+  "$UNITDIR/"
 sysrun systemctl daemon-reload
 
 # --- Boot config: the USB gadget overlay ------------------------------------
@@ -371,6 +379,13 @@ if ((enable)); then
   sysrun systemctl disable rpi-audio-keepalive.service
   sysrun systemctl enable rpi-audio-gadget.service rpi-audiod.service rpi-audio-cpu.service
   sysrun systemctl restart rpi-audio-cpu.service
+  if ((hat)); then sysrun systemctl enable rpi-audio-ui.service; fi
+fi
+# The display service runs the new code at once; it has no audio to interrupt, and without a display it only waits.
+if ((enable && hat)); then
+  sysrun systemctl restart rpi-audio-ui.service || warn "could not start rpi-audio-ui: systemctl status rpi-audio-ui"
+else
+  sysrun systemctl try-restart rpi-audio-ui.service
 fi
 
 # The gadget is rebound only when its settings changed (one rebind: docs/STATUS.md). rpi-audiod

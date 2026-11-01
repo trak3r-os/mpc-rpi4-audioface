@@ -1,0 +1,102 @@
+#!/usr/bin/env python3
+# SPDX-License-Identifier: GPL-3.0-or-later
+"""rpi-audio-ui: the small display (a 128x64 SH1106 OLED on I2C) with a rotary encoder and three buttons, as one more
+client of rpi-audiod (docs/DISPLAY.md). It shows /run/rpi-audio/status.json and answers with the commands of
+docs/MIDI.md, run through `rpi-audiod cmd`. The audio never depends on it: with no display or no GPIO it waits and
+tries again, and rpi-audiod is untouched either way.
+
+  rpi-audio-ui [run]     the service (rpi-audio-ui.service)
+
+Settings: the [ui] table of /etc/rpi-audio/rpi-audio.toml and rpi-audio.d/*.toml (config/rpi-audio.toml)."""
+
+import argparse
+import os
+import signal
+import subprocess
+import sys
+import time
+import tomllib
+from pathlib import Path
+
+import inputs
+import sh1106
+import uiservice
+
+CONFIG = Path(os.environ.get("RPI_AUDIO_CONFIG", "/etc/rpi-audio/rpi-audio.toml"))
+STATUS = Path(os.environ.get("RUNTIME_DIRECTORY", "/run/rpi-audio")) / "status.json"
+AUDIOD = os.environ.get("RPI_AUDIOD", "/usr/local/lib/rpi-audio/rpi-audiod")
+COMMAND_TIMEOUT_S = 10
+
+
+def log(text):
+    print(text, flush=True)
+
+
+def load_settings():
+    table = {}
+    for path in [CONFIG, *sorted(CONFIG.parent.glob(CONFIG.stem + ".d/*.toml"))]:
+        try:
+            with open(path, "rb") as f:
+                table.update(tomllib.load(f).get("ui", {}))
+        except FileNotFoundError:
+            continue
+        except (OSError, tomllib.TOMLDecodeError) as e:
+            log(f"rpi-audio-ui: {path}: {e}; file ignored")
+    cfg, warnings = uiservice.settings(table)
+    for w in warnings:
+        log(f"rpi-audio-ui: {w}")
+    return cfg
+
+
+def run_command(text):
+    """Runs one command through rpi-audiod; "" when it was saved, else why not."""
+    try:
+        done = subprocess.run([AUDIOD, "cmd", *text.split()], capture_output=True, text=True,
+                              timeout=COMMAND_TIMEOUT_S)
+    except (OSError, subprocess.TimeoutExpired) as e:
+        return str(e)
+    if done.returncode == 0:
+        return ""
+    return (done.stderr.strip().splitlines() or ["failed"])[-1].removeprefix("rpi-audiod: ")
+
+
+def open_reader(cfg):
+    """The GPIO lines, waiting for them as long as they are not there."""
+    waited = False
+    while True:
+        try:
+            return inputs.GpioReader(cfg.pins)
+        except (OSError, ImportError) as e:
+            if not waited:
+                log(f"rpi-audio-ui: no GPIO yet: {e}")
+            waited = True
+            time.sleep(uiservice.RETRY_S)
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
+    parser.add_argument("action", nargs="?", choices=("run",), default="run")
+    parser.parse_args()
+    cfg = load_settings()
+    stopping = []
+    signal.signal(signal.SIGTERM, lambda *_: stopping.append(1))
+    signal.signal(signal.SIGINT, lambda *_: stopping.append(1))
+    reader = open_reader(cfg)
+
+    def make_display():
+        return sh1106.Display(sh1106.I2C(cfg.bus, cfg.address), cfg.flip, cfg.contrast)
+
+    app = uiservice.App(reader, make_display, lambda: uiservice.read_status(STATUS), run_command, cfg, log)
+    app.start(time.monotonic())
+    log(f"rpi-audio-ui: running (I2C bus {cfg.bus}, address {cfg.address:#04x})")
+    try:
+        while not stopping:
+            app.step(time.monotonic())
+    finally:
+        app.close()
+        reader.close()
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

@@ -57,8 +57,13 @@ def test_fresh_install_lays_out_files(root):
     assert (etc / "rpi-audio.toml").is_file()
     assert (etc / "rpi-audio.d/akai-force.toml").is_file()
     assert (etc / "devices.d/valeton-gp150.toml").is_file()
-    for u in ("rpi-audio-gadget", "rpi-audiod", "rpi-audio-keepalive", "rpi-audio-cpu"):
+    for u in ("rpi-audio-gadget", "rpi-audiod", "rpi-audio-keepalive", "rpi-audio-cpu", "rpi-audio-ui"):
         assert (root / f"etc/systemd/system/{u}.service").is_file()
+    ui = lib / "ui"
+    assert os.access(ui / "rpi-audio-ui", os.X_OK)
+    for name in ("font5x7.py", "inputs.py", "render.py", "sh1106.py", "ui.py", "uiservice.py"):
+        assert (ui / name).is_file(), name
+    assert "(test root) skipped: systemctl enable rpi-audio-ui" not in r.stdout   # only with --hat
     assert (lib / "VERSION").read_text().startswith((REPO / "VERSION").read_text().strip())
     assert (root / "etc/modules-load.d/rpi-audio.conf").read_text() == "snd-seq\nsnd-seq-midi\n"
     assert "Storage=persistent" in (root / "etc/systemd/journald.conf.d/rpi-audio.conf").read_text()
@@ -268,3 +273,16 @@ def test_hat_loads_i2c_dev_at_boot_and_keeps_it(root):
     assert modules.read_text() == "snd-seq\nsnd-seq-midi\ni2c-dev\n"
     assert run(root).returncode == 0   # a later run without --hat does not drop it
     assert modules.read_text() == "snd-seq\nsnd-seq-midi\ni2c-dev\n"
+
+
+def test_hat_enables_the_display_service_and_keeps_it_apart_from_the_audio(root):
+    boot(root, "[all]\n" + OVERLAY + "\n")
+    r = run(root, "--hat")
+    assert r.returncode == 0, r.stderr
+    assert "skipped: systemctl enable rpi-audio-ui.service" in r.stdout
+    assert "skipped: systemctl restart rpi-audio-ui.service" in r.stdout
+    r = run(root, "--hat", "--no-enable")
+    assert "enable rpi-audio-ui" not in r.stdout and "skipped: systemctl try-restart rpi-audio-ui" in r.stdout
+    unit = (root / "etc/systemd/system/rpi-audio-ui.service").read_text()
+    assert "SupplementaryGroups=gpio i2c" in unit and "Requires=" not in unit and "BindsTo=" not in unit
+    assert "/usr/local/lib/rpi-audio/ui/rpi-audio-ui" in unit

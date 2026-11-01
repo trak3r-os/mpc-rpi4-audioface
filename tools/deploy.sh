@@ -11,7 +11,8 @@
 # --host NAME installs tools/hosts/NAME.toml as /etc/rpi-audio/rpi-audio.d/NAME.toml
 # (rpi-audiod settings for that host, e.g. akai-force).
 # --hat also turns on the I2C bus and the hifiberry-dac overlay (a display and a DAC on the 40-pin header; install.sh --hat,
-# with a backup of config.txt; takes effect after a reboot, which this script never does).
+# with a backup of config.txt; takes effect after a reboot, which this script never does) and, with --enable,
+# starts rpi-audio-ui.service (the OLED and its encoder).
 # A running rpi-audiod is restarted so it runs the new code: the host hears a gap.
 # Needs passwordless sudo for the SSH user on the Pi (see docs/STATUS.md).
 # This is a thin wrapper: it copies the repo to the Pi and runs install.sh there as root with

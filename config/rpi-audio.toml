@@ -47,6 +47,17 @@ reserve_out = [1, 2]
 # (docs/hw/2026-10-29-f2-usb-devices.md); 0 turns the check off.
 fs_budget = 1099
 
+[ui]
+# rpi-audio-ui, the OLED and rotary encoder (docs/DISPLAY.md); it only runs when installed with --hat.
+# Every key is optional; these are the defaults.
+# bus = 1                  /dev/i2c-1: the header's SDA/SCL (GPIO 2/3)
+# address = 0x3C           the SH1106's I2C address (0x3D on some boards)
+# flip = false             true turns the picture 180 degrees
+# contrast = 127           0..255
+# idle_s = 60              seconds without input before the display goes dark (an OLED burns in); 0 never
+# invert_encoder = false   true if the knob goes the wrong way
+# pins = { a = 17, b = 27, push = 22, confirm = 23, back = 24 }   BCM numbers; give only the ones that differ
+
 # Optional per-device profiles go in /etc/rpi-audio/devices.d/*.toml, one device per file
 # (installed from config/devices.d/). Keys, all but `match` optional:
 #   match = "84ef:0186"     idVendor:idProduct, lowercase hex
