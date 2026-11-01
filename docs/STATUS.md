@@ -53,6 +53,22 @@ F4 en marcha: **USB MIDI en el gadget** (4 puertos), MIDI de paso por dispositiv
   - **CC en los canales 16 (IN) y 15 (OUT)** del puerto 1: nivel en 32+N y silencio en 64+N, siendo N el primer canal del dispositivo;
   - en MPC, el control irá por una pista MIDI o por Q-Links. Un VST instrumento sería solo una interfaz opcional, en `tools/hosts/`: MPC ignora el MIDI que sale de un plugin, pero el plugin puede abrir su propio puerto ALSA [ext] (sd88me, `docs/NOTES.md`). Lo instalaría el usuario.
 
+## Hub autónomo con pantalla (2026-11-01, solo código y tests; nada desplegado ni probado en la Pi)
+
+Idea del usuario: la Pi como hub sin host (Tracker en "2 OUT / 2 IN", mezclador, GP-150, MIDI), con salida por el Tracker y por el pHAT DAC, controlada desde un OLED con encoder, y **sin perder** el modo con la Force.
+
+- **Hecho en el repo [repo]:**
+  - **rutas dispositivo→dispositivo** (`bridge/rpi-audiod/routing.py`, comandos `route`/`unroute`, clave `routes` de `slots.json` y de los presets, campo `routes` del status, `docs/MIDI.md`). Son conexiones JACK entre los puentes, por pares estéreo, y no tocan las del gadget. Un dispositivo nunca se enruta a sí mismo. Sin nivel por ruta: JACK suma y los niveles son los del dispositivo (`volume`).
+  - **modelo de la pantalla** (`bridge/rpi-audio-ui/ui.py`): 8 filas de 16 columnas, eventos `cw`/`ccw`/`push`/`confirm`/`back`, pantallas Presets, Routes (destino → fuentes), Devices (mutes y niveles). Solo emite los comandos de `docs/MIDI.md`; los presets ya existían (8 ranuras).
+  - **simulador**: `tools/ui-sim.py`, en el terminal y contra un servicio de mentira.
+  - `pytest -q tests`: 239 pasan, `flake8` limpio. El comportamiento con JACK real y con la Force **no está probado** (solo el `World` falso de `tests/test_supervisor.py`).
+- **Falta:**
+  - **modo `standalone`** de `rpi-audiod`: jackd con el pHAT como driver y sin esperar al host. Hoy el motor solo arranca jackd sobre el gadget (modo A). No es el "modo B" de PipeWire del plan. Con la Force no cambia nada.
+  - **driver de la pantalla** (luma.oled o similar, GPIO del encoder), unit `rpi-audio-ui.service` opcional (el audio no depende de ella) y su instalación en `install.sh` (hoy `ui.py` no se instala).
+  - **hardware:** OLED por I2C con encoder y dos botones (pines de 9: VCC, GND, BACK, TRB, TRA, PUSH, SCL, SDA, CONFIRM); controlador del OLED sin identificar [?]. Cableado propuesto en `docs/DISPLAY.md`. El pHAT DAC no está montado y no hay `/dev/i2c*` en la Pi [Pi]. Montarlo exige tocar `config.txt` y reiniciar: **con la Force parada y con permiso del usuario**.
+  - **el Tracker en 2/2:** consumo desde la Pi 4 (1,2 A en total en los USB-A), enumeración, y si su Master de 2 canales incluye el retorno (posible bucle si se enruta de vuelta) [?]. El usuario no tiene acceso al Tracker ahora.
+- `deploy.sh`/`install.sh` reinician `rpi-audiod` (la Force oye un corte): no se despliega esto con ella transmitiendo.
+
 ## Hecho
 
 - **Repo:** rama `main` en `github.com/trak3r-os/mpc-rpi4-audioface` (alias SSH `github-trak3r`), autor `trak3r-os` con el correo oculto de GitHub. `LICENSE` (GPL-3.0-or-later), `CLAUDE.md`, `.gitignore` (`out/`), `.flake8`.

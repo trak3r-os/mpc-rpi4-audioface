@@ -49,7 +49,7 @@ def test_fresh_install_lays_out_files(root):
     lib = root / "usr/local/lib/rpi-audio"
     for name in ("rpi-audio-gadget", "rpi-audio-keepalive", "tonegen.py", "rpi-audiod"):
         assert os.access(lib / name, os.X_OK), name
-    for name in ("audiod.py", "midi.py", "presets.py", "usb.py"):
+    for name in ("audiod.py", "midi.py", "presets.py", "routing.py", "usb.py"):
         assert (lib / name).is_file(), name
     assert os.readlink(root / "usr/local/bin/rpi-audiod") == "/usr/local/lib/rpi-audio/rpi-audiod"
     etc = root / "etc/rpi-audio"

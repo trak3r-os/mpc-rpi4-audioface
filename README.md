@@ -276,6 +276,7 @@ python3 -m pytest -q tests
 |---|---|
 | `gadget/` | The USB gadget, built through configfs |
 | `bridge/rpi-audiod/` | The service: devices, channel slots, routing, USB budget, MIDI |
+| `bridge/rpi-audio-ui/` | The small-display interface's logic (`docs/DISPLAY.md`); the display driver is not built yet |
 | `systemd/` | Service units |
 | `config/` | Settings installed to `/etc/rpi-audio/`, and device profiles |
 | `tools/` | Inventory, deployment, test tones, MIDI client |
