@@ -71,11 +71,20 @@ F0 7D 52 42 <ASCII text> F7      reply
 | `volume IDENTITY in\|out PERCENT` | `ok` | The device's own level, 0 to 100: `in` is its capture (what reaches the host) and `out` its playback |
 | `name IDENTITY [TEXT]` | `ok` | The device name. Without text, it clears it |
 | `name IDENTITY in\|out K [TEXT]` | `ok` | The name of channel K (from 1) of the device in that direction. Without text, it clears it |
+| `route SRC DST [src=P] [dst=P]` | `ok` or `error: a device cannot be routed to itself` | Plays what SRC captures into DST's playback: stereo pair P of each (pair 1 is channels 1-2, 1 by default). A mono side is copied to, or summed from, both channels of the other |
+| `unroute SRC DST [src=P] [dst=P]` | `ok` | Removes that route; without pairs, every route from SRC to DST |
 | `preset save N [TEXT]` | `ok` | Saves the current routing in preset N (1 to 8) |
 | `preset load N` | `ok` or `error: preset N is empty` | Restores the routing saved in preset N |
 | `preset clear N` | `ok` | Deletes preset N |
 
-Commands change the stored state (`slots.json`, and `presets.json` for presets), exactly like the command line (`rpi-audiod assign|mute|volume|name|preset ...`). The service applies the change within one or two seconds. With an unknown identity, the command is still stored and applied when the device shows up.
+Commands change the stored state (`slots.json`, and `presets.json` for presets), exactly like the command line (`rpi-audiod assign|mute|volume|route|unroute|name|preset ...`). The service applies the change within one or two seconds. With an unknown identity, the command is still stored and applied when the device shows up.
+
+### Device routes
+
+- `route` joins two USB devices, with no host involved: what SRC captures is played into DST. It makes JACK connections between their bridges, so it needs the audio engine to be running, and it works next to the host's own channels without touching them.
+- A device is never routed to itself: its playback often leaks into its capture, and that would be a loop.
+- Several routes may feed one destination (JACK sums them) and one source may feed several. Levels are the devices' own (`volume`), not per route.
+- A route whose device is absent, muted or still starting waits and is made when it can be. `mute IDENTITY in` cuts the routes it feeds and `mute IDENTITY out` those that reach it.
 
 ### Names
 
@@ -87,7 +96,7 @@ Commands change the stored state (`slots.json`, and `presets.json` for presets),
 
 ### Presets
 
-- A preset stores the routing state: the `in`, `out`, `midi`, `mute`, `volume`, `in_channels` and `out_channels` keys of `slots.json`. It does not store names.
+- A preset stores the routing state: the `in`, `out`, `midi`, `mute`, `volume`, `in_channels`, `out_channels` and `routes` keys of `slots.json`. It does not store names.
 - `preset save N TEXT` names it (up to 24 characters, same bytes). Without text it keeps the preset's name, or uses `Preset N` if the slot was empty. It also stores the time.
 - `preset load N` replaces those keys of `slots.json` with the preset's (keys the preset lacks are removed) and leaves `names` alone. The service re-applies it like any other change: it reassigns channels and MIDI cables, and restores levels and mutes.
 - `save`, `load` and `clear` take the same lock as `slots.json` (`slots.lock`), so they are atomic against other writers.
@@ -123,6 +132,7 @@ Besides what was already there, `status` (the SysEx reply and `status.json`) car
 |---|---|---|
 | `name` | each device | The device's own name if it has one, otherwise the profile's. Absent if there is none |
 | `names` | `in` and `out` of each device | Channel names of the device: a list with as many strings as `channels`, with `""` for unnamed ones. The device's own name takes priority over the profile's, channel by channel. Absent if all are empty |
+| `routes` | root | Only when there are device routes: `[{"src": ID, "dst": ID, "src_pair": P, "dst_pair": P, "waiting": WHY}]`. The pairs are left out when they are 1, and `waiting` is `null` when the route is made, otherwise a short reason (`muted`, `starting`, `ID is not here`...) |
 | `presets` | root | `[{"slot": N, "name": "...", "saved": "YYYY-MM-DD HH:MM"}]`, only the saved presets, in slot order |
 
 `rpi-audiod status` shows the names (the device's and its channels') and the saved presets.
@@ -136,6 +146,7 @@ Besides what was already there, `status` (the SysEx reply and `status.json`) car
  "midi": {"IDENTITY/0": 2},
  "mute": {"in": ["IDENTITY"], "out": []},
  "volume": {"in": {"IDENTITY": 100}, "out": {"IDENTITY": 80}},
+ "routes": [{"src": "IDENTITY", "dst": "IDENTITY2"}, {"src": "IDENTITY", "dst": "IDENTITY3", "src_pair": 2, "dst_pair": 1}],
  "names": {"IDENTITY": {"name": "Desk", "in": {"1": "Voice"}, "out": {"2": "Monitor R"}}}
 }
 ```

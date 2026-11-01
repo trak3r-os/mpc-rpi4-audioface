@@ -18,6 +18,8 @@ control port takes the commands below from the host too (docs/MIDI.md).
   rpi-audiod volume IDENTITY in|out PERCENT   set a device's own capture or playback level
   rpi-audiod name IDENTITY [TEXT...]          name a device (empty: clear it)
   rpi-audiod name IDENTITY in|out K [TEXT...] name its channel K (a device name cannot start with "in N" or "out N")
+  rpi-audiod route SRC DST [--src P] [--dst P]  play what SRC captures into DST (stereo pair P of each, 1 by default)
+  rpi-audiod unroute SRC DST [--src P] [--dst P]  remove it (no pair: every route between them)
   rpi-audiod preset save N [TEXT...]          save the routing state as preset N (1..8)
   rpi-audiod preset load N | clear N          restore or delete it; Program Change 0..7 on the control
                                               channel loads presets 1..8
@@ -51,6 +53,7 @@ from pathlib import Path
 import audiod
 import midi
 import presets
+import routing
 import usb
 from audiod import IN, OUT
 
@@ -691,6 +694,8 @@ class Daemon:
         self.devices, self.bridges = {}, {}   # identity -> Device; (identity, direction) -> Bridge
         self.cards = {}                      # card number -> identity, every USB card
         self.muted = {IN: set(), OUT: set()}
+        self.routes = []                     # device-to-device routes (routing.py)
+        self.route_state = {}                # Route -> why it is not made yet, "" when it is
         self.volumes = {}                    # (identity, direction) -> level last set
         self.seen_usbbus = set()
         self.profiles, self.known = load_profiles(), {}   # device profiles; scan()'s cache
@@ -818,6 +823,7 @@ class Daemon:
                     log(f"rpi-audiod: {b.client} -> gadget {direction.upper()} "
                         + (f"{b.start}-{b.start + b.size - 1}" if b.start else "parked: no free channels"))
         self.muted = {d: set(slots.get("mute", {}).get(d, [])) for d in (IN, OUT)}
+        self.routes = routing.from_state(slots)
         self.set_volumes(slots.get("volume", {}))
 
     def set_volumes(self, saved):
@@ -897,6 +903,21 @@ class Daemon:
                 elif not muted and not connected and src in ports and dst in ports:
                     if run("jack_connect", src, dst).returncode == 0:
                         log(f"rpi-audiod: connected {src} -> {dst}")
+        self.connect_device_routes(ports, pairs)
+
+    def connect_device_routes(self, ports, pairs):
+        """Brings the connections between the bridges to the stored device-to-device routes."""
+        bridges = {key: (b.client, b.channels) for key, b in self.bridges.items() if b.child and b.child.alive()}
+        want, pending = routing.wanted(self.routes, bridges, self.muted, ports)
+        self.route_state = {r: "" for r in self.routes}
+        self.route_state.update(pending)
+        connect, disconnect = routing.reconcile(want, pairs, {b.client for b in self.bridges.values()})
+        for src, dst in disconnect:
+            if run("jack_disconnect", src, dst).returncode == 0:
+                log(f"rpi-audiod: removed {src} -> {dst}")
+        for src, dst in connect:
+            if run("jack_connect", src, dst).returncode == 0:
+                log(f"rpi-audiod: connected {src} -> {dst}")
 
     def starts(self):
         """{direction: {first gadget channel: identity}}, for the control CCs."""
@@ -955,7 +976,9 @@ class Daemon:
         return {"version": VERSION, "time": time.strftime("%Y-%m-%d %H:%M:%S"), "host_playback_rate": playback_rate,
                 "host_capture_rate": capture_rate, "feeder": self.mode, "jack_ready": self.jack_ready,
                 "gadget_channels": self.channels, "devices": devices, "presets": presets.summary(load_presets()),
-                "midi": self.midi.status() if self.midi else None}
+                "midi": self.midi.status() if self.midi else None,
+                **({"routes": [{**routing.entry(r), "waiting": why or None} for r, why in self.route_state.items()]}
+                   if self.route_state else {})}
 
     # --- main loop ---------------------------------------------------------------------
 
@@ -1136,6 +1159,12 @@ def main():
     n = sub.add_parser("name")
     n.add_argument("identity")
     n.add_argument("words", nargs="*", metavar="WORD", help="channel form, then the name; empty clears it")
+    for verb in ("route", "unroute"):
+        v = sub.add_parser(verb)
+        v.add_argument("src", help="identity of the device whose capture feeds the route")
+        v.add_argument("dst", help="identity of the device whose playback receives it")
+        v.add_argument("--src", dest="src_pair", type=int, help="stereo pair of the source, from 1")
+        v.add_argument("--dst", dest="dst_pair", type=int, help="stereo pair of the destination, from 1")
     r = sub.add_parser("preset")
     r.add_argument("action", choices=("save", "load", "clear"))
     r.add_argument("slot", help="1..8")
@@ -1150,6 +1179,9 @@ def main():
         return cmd_change(" ".join(["assign", args.identity, *keys]))
     if args.cmd in ("mute", "volume"):
         return cmd_change(" ".join([args.cmd, args.identity, args.direction, args.value]))
+    if args.cmd in ("route", "unroute"):
+        keys = [f"{k}={v}" for k, v in (("src", args.src_pair), ("dst", args.dst_pair)) if v is not None]
+        return cmd_change(" ".join([args.cmd, args.src, args.dst, *keys]))
     if args.cmd == "name":
         return cmd_change(" ".join(["name", args.identity, *args.words]))
     if args.cmd == "preset":

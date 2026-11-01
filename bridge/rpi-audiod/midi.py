@@ -9,6 +9,7 @@ import re
 from dataclasses import dataclass
 
 import presets
+import routing
 from audiod import IN, OUT, allocate
 
 SYSEX_HEAD = bytes((0xF0, 0x7D, 0x52, 0x41))  # non-commercial id 7D, then "RA": a command
@@ -22,6 +23,8 @@ USAGE = {
     "volume": "volume IDENTITY in|out PERCENT",
     "name": "name IDENTITY [TEXT] | name IDENTITY in|out K [TEXT]",
     "preset": "preset save N [TEXT] | preset load N | preset clear N",
+    "route": "route SRC DST [src=P] [dst=P]",
+    "unroute": "unroute SRC DST [src=P] [dst=P]",
 }
 STATUS_LIMIT = 4000   # bytes the status reply may take (docs/MIDI.md)
 # Dropped from the reply, one stage at a time, until it fits: (device keys, direction keys)
@@ -250,6 +253,17 @@ def parse_command(text):
         return parse_name(text, usage)
     if verb == "preset":
         return parse_preset(text, usage)
+    if verb in ("route", "unroute"):
+        if len(rest) < 2:
+            raise usage
+        given = {}
+        for word in rest[2:]:
+            key, eq, value = word.partition("=")
+            if not eq or key not in ("src", "dst") or key in given:
+                raise usage
+            given[key] = number(key, value, 1)
+        args = (("dst", rest[1]), *((f"{k}_pair", given[k]) for k in ("src", "dst") if k in given))
+        return Command(verb, rest[0], args)
     if verb == "assign":
         if len(rest) < 2:
             raise usage
@@ -337,7 +351,11 @@ def apply_command(state, cmd):
     modified. Audio settings are keyed by the device identity, MIDI cables by IDENTITY/P."""
     state = copy.deepcopy(state or {})
     device, port = split_endpoint(cmd.identity or "")
-    if cmd.verb == "assign":
+    if cmd.verb == "route":
+        routing.add(state, routing.Route(cmd.identity, cmd.arg("dst"), cmd.arg("src_pair", 1), cmd.arg("dst_pair", 1)))
+    elif cmd.verb == "unroute":
+        routing.remove(state, cmd.identity, cmd.arg("dst"), cmd.arg("src_pair"), cmd.arg("dst_pair"))
+    elif cmd.verb == "assign":
         for key in (IN, OUT):
             if cmd.arg(key) is not None:
                 state.setdefault(key, {})[device] = cmd.arg(key)

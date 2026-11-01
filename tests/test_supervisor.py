@@ -739,6 +739,37 @@ def test_muted_routes_are_cut_and_come_back(monkeypatch, tmp_path):
     assert len(w.connections) == 4 and not d.muted[IN]
 
 
+def test_device_routes_connect_cut_and_leave_the_gadget_alone(monkeypatch, tmp_path):
+    w, d = bring_up(monkeypatch, tmp_path, usb_device(1, "mixer"), usb_device(2, "tracker"))
+    gadget = set(w.connections)
+    assert len(gadget) == 8   # mixer and tracker on the host's channels
+    assert d.command("route usb-mixer usb-tracker") == "ok"
+    w.seconds(1.6)
+    mine = {frozenset(("mixer_in:capture_1", "tracker_out:playback_1")),
+            frozenset(("mixer_in:capture_2", "tracker_out:playback_2"))}
+    assert w.connections == gadget | mine
+    assert d.status_data()["routes"] == [{"src": "usb-mixer", "dst": "usb-tracker", "waiting": None}]
+    assert d.command("mute usb-tracker out on") == "ok"
+    w.seconds(1.6)
+    assert not mine & w.connections
+    assert d.status_data()["routes"][0]["waiting"] == "muted"
+    assert d.command("mute usb-tracker out off") == "ok"
+    w.seconds(1.6)
+    assert mine <= w.connections
+    assert d.command("unroute usb-mixer usb-tracker") == "ok"
+    w.seconds(1.6)
+    assert not mine & w.connections and "routes" not in d.status_data()
+    assert gadget <= w.connections   # the host's own routes were never touched
+
+
+def test_a_route_to_a_device_that_is_not_here_waits(monkeypatch, tmp_path):
+    w, d = bring_up(monkeypatch, tmp_path, usb_device(1, "mixer"))
+    assert d.command("route usb-mixer usb-tracker") == "ok"
+    w.seconds(1.6)
+    assert d.status_data()["routes"][0]["waiting"] == "usb-tracker is not here"
+    assert d.command("route usb-mixer usb-mixer").startswith("error:")
+
+
 def test_connect_routes_waits_for_the_ports(monkeypatch, tmp_path):
     w, d = make(monkeypatch, tmp_path)
     w.devices = [usb_device(1, "mixer")]
