@@ -1,0 +1,6 @@
+# rpi-audiod settings for running with no USB host (docs/STANDALONE.md), installed by
+# `tools/deploy.sh --host standalone` as /etc/rpi-audio/rpi-audio.d/standalone.toml.
+# To go back to a host, remove that file and restart rpi-audiod.
+
+[engine]
+mode = "standalone"

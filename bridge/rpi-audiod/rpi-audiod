@@ -9,6 +9,10 @@ drop the gadget when nothing plays into it (docs/hw/2026-10-29-f1-force.md). Whe
 gadget has USB MIDI ports, every MIDI port of a USB device gets one of them, and the
 control port takes the commands below from the host too (docs/MIDI.md).
 
+With [engine] mode = "standalone" there is no host: jackd drives a local card (a pHAT DAC, [standalone] in
+the settings) from the start, the bridges run as soon as it is up, and the card is one more destination for
+the device-to-device routes (docs/MIDI.md). The gadget and its slots are not touched (docs/STANDALONE.md).
+
   rpi-audiod [run]                            the service (rpi-audiod.service)
   rpi-audiod status                           what the service is doing
   rpi-audiod doctor                           check the installation and the Pi's state
@@ -67,6 +71,9 @@ STALL_S = 1.5        # gadget playback pointer still for this long: the feeder i
 STARTUP_S = 4.0      # time a new feeder gets before the pointer has to move
 JACK_FAILS = 3       # jackd failures in a row before falling back to silence for a while
 FALLBACK_S = 10.0
+# [standalone] defaults: a pHAT DAC on the hifiberry-dac overlay (install.sh --hat), as one 2-channel destination.
+STANDALONE = {"card": "sndrpihifiberry", "channels": 2, "rate": 48000, "period": 256, "periods": 3,
+              "identity": "local-dac", "name": "pHAT DAC"}
 MIDI_COMMANDS = 20   # control-port commands run per tick, at most; the rest wait for the next
 CPUFREQ = "/sys/devices/system/cpu/cpufreq"
 os.environ["JACK_NO_START_SERVER"] = "1"   # a JACK tool must never start a server of its own
@@ -377,9 +384,10 @@ class Bridge:
         self.holding = False                              # has its share of the budget: started, not stopped
         self.placed = False                               # its gadget channels (or none) were logged
         self.child, self.backoff, self.next_try, self.start = None, 1.0, 0.0, None
+        self.gadget = True                                # False: no host, so no gadget channels to connect
 
     def routes(self):
-        if self.start is None:
+        if self.start is None or not self.gadget:
             return []
         return audiod.routes(self.client, self.direction, self.start, self.kept)
 
@@ -684,6 +692,16 @@ class Daemon:
         self.card = g.get("card", "UAC2Gadget")
         self.channels = int(gadget_setting("GADGET_CHANNELS", g.get("channels", 2)))
         self.ssize = int(gadget_setting("GADGET_SSIZE", g.get("sample_size", 4)))
+        self.standalone = cfg["engine"].get("mode", "host") == "standalone"
+        if cfg["engine"].get("mode", "host") not in ("host", "standalone"):
+            log(f"rpi-audiod: [engine] mode {cfg['engine']['mode']!r} is not host or standalone; using host")
+        self.sink = {}               # standalone: the local card jackd drives, which routes can end in
+        if self.standalone:
+            a = {**STANDALONE, **cfg.get("standalone", {})}
+            self.sink = {"identity": str(a["identity"]), "name": str(a["name"]), "card": str(a["card"]),
+                         "channels": int(a["channels"]), "rate": int(a["rate"]),
+                         "period": int(a["period"]), "periods": int(a["periods"])}
+            self.card, self.channels, self.ssize = self.sink["card"], self.sink["channels"], 4
         self.pending = None          # feeder seen on the last tick
         self.target = None           # feeder the host's rates call for, once seen on two ticks
         self.mode = None             # what feeds the gadget now: "jack", "silence" or None
@@ -706,7 +724,7 @@ class Daemon:
             log(f"rpi-audiod: [usb] fs_budget {cfg['usb']['fs_budget']!r} is not a number; using {usb.FS_BUDGET}")
             self.fs_budget = usb.FS_BUDGET
         self.slots_stamp = None
-        ports = int(gadget_setting("GADGET_MIDI_PORTS", 0))
+        ports = 0 if self.standalone else int(gadget_setting("GADGET_MIDI_PORTS", 0))
         midi_id = gadget_setting("GADGET_MIDI_ID", cfg["midi"].get("card", "MIDIGadget"))
         self.midi = Midi(cfg, ports, midi_id) if ports else None
         self.rates = (0, 0)
@@ -721,6 +739,13 @@ class Daemon:
 
     def start_jackd(self):
         e = self.cfg["engine"]
+        if self.standalone:
+            k = self.sink   # playback only (-P): a pHAT DAC has no capture
+            cmd = ["jackd", "-R", "-P", str(e.get("priority", 70)), "-t", "2000", "-d", "alsa", "-d", f"hw:{self.card}",
+                   "-P", "-r", str(k["rate"]), "-p", str(k["period"]), "-n", str(k["periods"]), "-o", str(k["channels"])]
+            log(f"rpi-audiod: starting {' '.join(cmd)}")
+            self.jackd, self.jack_ready = Child("jackd", cmd), False
+            return
         # hw:NAME, not hw:CARD=NAME: jackd's card reservation cannot parse the latter.
         cmd = ["jackd", "-R", "-P", str(e.get("priority", 70)), "-t", "2000", "-d", "alsa",
                "-d", f"hw:{self.card}", "-r", str(self.rate), "-p", str(e.get("period", 64)),
@@ -749,7 +774,7 @@ class Daemon:
 
     def set_mode(self, mode, now):
         if mode == "jack" and now < self.fallback_until:
-            mode = "silence"
+            mode = None if self.standalone else "silence"
         if mode == self.mode and (self.jackd or self.player or mode is None):
             return
         self.stop_feeder()
@@ -778,7 +803,8 @@ class Daemon:
         if self.jackd:
             self.jack_fails += 1
             if self.jack_fails >= JACK_FAILS:
-                log(f"rpi-audiod: jackd failed {self.jack_fails} times in a row; silence for {FALLBACK_S:.0f} s")
+                log(f"rpi-audiod: jackd failed {self.jack_fails} times in a row; "
+                    + ("waiting" if self.standalone else "silence") + f" for {FALLBACK_S:.0f} s")
                 self.jack_fails, self.fallback_until = 0, now + FALLBACK_S
         self.stop_feeder()
         self.mode = None   # set_mode starts it again on the next tick
@@ -793,6 +819,9 @@ class Daemon:
     def reassign(self):
         """Gives the devices their gadget channels: decided and saved under the lock, then the
         bridges move (stopping one can take a second; nothing waits for that under the lock)."""
+        if self.standalone:
+            self.place_without_gadget()
+            return
         reserved = {IN: self.cfg["slots"].get("reserve_in", []),
                     OUT: self.cfg["slots"].get("reserve_out", [])}
         assigned = {}
@@ -823,6 +852,20 @@ class Daemon:
                     b.start, b.placed = assigned[direction].get(i), True
                     log(f"rpi-audiod: {b.client} -> gadget {direction.upper()} "
                         + (f"{b.start}-{b.start + b.size - 1}" if b.start else "parked: no free channels"))
+        self.take_state(slots)
+
+    def place_without_gadget(self):
+        """Standalone: no gadget channels to give out (and the saved ones, the host mode's, stay as they are).
+        A bridge only needs a mark that it may run."""
+        self.slots_stamp = slots_stamp()
+        for b in self.bridges.values():
+            if not b.placed:
+                b.start, b.placed = 1, True
+                log(f"rpi-audiod: {b.client} ready (standalone: routes only)")
+        self.take_state(load_slots())
+
+    def take_state(self, slots):
+        """The saved mutes, device-to-device routes and levels."""
         self.muted = {d: set(slots.get("mute", {}).get(d, [])) for d in (IN, OUT)}
         self.routes = routing.from_state(slots)
         self.set_volumes(slots.get("volume", {}))
@@ -879,6 +922,7 @@ class Daemon:
                     log(f"rpi-audiod: {dev.id}: the profile ignores every {direction.upper()} channel; no bridge")
                 elif dev.plans[direction]:
                     self.bridges[(i, direction)] = Bridge(dev, direction)
+                    self.bridges[(i, direction)].gadget = not self.standalone
             if dev.usbbus not in self.seen_usbbus:
                 self.seen_usbbus.add(dev.usbbus)
                 self.raise_volumes(dev)
@@ -909,10 +953,14 @@ class Daemon:
     def connect_device_routes(self, ports, pairs):
         """Brings the connections between the bridges to the stored device-to-device routes."""
         bridges = {key: (b.client, b.channels) for key, b in self.bridges.items() if b.child and b.child.alive()}
+        clients = {b.client for b in self.bridges.values()}
+        if self.standalone:   # jackd's own ports are the local card's: system:playback_N
+            bridges[(self.sink["identity"], OUT)] = ("system", self.sink["channels"])
+            clients.add("system")
         want, pending = routing.wanted(self.routes, bridges, self.muted, ports)
         self.route_state = {r: "" for r in self.routes}
         self.route_state.update(pending)
-        connect, disconnect = routing.reconcile(want, pairs, {b.client for b in self.bridges.values()})
+        connect, disconnect = routing.reconcile(want, pairs, clients)
         for src, dst in disconnect:
             if run("jack_disconnect", src, dst).returncode == 0:
                 log(f"rpi-audiod: removed {src} -> {dst}")
@@ -974,31 +1022,49 @@ class Daemon:
                              "fs_load": b.load or None, "blocked": b.blocked}
                     entry[direction].update({k: v for k, v in extra.items() if v})
             devices.append(entry)
+        if self.standalone:
+            k = self.sink
+            devices.append({"identity": k["identity"], "card": k["card"], "name": k["name"], "local": True,
+                            OUT: {"channels": k["channels"], "rate": k["rate"], "running": self.jack_ready,
+                                  "muted": k["identity"] in self.muted[OUT], "fixed_level": True}})
         return {"version": VERSION, "time": time.strftime("%Y-%m-%d %H:%M:%S"), "host_playback_rate": playback_rate,
                 "host_capture_rate": capture_rate, "feeder": self.mode, "jack_ready": self.jack_ready,
                 "gadget_channels": self.channels, "devices": devices, "presets": presets.summary(load_presets()),
                 "midi": self.midi.status() if self.midi else None,
                 **({"routes": [{**routing.entry(r), "waiting": why or None} for r, why in self.route_state.items()]}
-                   if self.route_state else {})}
+                   if self.route_state else {}),
+                **({"standalone": {k: self.sink[k] for k in ("identity", "name", "card", "channels", "rate")}}
+                   if self.standalone else {})}
 
     # --- main loop ---------------------------------------------------------------------
 
+    def follow_host(self, now):
+        """Brings the feeder to what the host's rates call for (mode A); the rates are believed when seen on two
+        ticks in a row."""
+        playback_rate, capture_rate = self.rates = self.host_rates()
+        want = audiod.feeder(playback_rate, capture_rate)
+        if want == self.pending and (want != self.target or (want and playback_rate != self.rate)):
+            if want:   # the same on two ticks in a row
+                log(f"rpi-audiod: host streaming at {playback_rate} Hz (capture {capture_rate}): {want}")
+            else:
+                log("rpi-audiod: the host stopped streaming")
+            if self.rate and playback_rate != self.rate:
+                self.stop_feeder()
+                self.mode = None
+            self.target, self.rate = want, playback_rate
+        self.pending = want
+
     def loop(self):
-        log(f"rpi-audiod: gadget {self.card}, {self.channels} ch, sample size {self.ssize}")
+        if self.standalone:
+            k = self.sink
+            log(f"rpi-audiod: standalone on {k['card']}, {k['channels']} ch at {k['rate']} Hz; no host, no gadget")
+            self.target, self.rate = "jack", k["rate"]
+        else:
+            log(f"rpi-audiod: gadget {self.card}, {self.channels} ch, sample size {self.ssize}")
         while not self.stopping:
             now = time.monotonic()
-            playback_rate, capture_rate = self.rates = self.host_rates()
-            want = audiod.feeder(playback_rate, capture_rate)
-            if want == self.pending and (want != self.target or (want and playback_rate != self.rate)):
-                if want:   # the same on two ticks in a row
-                    log(f"rpi-audiod: host streaming at {playback_rate} Hz (capture {capture_rate}): {want}")
-                else:
-                    log("rpi-audiod: the host stopped streaming")
-                if self.rate and playback_rate != self.rate:
-                    self.stop_feeder()
-                    self.mode = None
-                self.target, self.rate = want, playback_rate
-            self.pending = want
+            if not self.standalone:
+                self.follow_host(now)
             if self.target != self.mode or (self.target and not (self.jackd or self.player)):
                 self.set_mode(self.target, now)
             self.check_feeder(now)
@@ -1036,15 +1102,26 @@ def cmd_status(_):
     except (OSError, ValueError):
         sys.exit("rpi-audiod: no status; is rpi-audiod.service running?")
     print(f"rpi-audiod {s.get('version', '?')}")
-    print(f"{s['time']}  host: playback {s['host_playback_rate']} Hz, capture {s['host_capture_rate']} Hz;"
-          f" feeder: {s['feeder']}{' (jack up)' if s['jack_ready'] else ''}")
+    alone = s.get("standalone")
+    if alone:
+        print(f"{s['time']}  standalone: {alone['card']}, {alone['channels']} ch at {alone['rate']} Hz;"
+              f" jackd {'up' if s['jack_ready'] else 'not up'}")
+    else:
+        print(f"{s['time']}  host: playback {s['host_playback_rate']} Hz, capture {s['host_capture_rate']} Hz;"
+              f" feeder: {s['feeder']}{' (jack up)' if s['jack_ready'] else ''}")
     for d in s["devices"]:
         print(f"  {d['card']:12} {d['identity']}" + (f"  {d['name']}" if d.get("name") else ""))
-        for direction, label in ((IN, "to host IN"), (OUT, "from host OUT")):
+        if d.get("local"):
+            b = d[OUT]
+            print(f"    {'system':16} {b['channels']} ch {b['rate']} Hz  local output"
+                  f"  {'running' if b['running'] else 'not running'}{', muted' if b.get('muted') else ''}")
+            continue
+        for direction, label in ((IN, "capture" if alone else "to host IN"),
+                                 (OUT, "playback" if alone else "from host OUT")):
             b = d.get(direction)
             if b:
                 size = b.get("slots", b["channels"])
-                where = f"{b['start']}-{b['start'] + size - 1}" if b["start"] else "parked"
+                where = ("" if alone else f"{b['start']}-{b['start'] + size - 1}" if b["start"] else "parked")
                 extra = ", muted" if b.get("muted") else ""
                 if b.get("names"):
                     extra += f", channels {' '.join(n or '-' for n in b['names'])}"
@@ -1052,8 +1129,8 @@ def cmd_status(_):
                     extra += ", ignoring " + ",".join(map(str, b["ignored"]))
                 if b.get("level") is not None:
                     extra += f", level {b['level']}%"
-                print(f"    {b['client']:16} {b['channels']} ch {b['rate']} Hz  {label} {where}"
-                      f"  {'running' if b['running'] else 'not running'}{extra}")
+                print(f"    {b['client']:16} {b['channels']} ch {b['rate']} Hz  {label} {where}".rstrip()
+                      + f"  {'running' if b['running'] else 'not running'}{extra}")
                 if b.get("blocked"):
                     print(f"      waiting: {b['blocked']}")
     if s.get("presets"):
@@ -1077,8 +1154,12 @@ def cmd_doctor(_):
         print(f"{level:4}  {what:10} {detail}")
 
     line("ok", "version", VERSION)
+    standalone = load_config()["engine"].get("mode", "host") == "standalone"
     udcs = sorted(glob.glob("/sys/class/udc/*"))
-    if not udcs:
+    if standalone:
+        line("info", "udc", "not used: [engine] mode is standalone (no host)")
+        udcs = []
+    elif not udcs:
         line("FAIL", "udc", "no USB device controller: is dtoverlay=dwc2,dr_mode=peripheral in config.txt?"
              " (then reboot)")
     for u in udcs:
@@ -1088,13 +1169,16 @@ def cmd_doctor(_):
     for unit in ("rpi-audio-gadget", "rpi-audiod", "rpi-audio-cpu"):
         active = run("systemctl", "is-active", f"{unit}.service").stdout.strip() or "?"
         enabled = run("systemctl", "is-enabled", f"{unit}.service").stdout.strip() or "?"
-        level = "ok" if active == "active" else "warn" if unit == "rpi-audio-cpu" else "FAIL"
+        level = ("ok" if active == "active" else "warn" if unit == "rpi-audio-cpu"
+                 or standalone and unit == "rpi-audio-gadget" else "FAIL")
         line(level, "service", f"{unit}: {active}, {enabled}")
     try:
         s = json.loads(STATUS.read_text())
         age = time.time() - STATUS.stat().st_mtime
-        line("ok" if age < 10 else "FAIL", "status", f"written {age:.0f} s ago; host playback"
-             f" {s['host_playback_rate']} Hz, capture {s['host_capture_rate']} Hz; feeder {s['feeder']}")
+        what = (f"standalone on {s['standalone']['card']}; jackd {'up' if s['jack_ready'] else 'not up'}"
+                if s.get("standalone") else f"host playback {s['host_playback_rate']} Hz,"
+                f" capture {s['host_capture_rate']} Hz; feeder {s['feeder']}")
+        line("ok" if age < 10 else "FAIL", "status", f"written {age:.0f} s ago; {what}")
         for d in s["devices"]:
             for direction in (IN, OUT):
                 b = d.get(direction) or {}

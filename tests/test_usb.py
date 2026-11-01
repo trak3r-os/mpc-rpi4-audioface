@@ -246,7 +246,7 @@ def test_status_shows_the_reason(monkeypatch):
     tick(d, 1099)
     d.cfg, d.rates, d.mode, d.jack_ready, d.channels, d.midi = {}, (0, 0), None, False, 26, None
     d.devices = {b.dev.identity: b.dev for b in d.bridges.values()}
-    d.muted, d.volumes, d.route_state = {IN: set(), OUT: set()}, {}, {}
+    d.muted, d.volumes, d.route_state, d.standalone = {IN: set(), OUT: set()}, {}, {}, False
     status = {e["identity"]: e for e in d.status_data()["devices"]}
     assert "blocked" not in status["usb-a"][IN] and status["usb-a"][IN]["fs_load"] == 903
     assert status["usb-b"][IN]["blocked"].startswith("USB full-speed budget: needs 903 B, 196 B of 1099 B")
@@ -262,7 +262,7 @@ def test_device_ignores_channels_and_status_names(monkeypatch):
     assert b.routes() == [("a_in:capture_1", "system:playback_5"), ("a_in:capture_3", "system:playback_6")]
     d.bridges, d.devices = {("usb-a", IN): b}, {"usb-a": dev}
     d.rates, d.mode, d.jack_ready, d.channels, d.midi = (0, 0), None, False, 26, None
-    d.muted, d.volumes, d.route_state = {IN: set(), OUT: set()}, {}, {}
+    d.muted, d.volumes, d.route_state, d.standalone = {IN: set(), OUT: set()}, {}, {}, False
     entry = d.status_data()["devices"][0]
     assert entry["name"] == "Dev"
     assert entry[IN]["slots"] == 2 and entry[IN]["ignored"] == [2] and entry[IN]["names"] == ["L", "R", "Aux"]
@@ -295,7 +295,7 @@ def command_daemon(monkeypatch, tmp_path):
     stateful(monkeypatch, tmp_path)
     d = daemon.Daemon.__new__(daemon.Daemon)
     d.bridges, d.devices, d.rates, d.mode, d.jack_ready, d.channels, d.midi = {}, {}, (0, 0), None, False, 26, None
-    d.muted, d.volumes, d.route_state = {IN: set(), OUT: set()}, {}, {}
+    d.muted, d.volumes, d.route_state, d.standalone = {IN: set(), OUT: set()}, {}, {}, False
     return d
 
 

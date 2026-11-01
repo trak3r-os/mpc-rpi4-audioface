@@ -7,11 +7,24 @@
 card = "UAC2Gadget"          # ALSA card id of the gadget on the Pi
 
 [engine]
-# jackd on the gadget while the host streams both ways (mode A, docs/PLAN.md §2).
+# "host" (the default): jackd on the gadget while the host streams both ways (mode A, docs/PLAN.md §2).
+# "standalone": no host; jackd drives a local card from the start ([standalone] below, docs/STANDALONE.md).
+# mode = "host"
 # 26 ch S16 at 44.1 kHz run at a period of 64 (docs/hw/2026-10-29-f2-jack-bench.md).
 period = 64
 periods = 3
 priority = 70
+
+[standalone]
+# The local card jackd drives in standalone mode, as one destination for the device routes.
+# Every key is optional; these are the defaults, for a pHAT DAC on dtoverlay=hifiberry-dac.
+# card = "sndrpihifiberry"   ALSA card id (aplay -l)
+# channels = 2
+# rate = 48000
+# period = 256               frames; the USB bridges add their own buffering
+# periods = 3
+# identity = "local-dac"     how routes, mutes and the display name it
+# name = "pHAT DAC"
 
 [bridge]
 # zita-a2j / zita-j2a per device direction: period and number of periods.

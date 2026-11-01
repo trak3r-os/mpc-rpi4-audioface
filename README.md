@@ -204,6 +204,10 @@ On a Linux host, `tools/midictl.py status` sends a command and prints the reply.
 
 Tested: SysEx and CCs from a Linux laptop, and CCs from an MPC track. Not tested: SysEx from MPC, and the Force's physical Q-Links.
 
+## Without a host (optional)
+
+The Pi can also run with no host on its USB-C port: the USB devices are bridged to JACK and routed to each other and to a local DAC (a pHAT), set from the command line or from a small OLED with a rotary encoder. It is a setting, not a different program, and host mode stays the default. See [docs/STANDALONE.md](docs/STANDALONE.md) and [docs/DISPLAY.md](docs/DISPLAY.md).
+
 ## Akai Force and MPC (optional extras)
 
 These need a modded Force with root SSH access (tested with MockbaMod: a community modification of the Force's system that loads add-ons into MPC). The Pi side works without them. Everything below is installed by you, and not by the Pi installer. Each one is a zip in the format of sd88me's [mpc-vst-plugins](https://github.com/sd88me/mpc-vst-plugins) catalog, with sd88me's installer, built from this repository. No zips are published yet: build them from source (Docker, g++ and Python 3 with Pillow).
@@ -276,7 +280,7 @@ python3 -m pytest -q tests
 |---|---|
 | `gadget/` | The USB gadget, built through configfs |
 | `bridge/rpi-audiod/` | The service: devices, channel slots, routing, USB budget, MIDI |
-| `bridge/rpi-audio-ui/` | The small-display interface's logic (`docs/DISPLAY.md`); the display driver is not built yet |
+| `bridge/rpi-audio-ui/` | The OLED and rotary-encoder service: interface, SH1106 driver, input decoding (`docs/DISPLAY.md`) |
 | `systemd/` | Service units |
 | `config/` | Settings installed to `/etc/rpi-audio/`, and device profiles |
 | `tools/` | Inventory, deployment, test tones, MIDI client |

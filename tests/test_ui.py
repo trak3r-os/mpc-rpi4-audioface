@@ -164,6 +164,19 @@ def test_device_mutes_and_levels():
     assert press(u, st, "back") == [] and text(u, st)[0].strip() == "GP-150"
 
 
+def test_a_local_dac_has_a_mute_and_no_level():
+    st = status()
+    st["devices"].append({"identity": "local-dac", "card": "sndrpihifiberry", "name": "pHAT DAC", "local": True,
+                          "out": {"channels": 2, "muted": False, "fixed_level": True}})
+    u = display.UI()
+    press(u, st, "cw", "cw", "confirm", "cw", "cw", "cw", "confirm")   # Devices -> pHAT DAC
+    assert text(u, st)[0].strip() == "pHAT DAC"
+    assert [r.strip(">").strip() for r in text(u, st)[1:4]] == ["Out mute off", "", ""]
+    assert press(u, st, "confirm", now=1.0) == ["mute local-dac out on"]
+    press(u, st, "back", "back", "ccw", "confirm")   # Routes: the DAC is a destination like the rest
+    assert [r.strip(">").strip() for r in text(u, st)[1:5]] == ["GP-150", "Tracker", "pHAT DAC", ""]
+
+
 def test_a_level_edit_starts_at_a_default_when_the_device_has_none():
     u, st = display.UI(), status()
     press(u, st, "cw", "cw", "confirm", "confirm")   # Devices -> Mixer

@@ -85,6 +85,7 @@ Commands change the stored state (`slots.json`, and `presets.json` for presets),
 - A device is never routed to itself: its playback often leaks into its capture, and that would be a loop.
 - Several routes may feed one destination (JACK sums them) and one source may feed several. Levels are the devices' own (`volume`), not per route.
 - A route whose device is absent, muted or still starting waits and is made when it can be. `mute IDENTITY in` cuts the routes it feeds and `mute IDENTITY out` those that reach it.
+- In standalone mode (`docs/STANDALONE.md`) the local DAC is a destination named `local-dac` (settings: `[standalone] identity`): `route usb-mixer local-dac`. It has no capture, no level of its own, and `mute local-dac out on` cuts what reaches it.
 
 ### Names
 

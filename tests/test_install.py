@@ -286,3 +286,10 @@ def test_hat_enables_the_display_service_and_keeps_it_apart_from_the_audio(root)
     unit = (root / "etc/systemd/system/rpi-audio-ui.service").read_text()
     assert "SupplementaryGroups=gpio i2c" in unit and "Requires=" not in unit and "BindsTo=" not in unit
     assert "/usr/local/lib/rpi-audio/ui/rpi-audio-ui" in unit
+
+
+def test_standalone_profile_is_installed_with_host(root):
+    r = run(root, "--no-boot-config", "--host", "standalone")
+    assert r.returncode == 0, r.stderr
+    conf = (root / "etc/rpi-audio/rpi-audio.d/standalone.toml").read_text()
+    assert "[engine]\nmode = \"standalone\"\n" in conf

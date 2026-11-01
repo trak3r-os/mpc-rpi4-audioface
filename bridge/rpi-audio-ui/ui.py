@@ -246,6 +246,8 @@ class Device(Menu):
             info = dev[side]
             muted = ui.shown(("mute", self.identity, side), bool(info.get("muted")), now)
             out.append((f"{name:<4}mute {'on' if muted else 'off'}", ("mute", side, muted)))
+            if info.get("fixed_level"):
+                continue   # a DAC with no volume of its own
             if self.editing and self.editing[0] == side:
                 out.append((f"{name:<4}lvl [{self.editing[1]}%]", ("level", side, self.editing[1])))
             else:

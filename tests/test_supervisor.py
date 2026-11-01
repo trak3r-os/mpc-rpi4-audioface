@@ -36,6 +36,8 @@ if stub:
 
 CARD = "UAC2Gadget"
 PCM_STATUS = f"/proc/asound/{CARD}/pcm0p/sub0/status"
+DAC = "sndrpihifiberry"   # [standalone] card, by default
+PCM_STATUS_DAC = f"/proc/asound/{DAC}/pcm0p/sub0/status"
 
 
 class Halt(Exception):
@@ -169,7 +171,8 @@ class World:
         return subprocess.CompletedProcess(cmd, code, out, "")
 
     def set_ptr(self):
-        self.files[PCM_STATUS] = f"state: RUNNING\nowner_pid   : 1\nhw_ptr      : {self.ptr}\nappl_ptr    : 0\n"
+        self.files[PCM_STATUS] = self.files[PCM_STATUS_DAC] = (
+            f"state: RUNNING\nowner_pid   : 1\nhw_ptr      : {self.ptr}\nappl_ptr    : 0\n")
 
     def sleep(self, seconds):
         self.now += seconds
@@ -711,6 +714,109 @@ def test_a_change_from_the_command_line_moves_the_bridge(monkeypatch, tmp_path):
     assert b.start == 5 and b.child is None and logged(w, "mixer_in -> gadget IN 5-6")
     assert ("jack_disconnect", "mixer_in:capture_1", "system:playback_1") in w.calls   # from the old channels
     assert d.bridges[("usb-mixer", OUT)].start == 1
+
+
+# --- standalone: no host, jackd on a local card ------------------------------------------------------------------
+
+def alone(monkeypatch, tmp_path, *devices, **sections):
+    w, d = make(monkeypatch, tmp_path, engine={"mode": "standalone"}, **sections)
+    w.devices = list(devices)
+    return w, d
+
+
+def test_standalone_starts_jackd_on_the_dac_without_a_host(monkeypatch, tmp_path):
+    w, d = alone(monkeypatch, tmp_path, usb_device(1, "mixer"))
+    assert w.rates == (0, 0)
+    w.run_loop(3)
+    assert d.mode == "jack" and d.jack_ready and logged(w, "standalone on sndrpihifiberry, 2 ch at 48000 Hz")
+    assert not logged(w, "host streaming") and not w.called("amixer", "-c", CARD, "contents")   # nobody asks the gadget
+    jackd = w.children[0]
+    assert jackd.cmd[:2] == ["jackd", "-R"] and "hw:sndrpihifiberry" in jackd.cmd
+    alsa = jackd.cmd[jackd.cmd.index("alsa"):]
+    assert alsa[:3] == ["alsa", "-d", "hw:sndrpihifiberry"] and "-P" in alsa   # playback only
+    assert [alsa[alsa.index(k) + 1] for k in ("-r", "-p", "-n", "-o")] == ["48000", "256", "3", "2"]
+    assert "-i" not in alsa
+    assert zita_names(w) == ["mixer_in", "mixer_out"]
+    assert w.connections == set()   # no gadget channels to connect to: routes only
+    assert not (tmp_path / "slots.json").exists() and d.midi is None
+
+
+def test_standalone_leaves_the_hosts_saved_slots_alone(monkeypatch, tmp_path):
+    saved = {"in": {"usb-mixer": 5}, "in_channels": {"usb-mixer": 2}, "mute": {"in": ["usb-old"]}}
+    (tmp_path / "slots.json").write_text(json.dumps(saved))
+    w, d = alone(monkeypatch, tmp_path, usb_device(1, "mixer"))
+    w.run_loop(3)
+    assert json.loads((tmp_path / "slots.json").read_text()) == saved
+    assert d.muted[IN] == {"usb-old"}   # the mutes and routes are the same in both modes
+
+
+def test_standalone_routes_end_in_the_dac_and_unwanted_connections_go(monkeypatch, tmp_path):
+    w, d = alone(monkeypatch, tmp_path, usb_device(1, "mixer"), usb_device(2, "tracker"))
+    daemon.cmd_change("route usb-mixer local-dac")
+    daemon.cmd_change("route usb-mixer usb-tracker")
+    daemon.cmd_change("route usb-tracker local-dac")
+    w.run_loop(3)
+    w.seconds(1.5)
+    both = {frozenset((f"{src}:capture_{k}", f"{dst}:playback_{k}")) for k in (1, 2)
+            for src, dst in (("mixer_in", "system"), ("mixer_in", "tracker_out"), ("tracker_in", "system"))}
+    assert w.connections == both   # a stereo pair, channel for channel; the DAC takes both sources (JACK sums)
+    stray = frozenset(("tracker_in:capture_1", "system:playback_2"))   # not a route
+    w.connections.add(stray)
+    w.seconds(1.5)
+    assert stray not in w.connections and w.connections == both
+    daemon.cmd_change("unroute usb-mixer local-dac")
+    w.seconds(1.5)
+    assert w.connections == {c for c in both if not any(p.startswith("mixer_in") for p in c) or
+                             any(p.startswith("tracker_out") for p in c)}
+
+
+def test_standalone_status_lists_the_dac_as_a_destination_and_a_mute_cuts_it(monkeypatch, tmp_path):
+    w, d = alone(monkeypatch, tmp_path, usb_device(1, "mixer"))
+    daemon.cmd_change("route usb-mixer local-dac")
+    w.run_loop(3)
+    w.seconds(1)
+    status = json.loads((tmp_path / "run" / "status.json").read_text())
+    assert status["standalone"] == {"identity": "local-dac", "name": "pHAT DAC", "card": "sndrpihifiberry",
+                                    "channels": 2, "rate": 48000}
+    dac = status["devices"][-1]
+    assert dac["identity"] == "local-dac" and dac["local"] is True and "in" not in dac
+    assert dac[OUT] == {"channels": 2, "rate": 48000, "running": True, "muted": False, "fixed_level": True}
+    assert status["routes"] == [{"src": "usb-mixer", "dst": "local-dac", "waiting": None}]
+    daemon.cmd_change("mute local-dac out on")
+    w.seconds(2.5)
+    assert not any("system:playback_1" in c for c in w.connections)
+    status = json.loads((tmp_path / "run" / "status.json").read_text())
+    assert status["routes"][0]["waiting"] == "muted" and status["devices"][-1][OUT]["muted"] is True
+
+
+def test_standalone_waits_instead_of_playing_silence_when_jackd_keeps_failing(monkeypatch, tmp_path):
+    w, d = alone(monkeypatch, tmp_path)
+    w.ptr_step = 0
+    w.seconds(14)
+    assert logged(w, "jackd failed 3 times in a row; waiting for 10 s")
+    assert d.mode is None and d.target == "jack" and d.jackd is None and d.player is None
+    assert not [c for c in w.children if c.name == "silence"]
+    w.ptr_step = 48
+    w.seconds(12)
+    assert d.mode == "jack" and d.jackd and d.jackd.alive()   # and it tries again
+
+
+def test_host_mode_is_what_an_unknown_mode_means(monkeypatch, tmp_path):
+    w, d = make(monkeypatch, tmp_path, engine={"mode": "stand-alone"})
+    assert not d.standalone and logged(w, "mode 'stand-alone' is not host or standalone; using host")
+    assert "standalone" not in d.status_data() and d.card == CARD
+
+
+def test_status_cli_prints_the_standalone_engine(monkeypatch, tmp_path, capsys):
+    w, d = alone(monkeypatch, tmp_path, usb_device(1, "mixer"))
+    w.run_loop(3)
+    w.seconds(1)
+    monkeypatch.setattr(daemon, "STATUS", tmp_path / "run" / "status.json")
+    daemon.cmd_status(None)
+    out = capsys.readouterr().out
+    assert "standalone: sndrpihifiberry, 2 ch at 48000 Hz; jackd up" in out
+    assert "local output  running" in out and "capture  running" in out and "playback  running" in out
+    assert "host IN" not in out and "parked" not in out
 
 
 def test_cmd_takes_a_whole_command_the_way_the_display_service_sends_it(monkeypatch, tmp_path, capsys):
