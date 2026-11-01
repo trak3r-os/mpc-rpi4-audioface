@@ -5,7 +5,10 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "bridge" / "rpi-audio-ui"))
+import font5x7  # noqa: E402
+import render  # noqa: E402
 import sh1106  # noqa: E402
+import ui as display  # noqa: E402
 
 
 class Link:
@@ -74,3 +77,35 @@ def test_all_on_and_power():
     screen.power(False)
     screen.power(True)
     assert link.sent == [[0, 0xA5], [0, 0xA4], [0, 0xAE], [0, 0xAF]]
+
+
+def lit(canvas, x, y, w=6, h=8):
+    return [[canvas.get(x + i, y + j) for i in range(w)] for j in range(h)]
+
+
+def test_font_has_every_printable_character_and_falls_back_to_a_question_mark():
+    assert len(font5x7.GLYPHS) == 95 and all(len(g) == 5 and all(0 <= b < 128 for b in g) for g in font5x7.GLYPHS)
+    assert font5x7.glyph("\u00e9") == font5x7.glyph("?") == font5x7.glyph("\x01")
+    assert font5x7.glyph(" ") == (0, 0, 0, 0, 0)
+    assert len({font5x7.glyph(c) for c in "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789"}) == 62
+
+
+def test_text_is_drawn_in_six_pixel_cells():
+    c = sh1106.Canvas()
+    render.draw_text(c, 0, 0, "F")
+    # the F: a stem on the left, a bar on top, a bar in the middle
+    assert [c.get(0, y) for y in range(7)] == [True] * 7 and c.get(4, 0) and c.get(3, 3) and not c.get(4, 6)
+    assert not any(c.get(5, y) for y in range(8))   # the blank column after the glyph
+    render.draw_text(c, 0, 8, "FF")
+    assert lit(c, 0, 8, 6, 8) == lit(c, 6, 8, 6, 8)
+
+
+def test_rows_fill_the_display_and_an_inverse_row_is_a_bar():
+    rows = [display.Row(display.fit("Title"), True)] + [display.Row(display.fit("x"))] * (display.ROWS - 1)
+    c = render.draw_rows(sh1106.Canvas(), rows)
+    assert all(c.get(x, 0) for x in (0, 127)) and all(c.get(0, y) and c.get(127, y) for y in range(8))   # the bar
+    assert not c.get(0, 8) and not c.get(127, 63)
+    assert display.COLS * font5x7.CELL_W + 2 * render.MARGIN <= sh1106.WIDTH
+    assert display.ROWS * font5x7.CELL_H == sh1106.HEIGHT
+    # the title is dark text on the bar: the T's first column has only its top pixel set
+    assert not c.get(render.MARGIN, 0) and c.get(render.MARGIN, 3)

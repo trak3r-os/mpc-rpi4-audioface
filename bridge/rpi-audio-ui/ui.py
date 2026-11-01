@@ -12,7 +12,7 @@ Display: ROWS rows of COLS characters, the first one a title."""
 
 from dataclasses import dataclass
 
-COLS, ROWS = 16, 8
+COLS, ROWS = 21, 8   # 6x8-pixel cells on a 128x64 display (bridge/rpi-audio-ui/font5x7.py)
 BODY = ROWS - 1            # rows under the title
 LEVEL_STEP = 5             # percent per encoder click
 LEVEL_DEFAULT = 80         # where an edit starts when the device has no stored level

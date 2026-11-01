@@ -122,7 +122,7 @@ def test_presets_load_and_save_with_a_question():
     u = display.UI()
     press(u, st, "confirm")
     rows = text(u, st)
-    assert rows[1:4] == [">1 -empty-      ", " 2 Live         ", " 3 Preset 3     "]
+    assert [r.rstrip() for r in rows[1:4]] == [">1 -empty-", " 2 Live", " 3 Preset 3"]
     assert press(u, st, "confirm") == [] and u.render(st)[-1].text.strip() == "1 is empty"
     assert press(u, st, "cw", "confirm") == ["preset load 2"] and u.render(st)[-1].text.strip() == "loaded 2"
     assert press(u, st, "push") == []
