@@ -20,6 +20,7 @@ STATUS_S = 0.5       # how often the service's status is read
 STALE_S = 10.0       # a status file older than this is not rpi-audiod's any more (it writes one every 2 s)
 RETRY_S = 5.0        # between tries to reach the display
 NO_SERVICE = "no rpi-audiod status"
+WORKING = "working..."   # on the last row while a command runs (each takes ~0.7 s on a Pi 4)
 
 
 @dataclass
@@ -115,11 +116,17 @@ class App:
             if self.display:
                 self.safe(lambda: self.display.power(True))
             return
-        for command in self.ui.handle(event, self.status, now):
+        commands = self.ui.handle(event, self.status, now)
+        if commands:   # the loop is stuck in run_command: show that something is happening before it starts
+            done, self.ui.message = self.ui.message, WORKING
+            self.draw(now)
+        for command in commands:
             error = self.run_command(command)
             if error:
                 self.log(f"rpi-audio-ui: {command}: {error}")
                 self.ui.message = error[:ui.COLS]
+        if commands and self.ui.message == WORKING:
+            self.ui.message = done
 
     def draw(self, now):
         if self.cfg.idle_s and not self.blank and now - self.last_input > self.cfg.idle_s:

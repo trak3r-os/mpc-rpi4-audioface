@@ -144,6 +144,21 @@ def test_the_encoder_and_buttons_drive_the_menus_and_a_command_runs():
     assert rig.commands == ["mute usb-mixer in on"]
 
 
+def test_working_is_shown_while_a_command_runs_and_then_the_result():
+    rig = Rig()
+    rig.step()
+    rig.status = {**STATUS, "presets": [{"slot": 1, "name": "A", "saved": "x"}]}
+    rig.step(1.0)
+    rig.press("confirm")   # Presets
+    seen = []
+    rig.app.run_command = lambda text: seen.append(rig.app.ui.render(rig.app.status)[-1].text.strip()) or ""
+    shown = len(rig.screen.shown)
+    rig.press("confirm")   # load 1
+    assert seen == [uiservice.WORKING]
+    assert len(rig.screen.shown) > shown   # drawn before the command started
+    assert rig.app.ui.render(rig.app.status)[-1].text.strip() == "loaded 1"
+
+
 def test_a_command_that_fails_is_shown_and_logged():
     rig = Rig()
     rig.errors["preset load 1"] = "preset 1 is empty"
