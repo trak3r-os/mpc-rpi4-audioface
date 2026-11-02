@@ -71,7 +71,7 @@ Idea del usuario: la Pi como hub sin host (Tracker en "2 OUT / 2 IN", mezclador,
   - `install.sh`/`deploy.sh --hat`: I2C, overlay del pHAT, `i2c-dev` al arrancar y el servicio de la pantalla (sus ficheros se instalan siempre, solo se habilita con `--hat`).
   - `pytest -q tests`: 276 pasan, `flake8` limpio.
 - **Falta:**
-  - **CONFIRM (GPIO 23):** no llega ninguna pulsación; el usuario lo arreglará. Mientras, PUSH hace lo mismo salvo en Presets.
+  - **CONFIRM:** en GPIO 23 no llegaba (contacto intermitente). El 2026-11-02 el usuario movió CONFIRM al GPIO 5 (pin 29) y BACK al GPIO 6 (pin 31); por defecto en `inputs.PINS`. Sin confirmar que CONFIRM llegue [?].
   - **sentido del encoder:** la primera versión iba al revés; está corregido y el usuario no lo ha confirmado [?].
   - **el Tracker en 2/2:** consumo desde la Pi 4 (1,2 A en total en los USB-A), enumeración, y si su Master de 2 canales incluye el retorno (posible bucle si se enruta de vuelta) [?]. El usuario no tiene acceso al Tracker ahora.
 - `deploy.sh`/`install.sh` reinician `rpi-audiod` (la Force oye un corte): no se despliega esto con ella transmitiendo.

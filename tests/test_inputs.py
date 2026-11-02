@@ -81,4 +81,4 @@ def test_panel_turns_lines_into_events():
 
 
 def test_pins_match_the_documented_wiring():
-    assert inputs.PINS == {"a": 17, "b": 27, "push": 22, "confirm": 23, "back": 24}
+    assert inputs.PINS == {"a": 17, "b": 27, "push": 22, "confirm": 5, "back": 6}

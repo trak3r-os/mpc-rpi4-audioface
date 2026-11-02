@@ -73,7 +73,7 @@ fs_budget = 1099
 # invert_encoder = false   true if the knob goes the wrong way
 # The Settings screen changes sleep, saver, style, brightness, flip and the encoder direction; what it keeps
 # (/var/lib/rpi-audio-ui/settings.json) wins over this file.
-# pins = { a = 17, b = 27, push = 22, confirm = 23, back = 24 }   BCM numbers; give only the ones that differ
+# pins = { a = 17, b = 27, push = 22, confirm = 5, back = 6 }   BCM numbers; give only the ones that differ
 
 # Optional per-device profiles go in /etc/rpi-audio/devices.d/*.toml, one device per file
 # (installed from config/devices.d/). Keys, all but `match` optional:

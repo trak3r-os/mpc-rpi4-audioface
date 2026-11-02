@@ -7,7 +7,7 @@ lines at 1, and one detent is four transitions."""
 
 from datetime import timedelta
 
-PINS = {"a": 17, "b": 27, "push": 22, "confirm": 23, "back": 24}   # BCM; docs/DISPLAY.md
+PINS = {"a": 17, "b": 27, "push": 22, "confirm": 5, "back": 6}   # BCM; docs/DISPLAY.md
 BUTTONS = {"push": "push", "confirm": "confirm", "back": "back"}   # line -> event
 DEBOUNCE_S = 0.03
 # Gray code: the step (+1 or -1) for a move from the previous (a, b) to the new one, indexed prev << 2 | new.

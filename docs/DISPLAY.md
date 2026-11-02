@@ -50,8 +50,8 @@ The pins are the ones the same board used with MiniDexed on a Raspberry Pi 3B, r
 | TRA | 11 (GPIO 17) | `EncoderPinClock` (the board's TRA/TRB order is a guess: swapping them only reverses the turning direction) |
 | TRB | 13 (GPIO 27) | `EncoderPinData` |
 | PUSH | 15 (GPIO 22) | `EncoderPinButton` |
-| CONFIRM | 16 (GPIO 23) | `ButtonPinSelect` |
-| BACK | 18 (GPIO 24) | `ButtonPinBack` |
+| CONFIRM | 29 (GPIO 5) | `ButtonPinSelect` (MiniDexed used GPIO 23, pin 16) |
+| BACK | 31 (GPIO 6) | `ButtonPinBack` (MiniDexed used GPIO 24, pin 18) |
 
 The OLED is an **SH1106**, 128×64, at I2C address **0x3C** (`SH1106LCDI2CAddress=0x3C` in the same file), not an SSD1306. The pHAT DAC is on I2S (`SoundDevice=i2s`) and uses GPIO 18, 19 and 21, so there is no conflict. Its header is soldered from below: the wires go to the pads on top. Enabling I2C and the pHAT needs `dtparam=i2c_arm=on` and `dtoverlay=hifiberry-dac` in the boot config and a reboot.
 
@@ -71,6 +71,6 @@ Settings go in the `[ui]` table of `/etc/rpi-audio/rpi-audio.toml` or a file in 
 | `saver_s` | 30 | seconds before the screensaver; 0 never |
 | `saver_style` | `"bounce"` | `"bounce"` or `"clock"` |
 | `invert_encoder` | false | for a knob that turns the wrong way |
-| `pins` | the table above | BCM numbers, only the ones that differ: `pins = { confirm = 5 }` |
+| `pins` | the table above | BCM numbers, only the ones that differ: `pins = { confirm = 23 }` |
 
 What the Settings screen keeps goes in `/var/lib/rpi-audio-ui/settings.json` and wins over the file; delete it to go back to the file's values. A key that is unknown or has a wrong value is logged and ignored. Clockwise is the encoder's A line (TRA) changing before B, as on a KY-040; swap with `invert_encoder` if yours is wired the other way.
