@@ -11,6 +11,8 @@ User=rpi-audio
 Group=audio
 # /dev/gpiochip0 is root:gpio and /dev/i2c-N root:i2c.
 SupplementaryGroups=gpio i2c
+# /var/lib/rpi-audio-ui: what the Settings screen keeps (settings.json).
+StateDirectory=rpi-audio-ui
 
 [Install]
 WantedBy=multi-user.target

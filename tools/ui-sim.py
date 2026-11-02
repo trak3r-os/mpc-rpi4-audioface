@@ -106,6 +106,12 @@ def main():
                 break
             if key in KEYS:
                 for line in interface.handle(KEYS[key], service.status(), time.monotonic()):
+                    if line.startswith("ui "):   # a Settings choice: the display service's own, applied at once
+                        _, name, value = line.split()
+                        interface.prefs[name] = {"true": True, "false": False}.get(value, value)
+                        interface.prefs[name] = int(value) if value.isdigit() else interface.prefs[name]
+                        log = f"set: {name} {value}"
+                        continue
                     due.append((time.monotonic() + DELAY, line))
                     log = f"sent: {line}"
     finally:

@@ -92,6 +92,13 @@ class Display:
             self.link.write([COMMAND, 0xB0 + number, COLUMN_OFFSET & 0x0F, 0x10 | COLUMN_OFFSET >> 4])
             self.link.write([DATA, *page])
 
+    def contrast(self, value):
+        self.link.write([COMMAND, 0x81, value])
+
+    def configure(self, flip, contrast):
+        """Sends the start-up sequence again with new settings (the picture in RAM stays)."""
+        self.link.write([COMMAND, *init_commands(flip, contrast)])
+
     def all_on(self, on=True):
         """The panel lit regardless of RAM (a quick check that it works), or back to the RAM."""
         self.link.write([COMMAND, 0xA5 if on else 0xA4])

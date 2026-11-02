@@ -7,9 +7,11 @@ tries again, and rpi-audiod is untouched either way.
 
   rpi-audio-ui [run]     the service (rpi-audio-ui.service)
 
-Settings: the [ui] table of /etc/rpi-audio/rpi-audio.toml and rpi-audio.d/*.toml (config/rpi-audio.toml)."""
+Settings: the [ui] table of /etc/rpi-audio/rpi-audio.toml and rpi-audio.d/*.toml (config/rpi-audio.toml), then what
+the Settings screen changed, kept in settings.json in the service's state directory (it wins over the file)."""
 
 import argparse
+import json
 import os
 import signal
 import subprocess
@@ -25,6 +27,7 @@ import uiservice
 CONFIG = Path(os.environ.get("RPI_AUDIO_CONFIG", "/etc/rpi-audio/rpi-audio.toml"))
 STATUS = Path(os.environ.get("RUNTIME_DIRECTORY", "/run/rpi-audio")) / "status.json"
 AUDIOD = os.environ.get("RPI_AUDIOD", "/usr/local/lib/rpi-audio/rpi-audiod")
+SAVED = Path(os.environ["STATE_DIRECTORY"].split(":")[0]) / "settings.json" if os.environ.get("STATE_DIRECTORY") else None
 COMMAND_TIMEOUT_S = 10
 
 
@@ -42,10 +45,27 @@ def load_settings():
             continue
         except (OSError, tomllib.TOMLDecodeError) as e:
             log(f"rpi-audio-ui: {path}: {e}; file ignored")
+    if SAVED:
+        try:
+            saved = json.loads(SAVED.read_text())
+            table.update({k: v for k, v in saved.items() if k in uiservice.PREF_KEYS})
+        except FileNotFoundError:
+            pass
+        except (OSError, ValueError, AttributeError) as e:
+            log(f"rpi-audio-ui: {SAVED}: {e}; ignored")
     cfg, warnings = uiservice.settings(table)
     for w in warnings:
         log(f"rpi-audio-ui: {w}")
     return cfg
+
+
+def save_prefs(prefs):
+    """Keeps what the Settings screen changed; raises OSError when it cannot (or has nowhere to)."""
+    if SAVED is None:
+        raise OSError("no state directory")
+    tmp = SAVED.with_suffix(".tmp")
+    tmp.write_text(json.dumps(prefs))
+    tmp.replace(SAVED)
 
 
 def run_command(text):
@@ -86,7 +106,7 @@ def main():
     def make_display():
         return sh1106.Display(sh1106.I2C(cfg.bus, cfg.address), cfg.flip, cfg.contrast)
 
-    app = uiservice.App(reader, make_display, lambda: uiservice.read_status(STATUS), run_command, cfg, log)
+    app = uiservice.App(reader, make_display, lambda: uiservice.read_status(STATUS), run_command, cfg, log, save_prefs)
     app.start(time.monotonic())
     log(f"rpi-audio-ui: running (I2C bus {cfg.bus}, address {cfg.address:#04x})")
     try:

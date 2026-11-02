@@ -22,7 +22,20 @@ Eight rows of 21 characters (a 5×7 font in 6×8-pixel cells), the first row a t
 - **MIDI:** the same two steps for MIDI: first a destination (every port that receives), then the ports that can feed it as `[ ]` and `[x]` (`midiroute` / `midiunroute`). A device with several ports shows the port number after its name. With a host it is empty: the status lists the MIDI ports only in standalone mode.
 - **Devices:** each device's `In` (what it sends) and `Out` (what it receives) mute and level. A `~` marks a device waiting for USB bandwidth.
 
-A change shows as made at once and is confirmed when the service's status catches up (within a couple of seconds).
+- **Settings:** the display's own settings. CONFIRM steps a row to its next value and wraps round. A change applies at once and is kept across restarts.
+
+  | Row | Values |
+  |---|---|
+  | Sleep | never, 15 s, 30 s, 1, 2, 5 or 10 min without input before the display goes dark (`idle_s`) |
+  | Saver | off, 10, 20, 30 or 60 s, 2 or 5 min without input before the screensaver (`saver_s`) |
+  | Style | `bounce` (the name drifts round the screen) or `clock` (the time drifts) (`saver_style`) |
+  | Bright | 10, 25, 50, 75 or 100 % (`contrast`) |
+  | Flip | turns the picture 180° (`flip`) |
+  | Encoder | normal or reversed (`invert_encoder`) |
+
+  The screensaver dims the display and moves its picture one cell every 3 s, so no pixel stays lit. The first touch only ends it, like waking a dark display. If Sleep is shorter than Saver, the display goes dark first. The clock is the Pi's own (set the time zone with `timedatectl`).
+
+A change to a level, a mute or a route shows as made at once and is confirmed when the service's status catches up (within a couple of seconds). A button that runs a command shows `working...` on the last row until it is done (each command takes about 0.7 s).
 
 ## Wiring (a 9-pin encoder board with an I2C OLED, and a Pimoroni pHAT DAC)
 
@@ -55,7 +68,9 @@ Settings go in the `[ui]` table of `/etc/rpi-audio/rpi-audio.toml` or a file in 
 | `flip` | false | turns the picture 180° |
 | `contrast` | 127 | 0 to 255 |
 | `idle_s` | 60 | seconds before the display goes dark; 0 never |
+| `saver_s` | 30 | seconds before the screensaver; 0 never |
+| `saver_style` | `"bounce"` | `"bounce"` or `"clock"` |
 | `invert_encoder` | false | for a knob that turns the wrong way |
 | `pins` | the table above | BCM numbers, only the ones that differ: `pins = { confirm = 5 }` |
 
-A key that is unknown or has a wrong value is logged and ignored. Clockwise is the encoder's A line (TRA) changing before B, as on a KY-040; swap with `invert_encoder` if yours is wired the other way.
+What the Settings screen keeps goes in `/var/lib/rpi-audio-ui/settings.json` and wins over the file; delete it to go back to the file's values. A key that is unknown or has a wrong value is logged and ignored. Clockwise is the encoder's A line (TRA) changing before B, as on a KY-040; swap with `invert_encoder` if yours is wired the other way.

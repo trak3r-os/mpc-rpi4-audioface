@@ -10,6 +10,7 @@ draw render()'s rows and feed handle() the events.
 Events: "cw" and "ccw" (the encoder turns), "push" (its button), "confirm" and "back".
 Display: ROWS rows of COLS characters, the first one a title."""
 
+import time
 from dataclasses import dataclass
 
 COLS, ROWS = 21, 8   # 6x8-pixel cells on a 128x64 display (bridge/rpi-audio-ui/font5x7.py)
@@ -19,6 +20,16 @@ LEVEL_DEFAULT = 80         # where an edit starts when the device has no stored 
 OPTIMISM_S = 4.0           # how long a change is shown as made while the status has not caught up
 SIDES = (("in", "In"), ("out", "Out"))   # a device's capture (what it sends) and playback (what it gets)
 EVENTS = ("cw", "ccw", "push", "confirm", "back")
+
+# The Settings screen: each row cycles through these on CONFIRM. A choice is a `ui KEY VALUE` command, which the
+# display service applies itself (uiservice.App.set_pref) instead of sending it to rpi-audiod.
+SLEEP_STEPS = (0, 15, 30, 60, 120, 300, 600)       # seconds without input before the display goes dark; 0 never
+SAVER_STEPS = (0, 10, 20, 30, 60, 120, 300)        # ... before the screensaver; 0 off
+SAVER_STYLES = ("bounce", "clock")
+CONTRAST_STEPS = (0x1A, 0x40, 0x7F, 0xBF, 0xFF)    # the panel's contrast register: 10, 25, 50, 75 and 100 %
+SAVER_STEP_S = 3.0                                  # the screensaver's picture moves one cell this often
+PREFS = {"idle_s": 60, "saver_s": 30, "saver_style": "bounce", "contrast": 0x7F, "flip": False,
+         "invert_encoder": False}
 
 
 @dataclass(frozen=True)
@@ -132,11 +143,67 @@ class Home(Menu):
     title = "rpi-audio"
 
     def items(self, ui, status, now):
-        return [("Presets", Presets), ("Routes", Routes), ("Devices", Devices), ("MIDI", MidiTo)]
+        return [("Presets", Presets), ("Routes", Routes), ("Devices", Devices), ("MIDI", MidiTo),
+                ("Settings", Settings)]
 
     def select(self, ui, payload, status, now):
         ui.stack.append(payload())
         return []
+
+
+def seconds(value, zero):
+    """15 s, 2 min...; `zero` is what 0 is called."""
+    value = int(value)   # the service keeps these as floats
+    if not value:
+        return zero
+    return f"{value} s" if value < 60 else f"{value // 60} min"
+
+
+def following(steps, value):
+    """The first step above `value`; the first step when there is none (wrapping round)."""
+    return next((step for step in steps if step > value), steps[0])
+
+
+class Settings(Menu):
+    """The display's own settings. CONFIRM (or PUSH) steps a row to its next value and wraps; the display service
+    applies it at once and keeps it across restarts."""
+    title = "Settings"
+
+    def items(self, ui, status, now):
+        p = ui.prefs
+        nxt = lambda key, steps: ("ui", key, following(steps, p[key]))   # noqa: E731
+        contrast = p["contrast"]
+        style = SAVER_STYLES[(SAVER_STYLES.index(p["saver_style"]) + 1) % len(SAVER_STYLES)]
+        return [
+            (f"Sleep   {seconds(p['idle_s'], 'never')}", nxt("idle_s", SLEEP_STEPS)),
+            (f"Saver   {seconds(p['saver_s'], 'off')}", nxt("saver_s", SAVER_STEPS)),
+            (f"Style   {p['saver_style']}", ("ui", "saver_style", style)),
+            (f"Bright  {round(contrast * 100 / 255)}%", nxt("contrast", CONTRAST_STEPS)),
+            (f"Flip    {'on' if p['flip'] else 'off'}", ("ui", "flip", not p["flip"])),
+            (f"Encoder {'reversed' if p['invert_encoder'] else 'normal'}",
+             ("ui", "invert_encoder", not p["invert_encoder"])),
+        ]
+
+    def select(self, ui, payload, status, now):
+        _, key, value = payload
+        return [f"ui {key} {str(value).lower()}"]
+
+
+def tri(n, size):
+    """A triangle wave: 0, 1... size, size-1... 0, repeating: a position that bounces between 0 and `size`."""
+    n %= 2 * size or 1
+    return n if n <= size else 2 * size - n
+
+
+def saver_rows(style, now, wall=None):
+    """The screensaver: ROWS blank rows with a word that drifts a cell every SAVER_STEP_S, so no pixel stays lit
+    (an OLED burns in). "bounce" is the name, "clock" the time (`wall`, a time.struct_time)."""
+    text = time.strftime("%H:%M", wall or time.localtime()) if style == "clock" else "rpi-audio"
+    step = int(now // SAVER_STEP_S)
+    x, y = tri(step, COLS - len(text)), tri(step, ROWS - 1)
+    rows = [Row(fit(""))] * ROWS
+    rows[y] = Row(fit(" " * x + text))
+    return rows
 
 
 class Presets(Menu):
@@ -335,8 +402,9 @@ class Device(Menu):
 
 
 class UI:
-    def __init__(self):
+    def __init__(self, prefs=None):
         self.stack = [Home()]
+        self.prefs = {**PREFS, **(prefs or {})}   # the Settings screen's values, kept up to date by the service
         self.message = ""     # one line shown at the bottom until the next event
         self.overlay = {}     # key -> (value, deadline): a change shown as made until the status shows it
 

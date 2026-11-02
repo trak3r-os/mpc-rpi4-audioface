@@ -274,3 +274,42 @@ def test_every_command_is_one_the_service_accepts():
     assert verbs == ["route", "unroute", "preset", "preset", "mute", "volume"]
     assert state["mute"]["in"] == ["usb-gp150"] and state["volume"]["in"] == {"usb-gp150": 100}
     assert routing.from_state(state) == []   # the route was added and then removed
+
+
+def test_settings_rows_step_to_the_next_value_and_wrap():
+    u, st = display.UI({"idle_s": 600, "saver_s": 30, "saver_style": "clock", "contrast": 0xFF, "flip": True}), status()
+    press(u, st, "cw", "cw", "cw", "cw", "confirm")   # Home -> Settings
+    assert u.screen.title == "Settings"
+    rows = display.plain(u.render(st))
+    assert rows[1].strip() == ">Sleep   10 min" and "Saver   30 s" in rows[2] and "Style   clock" in rows[3]
+    assert "Bright  100%" in rows[4] and "Flip    on" in rows[5] and "Encoder normal" in rows[6]
+    sent = []
+    for _ in range(6):
+        sent += u.handle("confirm", st)
+        u.handle("cw", st)
+    assert sent == ["ui idle_s 0", "ui saver_s 60", "ui saver_style bounce", "ui contrast 26", "ui flip false",
+                    "ui invert_encoder true"]
+
+
+def test_settings_follow_the_prefs_and_back_returns_home():
+    u, st = display.UI(), status()
+    press(u, st, "cw", "cw", "cw", "cw", "confirm")
+    assert "Sleep   1 min" in display.plain(u.render(st))[1]
+    u.prefs["idle_s"] = 0
+    assert "Sleep   never" in display.plain(u.render(st))[1]
+    assert u.handle("back", st) == [] and u.screen.title == "rpi-audio"
+
+
+def test_the_screensaver_moves_and_stays_on_the_screen():
+    import time
+    wall = time.strptime("2026-11-02 09:05", "%Y-%m-%d %H:%M")
+    seen = set()
+    for step in range(200):
+        rows = display.saver_rows("bounce", step * display.SAVER_STEP_S)
+        assert len(rows) == display.ROWS and all(len(r.text) == display.COLS for r in rows)
+        lit = [(y, r.text.index("rpi-audio")) for y, r in enumerate(rows) if "rpi-audio" in r.text]
+        assert len(lit) == 1 and sum(bool(r.text.strip()) for r in rows) == 1
+        seen.add(lit[0])
+    assert len(seen) > 20
+    rows = display.saver_rows("clock", 0.0, wall)
+    assert [r.text.strip() for r in rows if r.text.strip()] == ["09:05"]

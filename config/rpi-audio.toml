@@ -68,7 +68,11 @@ fs_budget = 1099
 # flip = false             true turns the picture 180 degrees
 # contrast = 127           0..255
 # idle_s = 60              seconds without input before the display goes dark (an OLED burns in); 0 never
+# saver_s = 30             seconds without input before the screensaver (dim, a word that drifts); 0 never
+# saver_style = "bounce"   "bounce" (the name) or "clock" (the time)
 # invert_encoder = false   true if the knob goes the wrong way
+# The Settings screen changes sleep, saver, style, brightness, flip and the encoder direction; what it keeps
+# (/var/lib/rpi-audio-ui/settings.json) wins over this file.
 # pins = { a = 17, b = 27, push = 22, confirm = 23, back = 24 }   BCM numbers; give only the ones that differ
 
 # Optional per-device profiles go in /etc/rpi-audio/devices.d/*.toml, one device per file

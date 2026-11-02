@@ -36,7 +36,7 @@ class Reader:
 
 class Screen:
     def __init__(self):
-        self.shown, self.powered = [], []
+        self.shown, self.powered, self.contrasts, self.configured = [], [], [], []
 
     def show(self, canvas):
         self.shown.append(bytes(b for page in canvas.pages for b in page))
@@ -44,13 +44,20 @@ class Screen:
     def power(self, on):
         self.powered.append(on)
 
+    def contrast(self, value):
+        self.contrasts.append(value)
+
+    def configure(self, flip, contrast):
+        self.configured.append((flip, contrast))
+
 
 class Rig:
     def __init__(self, **settings):
         self.reader, self.screen, self.status, self.commands = Reader(), Screen(), dict(STATUS), []
-        self.errors, self.logs, self.broken = {}, [], 0
+        self.errors, self.logs, self.broken, self.kept = {}, [], 0, []
         self.app = uiservice.App(self.reader, self.make_display, lambda: self.status, self.run,
-                                 uiservice.Settings(**settings), self.logs.append)
+                                 uiservice.Settings(**settings), self.logs.append, self.kept.append,
+                                 lambda: time.strptime("2026-11-02 09:05", "%Y-%m-%d %H:%M"))
         self.app.start(0.0)
         self.now = 0.0
 
@@ -244,3 +251,78 @@ def test_close_leaves_the_display_dark():
     rig.app.close()
     assert rig.screen.powered == [False]
     Rig().app.close()   # and does nothing without one
+
+
+def settings_screen(rig):
+    rig.step()
+    rig.turn(4)
+    rig.press("confirm")
+    assert rig.app.ui.screen.title == "Settings"
+
+
+def test_a_setting_applies_at_once_is_kept_and_is_not_sent_to_the_service():
+    rig = Rig()
+    settings_screen(rig)
+    rig.press("confirm")   # Sleep 1 min -> 2 min
+    assert rig.app.cfg.idle_s == 120 and rig.commands == [] and rig.kept[-1]["idle_s"] == 120
+    assert "Sleep   2 min" in rig.app.ui.render(rig.app.status)[1].text
+    assert rig.app.ui.render(rig.app.status)[-1].text.strip() != uiservice.WORKING
+    rig.turn(3)
+    rig.press("confirm")   # Bright 50% -> 75%
+    assert rig.app.cfg.contrast == 0xBF and rig.screen.configured[-1] == (False, 0xBF)
+    rig.turn(1)
+    rig.press("confirm")   # Flip
+    assert rig.app.cfg.flip and rig.screen.configured[-1] == (True, 0xBF)
+    rig.turn(1)
+    rig.press("confirm")   # Encoder reversed
+    assert rig.app.panel.encoder.sign == -1 and rig.kept[-1]["invert_encoder"] is True
+    assert rig.kept[-1] == rig.app.prefs()
+
+
+def test_a_setting_that_cannot_be_kept_still_applies_and_says_so():
+    rig = Rig()
+    settings_screen(rig)
+
+    def fail(prefs):
+        raise OSError("read-only")
+    rig.app.save_prefs = fail
+    rig.press("confirm")
+    assert rig.app.cfg.idle_s == 120 and rig.app.ui.render(rig.app.status)[-1].text.strip() == "not saved"
+    assert any("cannot keep" in line for line in rig.logs)
+
+
+def test_the_screensaver_dims_the_display_moves_and_the_first_touch_only_ends_it():
+    rig = Rig(idle_s=0, saver_s=30.0, saver_style="clock")
+    rig.step()
+    shown = len(rig.screen.shown)
+    rig.step(29.0)
+    assert rig.screen.contrasts == [] and len(rig.screen.shown) == shown
+    rig.step(2.0)
+    assert rig.screen.contrasts == [uiservice.SAVER_CONTRAST] and len(rig.screen.shown) == shown + 1
+    rig.step(5.0)
+    assert len(rig.screen.shown) == shown + 2 and rig.screen.contrasts == [uiservice.SAVER_CONTRAST]   # it moved
+    rig.press("confirm")   # only wakes
+    assert rig.screen.contrasts[-1] == uiservice.Settings().contrast and rig.app.ui.screen.title == "rpi-audio"
+    assert not rig.app.saving and not rig.commands
+    rig.press("confirm")
+    assert rig.app.ui.screen.title == "Presets"
+
+
+def test_the_screensaver_is_off_at_zero_and_sleep_still_follows_it():
+    rig = Rig(idle_s=0, saver_s=0)
+    rig.step(10000.0)
+    assert rig.screen.contrasts == []
+    rig = Rig(idle_s=60, saver_s=30)
+    rig.step(40.0)
+    assert rig.app.saving and rig.screen.powered == []
+    rig.step(30.0)
+    assert rig.screen.powered == [False]
+    rig.press("confirm")
+    assert rig.screen.powered == [False, True] and rig.screen.contrasts[-1] == uiservice.Settings().contrast
+
+
+def test_settings_check_the_saver_keys():
+    cfg, warnings = uiservice.settings({"saver_s": 20, "saver_style": "clock"})
+    assert (cfg.saver_s, cfg.saver_style, warnings) == (20, "clock", [])
+    cfg, warnings = uiservice.settings({"saver_style": "snow", "saver_s": -1})
+    assert (cfg.saver_s, cfg.saver_style) == (30.0, "bounce") and len(warnings) == 2
