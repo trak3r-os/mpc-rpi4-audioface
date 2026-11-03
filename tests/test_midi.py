@@ -9,6 +9,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "bridge" / "rpi-audiod"))
 import midi  # noqa: E402
+import presets  # noqa: E402
 from audiod import IN, OUT  # noqa: E402
 from midi import Client, Command  # noqa: E402
 
@@ -383,14 +384,17 @@ def test_apply_preset():
              "names": {GP: {"name": "T"}}}
     cmd = midi.parse_command("preset save 2 Live")
     new, store = midi.apply_preset(state, {}, cmd, "2026-10-30 12:00")
-    assert new == state and store["2"]["state"]["names"] == state["names"]
+    assert {k: v for k, v in new.items() if k != 'active_scene'} == state
+    assert not presets.active_scene(new, store)['modified']
+    assert store["2"]["state"]["names"] == state["names"]
     assert store == {"2": {"name": "Live", "saved": "2026-10-30 12:00", "state": {
         "in": {GP: 3}, "mute": {"in": [GP]}, "midi": {f"{GP}/0": 2}, "in_channels": {GP: 6},
         "names": {GP: {"name": "T"}}, "output_levels": {}}}}
     changed = {"out": {GP: 1}, "volume": {"in": {GP: 50}}, "names": {GP: {"name": "Renamed"}}}
     loaded, same = midi.apply_preset(changed, store, midi.parse_command("preset load 2"), "")
     assert same == store
-    assert loaded == {"in": {GP: 3}, "mute": {"in": [GP]}, "midi": {f"{GP}/0": 2}, "in_channels": {GP: 6},
+    assert {k: v for k, v in loaded.items() if k != 'active_scene'} == {
+                      "in": {GP: 3}, "mute": {"in": [GP]}, "midi": {f"{GP}/0": 2}, "in_channels": {GP: 6},
                       "names": {GP: {"name": "T"}}, "output_levels": {}}
     loaded["in"][GP] = 9   # the preset keeps its own copy
     assert store["2"]["state"]["in"][GP] == 3

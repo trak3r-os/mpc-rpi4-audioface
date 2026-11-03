@@ -86,6 +86,10 @@ If the screen was asleep or showing its screensaver, the **first touch only wake
 
 Output names appear before their right-aligned states. Long selected names and titles start scrolling after a short pause; `..` indicates a shortened name. Main output-level edits show a large percentage above the bar. Some detail headers are shortened to Session, Machine or Profile state to keep the page position readable. Host-profile type/selection marks appear at the right of the name.
 
+Overview also identifies the selected scene (or host profile). Load or save a scene once to establish its identity; a `*` before its name means setup changes since that load/save. The Scenes list shows `live` or `*edit` next to the active slot. Saving or reloading clears the mark, as does reverting the changed setup fields. Scene selection survives restarts and follows CLI/MIDI commands too. It does not restore engine mode or network transport settings.
+
+Meters have a smooth fall, a short peak-hold mark and a CLIP warning retained for 1.5 seconds. Unavailable data still shows `--`. A pencil identifies editing, an hourglass means a command is running, a tick means it was stored and a cross identifies an error. Success messages disappear after two seconds; check output state and meters to confirm actual operation.
+
 Pressing the encoder and CONFIRM always perform the same selection. Scenes offer visible **Load** and **Save here...** actions; saving asks before replacing a slot.
 
 If CONFIRM does not respond, check the button and its wiring. The current default is GPIO 5; older notes using GPIO 23 describe an earlier wiring arrangement.

@@ -365,6 +365,7 @@ def status_reply(data, limit=STATUS_LIMIT):
     data.pop("bridge_buffer", None)
     data.pop("host_profiles", None)
     data.pop("host_profile_details", None)
+    data.pop('active_scene', None)
     data.pop("outputs", None)  # adapter diagnostics stay in the full local status file
     data.pop("time", None)
     data["devices"] = [dev for dev in data.get("devices", []) if not dev.get("virtual")]
@@ -502,8 +503,12 @@ def apply_preset(state, store, cmd, saved):
         raise ValueError(f"{cmd.verb} is not a preset command")
     if cmd.arg("action") == "save":
         presets.save_preset(store, state, slot, cmd.arg("text"), saved)
+        presets.mark_active(state, slot)
     elif cmd.arg("action") == "load":
         presets.load_preset(state, store, slot)
+        presets.mark_active(state, slot)
     else:
         store.pop(str(slot), None)
+        if (state.get('active_scene') or {}).get('slot') == slot:
+            state.pop('active_scene', None)
     return state, store

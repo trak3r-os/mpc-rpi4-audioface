@@ -12,6 +12,22 @@ import presets  # noqa: E402
 GP = "usb-84ef:0186-A1B2C3"
 
 
+def test_active_scene_tracks_saved_changes_and_ignores_engine_selection():
+    state = {'output_levels': {'local-dac': 50}, 'engine_mode': 'hub'}
+    store = {}
+    presets.save_preset(store, state, 2, 'Live', '')
+    presets.mark_active(state, 2)
+    assert presets.active_scene(state, store) == {'slot': 2, 'name': 'Live', 'available': True, 'modified': False}
+    state['engine_mode'] = 'host'
+    assert not presets.active_scene(state, store)['modified']
+    state['output_levels']['local-dac'] = 60
+    assert presets.active_scene(state, store)['modified']
+    state['output_levels']['local-dac'] = 50
+    assert not presets.active_scene(state, store)['modified']
+    assert 'active_scene' not in presets.capture_state(state)
+    assert not presets.active_scene(state, {})['available']
+
+
 def test_set_name_and_clear():
     state = {"in": {GP: 1}}
     presets.set_name(state, GP, "Tracker")

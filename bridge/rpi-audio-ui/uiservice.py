@@ -16,6 +16,7 @@ import notices
 import render
 import sh1106
 import ui
+import meters
 
 STATUS_S = 0.5       # how often the service's status is read
 STALE_S = 10.0       # a status file older than this is not rpi-audiod's any more (it writes one every 2 s)
@@ -115,6 +116,7 @@ class App:
         self.submit_command, self.pending, self.revision = submit_command, [], 0
         self.load_hardware = load_hardware
         self.load_levels, self.notifier = load_levels, notices.Notifier()
+        self.ballistics = meters.Ballistics()
 
     def start(self, now):
         """Takes the lines' levels as the starting point; call once before step()."""
@@ -123,7 +125,7 @@ class App:
 
     def step(self, now, timeout=0.05):
         edges = self.reader.read(timeout)
-        self.poll_commands()
+        self.poll_commands(now)
         for name, level, *stamp in edges:
             for event in self.panel.edge(name, level, stamp[0] if stamp else now):
                 self.press(event, now)
@@ -146,7 +148,7 @@ class App:
             visible = visible and (not self.saving or status_saver)
             meter_status = {**self.status, '_meter_detail': True} if isinstance(
                 self.ui.screen, (ui.IOStatus, ui.EndpointStatus)) and not self.saving else self.status
-            self.ui.levels = self.load_levels(meter_status, now, visible)
+            self.ui.levels = self.ballistics.read(self.load_levels(meter_status, now, visible), now, visible)
         self.draw(now)
 
     def prefs(self):
@@ -193,6 +195,7 @@ class App:
         remote = [c for c in commands if not c.startswith("ui ")]
         if remote:
             done, self.ui.message = self.ui.message, WORKING
+            self.ui.message_kind, self.ui.message_until = 'busy', float('inf')
             if self.submit_command is None:
                 self.draw(now)
         for command in commands:
@@ -208,10 +211,12 @@ class App:
             if error:
                 self.log(f"rpi-audio-ui: {command}: {error}")
                 self.ui.message = error[:ui.COLS]
+                self.ui.message_kind, self.ui.message_until = 'error', float('inf')
         if remote and self.submit_command is None and self.ui.message == WORKING:
-            self.ui.message = done
+            self.ui.message = done or 'Saved'
+            self.ui.message_kind, self.ui.message_until = 'success', now + 2
 
-    def poll_commands(self):
+    def poll_commands(self, now=None):
         """Collect results without holding up input; an older result must not overwrite a newer screen."""
         waiting = []
         for command, future, message, revision in self.pending:
@@ -225,7 +230,9 @@ class App:
             if error:
                 self.log(f"rpi-audio-ui: {command}: {error}")
             if revision == self.revision:
-                self.ui.message = error[:ui.COLS] if error else message
+                self.ui.message = error[:ui.COLS] if error else message or 'Saved'
+                self.ui.message_kind = 'error' if error else 'success'
+                self.ui.message_until = float('inf') if error or now is None else now + 2
         self.pending = waiting
 
     def wake(self, dark):

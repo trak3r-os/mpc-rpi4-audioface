@@ -42,6 +42,18 @@ def text(u, st, now=0.0):
     return display.plain(u.render(st, now))
 
 
+def test_overview_active_scene_and_transient_command_feedback():
+    u = display.UI(overview=True)
+    st = status(active_scene={'slot': 2, 'name': 'Live', 'modified': True})
+    assert 'Scene: *Live' in u.render(st)[6].text
+    u.stack = [display.Presets()]
+    assert u.render(st)[2].badge == '*edit'
+    u.message, u.message_kind, u.message_until = 'Saved', 'success', 2
+    assert u.render(st, 1)[-2].icon == 'check'
+    u.render(st, 3)
+    assert not u.message
+
+
 def test_every_screen_is_the_size_of_the_display():
     u = display.UI()
     st = status()

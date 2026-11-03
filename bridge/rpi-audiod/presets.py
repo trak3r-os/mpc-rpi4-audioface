@@ -5,6 +5,8 @@ the system; tests/test_presets.py checks it."""
 
 import copy
 import re
+import hashlib
+import json
 
 NAME_MAX = 24          # a device name or a preset name
 CHANNEL_NAME_MAX = 16  # the name of one device channel
@@ -54,6 +56,24 @@ def capture_state(state):
     saved.setdefault('names', {})
     saved.setdefault('output_levels', {})
     return saved
+
+
+def mark_active(state, slot):
+    state['active_scene'] = {'slot': slot, 'signature': signature(state)}
+
+
+def signature(state):
+    return hashlib.sha256(json.dumps(capture_state(state), sort_keys=True).encode()).hexdigest()
+
+
+def active_scene(state, store):
+    marker = state.get('active_scene')
+    if not isinstance(marker, dict) or type(marker.get('slot')) is not int:
+        return None
+    slot = marker['slot']
+    scene = store.get(str(slot))
+    return {'slot': slot, 'name': scene.get('name', f'Scene {slot}') if isinstance(scene, dict) else f'Scene {slot}',
+            'available': isinstance(scene, dict), 'modified': marker.get('signature') != signature(state)}
 
 
 def validate_state(saved):

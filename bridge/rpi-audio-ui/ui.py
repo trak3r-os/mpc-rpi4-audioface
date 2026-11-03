@@ -47,6 +47,7 @@ class Row:
     badge: str = ""       # separate right-aligned state
     tick: int = 0         # quantised marquee time; zero keeps the initial view
     large: str = ""       # double-size value, occupying this row and the next
+    peak: int = -1
 
 
 def fit(text, width=COLS):
@@ -146,8 +147,11 @@ def meter_row(label, amplitude):
         return Row(fit(f"{label}  --"), meter=(label, -1, "--", False))
     db = max(-60, round(20 * math.log10(max(amplitude, 0.001))))
     segments = min(18, max(0, round((db + 60) * 18 / 60))) if amplitude else 0
-    value = "CLIP" if amplitude >= 1 else "-inf" if not amplitude else str(db)
-    return Row(fit(f"{label} {value} dBFS"), meter=(label, segments, value, amplitude >= 1))
+    clipped = amplitude >= 1 or getattr(amplitude, 'clipped', False)
+    value = "CLIP" if clipped else "-inf" if not amplitude else str(db)
+    peak = getattr(amplitude, 'peak', None)
+    marker = min(18, max(0, round((60 + 20 * math.log10(max(peak, .001))) * 18 / 60))) if peak else -1
+    return Row(fit(f"{label} {value} dBFS"), meter=(label, segments, value, clipped), peak=marker)
 
 
 def pair_count(channels):
@@ -348,13 +352,15 @@ class Overview:
                 midi += sum(e.get("port") is not None for e in (status.get("midi") or {}).get("endpoints", []))
         rate_text = f"{rate / 1000:g}k" if rate else "No stream"
         device_text = f"{devices} device" + ("s" if devices != 1 else "")
+        scene = status.get('active_scene')
+        context = ('Scene: ' + ('*' if scene.get('modified') else '') + scene['name']) if scene else \
+                  ('Profile: ' + (status.get('host_profile_selection') or status.get('host_profile') or 'default'))
         return [Row(fit(self.title), True, icon=self.icon),
                 Row(fit(f"{mode} [{bridge_state(status, ui.hardware)}]")),
                 Row(fit(f"{rate_text} / {device_text}")),
                 Row(fit(f"Routes {audio}   MIDI {midi}")),
                 meter_row("IN", ui.levels.get("in")), meter_row("OUT", ui.levels.get("out")),
-                Row(fit('Profile: ' + status['profile_readiness']['state'].title()
-                        if status.get('profile_readiness') else 'Push or turn: menu'))]
+                Row(fit(context), label=context)]
 
 
 def seconds(value, zero):
@@ -439,6 +445,10 @@ class Presets(Menu):
     def select(self, ui, slot, status, now):
         ui.stack.append(SceneActions(slot))
         return []
+
+    def badge(self, ui, status, payload):
+        scene = status.get('active_scene') or {}
+        return ('*edit' if scene.get('modified') else 'live') if scene.get('slot') == payload else ''
 
     def press(self, ui, slot, status, now):
         return self.select(ui, slot, status, now)
@@ -642,7 +652,7 @@ class OutputLevel:
 
     def rows(self, ui, status, now):
         name = next((o['name'] for o in status.get('outputs', []) if o['identity'] == self.identity), 'Output')
-        return [Row(fit('Output level'), True, icon='device'), Row(fit(name), True, label=name, selected=True),
+        return [Row(fit('Edit output level'), True, icon='edit'), Row(fit(name), True, label=name, selected=True),
                 Row(fit(f'Level: {self.value}%'), large=f'{self.value}%'), Row(fit('')),
                 Row(fit(''), meter=('OUT', round(self.value * 18 / 100), f'{self.value}%', False)),
                 Row(fit('Turn: adjust')),
@@ -868,6 +878,13 @@ class Device(Menu):
                 level = ui.shown(("level", self.identity, side), info.get("level"), now)
                 out.append((f"{name:<4}lvl {'--' if level is None else str(level) + '%'}", ("level", side, level)))
         return out
+
+    def rows(self, ui, status, now):
+        rows = super().rows(ui, status, now)
+        if self.editing:
+            rows[0] = replace(rows[0], icon='edit')
+            rows.append(Row(fit('Press:save BACK:undo')))
+        return rows
 
     def handle(self, event, ui, status, now):
         if self.editing and event in ("cw", "ccw", "confirm", "push", "back"):
@@ -1265,6 +1282,7 @@ class UI:
         self.hardware, self.notice = {}, ""
         self.levels, self.notification = {}, ()
         self.focus, self.focus_at = None, 0.0
+        self.message_kind, self.message_until = 'info', float('inf')
 
     @property
     def screen(self):
@@ -1283,6 +1301,7 @@ class UI:
     def handle(self, event, status, now=0.0):
         """Takes one event; returns the commands to run, in order."""
         self.message = ""
+        self.message_kind, self.message_until = 'info', float('inf')
         if event not in EVENTS:
             raise ValueError(f"unknown event {event}")
         self.focus_at = now
@@ -1290,6 +1309,8 @@ class UI:
 
     def render(self, status, now=0.0):
         """ROWS rows for the display."""
+        if now >= self.message_until:
+            self.message, self.message_until = '', float('inf')
         rows = self.screen.rows(self, status, now)
         focus = (id(self.screen), tuple(r.label for r in rows if r.selected))
         if focus != self.focus:
@@ -1315,7 +1336,8 @@ class UI:
         rows = rows[:ROWS - 1]
         rows += [Row(fit(""))] * (ROWS - 1 - len(rows))
         if self.message or self.notice:
-            rows[-1] = Row(fit(self.message or self.notice), True, icon="info")
+            icon = {'busy': 'busy', 'success': 'check', 'error': 'error'}.get(self.message_kind, 'info')
+            rows[-1] = Row(fit(self.message or self.notice), True, icon=icon if self.message else 'info')
         elif self.notification:
             rows[-2] = Row(fit(self.notification[0]), True)
             rows[-1] = Row(fit(self.notification[1]))

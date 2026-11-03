@@ -14,6 +14,52 @@ RETRY_S = 5.0
 HELPER = Path(__file__).with_name("rpi-audio-meter")
 
 
+class Level(float):
+    def __new__(cls, value, peak, clipped):
+        level = super().__new__(cls, value)
+        level.peak, level.clipped = peak, clipped
+        return level
+
+
+class Ballistics:
+    """Immediate attack, 18 dB/s release, 0.8 s peak hold and 1.5 s clip latch. No stale-data hold."""
+    def __init__(self):
+        self.previous = {}
+        self.cached, self.next_frame = {}, 0.0
+
+    def read(self, values, now, enabled=True):
+        if not enabled or not values:
+            self.previous.clear()
+            self.cached, self.next_frame = {}, now
+            return {}
+        self.previous = {k: v for k, v in self.previous.items() if values.get(k) is not None}
+        self.cached = {k: v for k, v in self.cached.items() if k.startswith('_') or k in self.previous}
+        if now < self.next_frame:
+            return {k: v if k.startswith('_') or v is None else self.cached.get(k, v) for k, v in values.items()}
+        self.next_frame = now + .2  # keep OLED drawing at five frames/s while GPIO polling stays fast
+        result, current = {}, {}
+        for key, value in values.items():
+            if key.startswith('_') or value is None:
+                result[key] = value
+                continue
+            if not isinstance(value, (int, float)) or not math.isfinite(value) or value < 0:
+                continue
+            shown, peak, held, clip_until, at = self.previous.get(key, (value, value, now + .8, 0, now))
+            decay = 10 ** (-18 * max(0, now - at) / 20)
+            shown = max(value, shown * decay)
+            if value >= peak:
+                peak, held = value, now + .8
+            elif now > held:
+                peak = max(value, peak * 10 ** (-18 * max(0, now - max(at, held)) / 20))
+            if value >= 1:
+                clip_until = now + 1.5
+            current[key] = (shown, peak, held, clip_until, now)
+            result[key] = Level(shown, peak, now < clip_until)
+        self.previous = current
+        self.cached = result
+        return result
+
+
 def ports(status):
     if not status.get("jack_ready"):
         return ()

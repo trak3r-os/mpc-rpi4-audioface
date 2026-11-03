@@ -252,6 +252,8 @@ def examples():
     alone["routes"] = [{"src": "usb-mixer", "dst": "local-dac", "waiting": None}]
     alone["midi_ports"] = [{"identity": "usb-keys", "name": "Keys", "port": 0, "in": True},
                            {"identity": "usb-guitar", "name": "Guitar Rig", "port": 0, "in": True, "out": True}]
+    host['active_scene'] = {'slot': 1, 'name': 'Live', 'modified': True}
+    alone['active_scene'] = {'slot': 1, 'name': 'Live', 'modified': False}
     return hardware, idle, host, alone
 
 

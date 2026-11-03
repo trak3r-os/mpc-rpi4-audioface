@@ -11,6 +11,23 @@ import meters  # noqa: E402
 import ui  # noqa: E402
 
 
+def test_meter_release_peak_hold_clip_latch_and_missing_data():
+    b = meters.Ballistics()
+    assert b.read({'in': 1.2}, 0)['in'] == 1.2
+    low = b.read({'in': .1, '_dsp_load': 3}, .5)
+    assert .1 < low['in'] < 1.2 and low['in'].peak == 1.2 and low['in'].clipped
+    assert low['_dsp_load'] == 3
+    assert b.read({'in': .1}, .51)['in'] == low['in']  # no extra decay frame between OLED refreshes
+    assert ui.meter_row('IN', low['in']).meter[2] == 'CLIP'
+    later = b.read({'in': .1}, 1.6)['in']
+    assert later.peak < 1.2 and not later.clipped
+    assert b.read({}, 1.7) == {}
+    assert b.read({'in': .1}, 2)['in'].peak == .1
+    assert b.read({'in': None}, 2.1)['in'] is None
+    assert b.read({'in': .01}, 2.15)['in'] == .01  # unavailable data never leaves an old held peak
+    assert b.read({'in': 1}, 3, enabled=False) == {}
+
+
 @pytest.mark.parametrize("line", ['{}', '[]', '{"in":NaN,"out":0}', '{"in":-1,"out":0}',
                                   '{"in":true,"out":0}', 'not json'])
 def test_bad_samples_are_unavailable(line):

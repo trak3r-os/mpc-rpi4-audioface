@@ -158,6 +158,8 @@ A SysEx command must fit in about 200 bytes. The sequencer splits long SysEx mes
 
 ## `status` keys for names and presets
 
+The full local status also includes `active_scene` (null before the next scene load/save, otherwise slot, name, available and modified). Selection persists in slots.json; `modified` compares the scene's saved setup fields with their state at the last load/save. Loading a scene through a linked host profile updates it; loading an independent host snapshot clears it. This metadata is omitted if necessary to keep a SysEx status reply within its existing size limit.
+
 Besides what was already there, `status` (the SysEx reply and `status.json`) carries:
 
 | Key | Where | What it is |

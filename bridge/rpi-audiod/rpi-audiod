@@ -323,8 +323,10 @@ def save_host_command(cmd):
             profile = hosts.get(selected, {})
             if 'preset' in profile:
                 presets.load_preset(state, load_presets(), profile['preset'])
+                presets.mark_active(state, profile['preset'])
             elif 'state' in profile:
                 presets.restore_state(state, profile['state'])
+                state.pop('active_scene', None)
             state, _ = midi.apply_command(state, cmd)
             write_json(STATE, state)
             return
@@ -1580,6 +1582,7 @@ class Daemon:
         data['session']['monitor'] = (self.output_metrics.get('observer', {})
                                       if data['session']['monitor_available'] else {})
         scenes = load_presets()
+        data['active_scene'] = presets.active_scene(load_slots(), scenes)
         midi_present = [e['endpoint'] for e in (data.get('midi') or {}).get('endpoints', [])]
         for name, info in data['host_profile_details'].items():
             profile = hosts.get(name if name != 'default' else self.cfg.get('host', {}).get('profile'), {})

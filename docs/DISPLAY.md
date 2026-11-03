@@ -66,6 +66,10 @@ Output and endpoint lists put names first and align states on the right. Host-pr
 
 The main output-level editor uses a double-size percentage above its bar. Turn to adjust, press to save, or BACK to cancel. The destination name remains visible above the value.
 
+Overview's last line identifies the active scene, or the host profile when no scene has been selected. After a scene is loaded or saved, its selection survives restarts. A leading `*` before its name means the saved setup fields have changed since that operation; reverting those changes clears the mark. The Scenes list marks the active slot `live` or `*edit`. Existing setups gain a scene identity the next time you load or save one; they are not guessed from similar settings.
+
+Audio meters attack immediately, release at 18 dB/s, retain the peak marker for 0.8 s and latch CLIP for 1.5 s. Missing/stale data still becomes `--` immediately. Editing uses a pencil icon; command progress, success and failure use hourglass, tick and cross icons. Successful save messages clear after two seconds, while failures remain until input. A success means the command was stored; the actual adapter state remains visible separately.
+
 The source-first workflow is implemented: Send audio and MIDI choose a sender, then destinations. Outputs controls each adapter and Audio mode. Scenes offers explicit Load and Save here actions; PUSH and CONFIRM do the same thing. See the [illustrated manual](MANUAL.md) and [output implementation](OUTPUTS.md).
 
 ## Wiring (a 9-pin encoder board with an I2C OLED, and a Pimoroni pHAT DAC)

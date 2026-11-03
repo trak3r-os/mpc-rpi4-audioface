@@ -9,6 +9,10 @@ MARGIN = 1   # the 21 cells are 126 pixels wide: one blank column each side
 
 # Seven-pixel symbols designed for this monochrome panel, one row of pixels per string.
 ICONS = {
+    'edit': ('.....##', '....###', '...###.', '..###..', '.###...', '###....', '##.....'),
+    'check': ('.......', '......#', '.....#.', '#...#..', '.#.#...', '..#....', '.......'),
+    'error': ('#.....#', '.#...#.', '..#.#..', '...#...', '..#.#..', '.#...#.', '#.....#'),
+    'busy': ('#######', '.#...#.', '..#.#..', '...#...', '..#.#..', '.#...#.', '#######'),
     "home": ("...#...", "..###..", ".#####.", "#######", ".#...#.", ".#.#.#.", ".#####."),
     "preset": ("#######", "#...#.#", "#...#.#", "#######", "#.....#", "#.###.#", "#######"),
     "route": (".#...#.", "###.###", ".#...#.", ".#####.", ".#...#.", "###.###", ".#...#."),
@@ -74,6 +78,9 @@ def draw_rows(canvas, rows):
                     canvas.rect(23 + segment * 4, y + 2, min(25 + segment * 4, 92), y + 5, fill=True)
             if clip:
                 canvas.line(95, y + 1, 95, y + 6)
+            if row.peak > 0 and segments >= 0:
+                x = 23 + min(17, row.peak - 1) * 4
+                canvas.line(x, y + 1, x, y + 6)
             draw_text(canvas, 103, y, value[:4])
             continue
         if row.footer:
