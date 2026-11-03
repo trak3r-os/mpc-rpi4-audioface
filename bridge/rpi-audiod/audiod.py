@@ -158,6 +158,8 @@ def parse_host(data, filename):
     of channel numbers is left out, with a warning."""
     profile, warnings = {}, []
     slots = data.get("slots", {})
+    if not isinstance(slots, dict):
+        return {}, [f"{filename}: slots must be a table; ignored"]
     for key in ("reserve_in", "reserve_out"):
         if key not in slots:
             continue
@@ -166,6 +168,11 @@ def parse_host(data, filename):
             profile[key] = value
         else:
             warnings.append(f"{filename}: {key} must be a list of channel numbers; ignored")
+    if 'preset' in data:
+        slot = data['preset']
+        if type(slot) is not int or not 1 <= slot <= 8:
+            return None, [*warnings, f'{filename}: preset must be 1..8; profile ignored']
+        profile['preset'] = slot
     return profile, warnings
 
 

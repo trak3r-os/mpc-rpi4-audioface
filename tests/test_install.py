@@ -50,9 +50,10 @@ def test_fresh_install_lays_out_files(root):
     for name in ("rpi-audio-gadget", "rpi-audio-keepalive", "tonegen.py", "rpi-audiod"):
         assert os.access(lib / name, os.X_OK), name
     for name in ("audiod.py", "midi.py", "midiroute.py", "presets.py", "routing.py", "usb.py",
-                 "outputs.py", "sdpserver.py"):
+                 "outputs.py", "sdpserver.py", "incidents.py", "readiness.py"):
         assert (lib / name).is_file(), name
     assert (lib / "network/network.cpp").is_file()
+    assert (lib / "audio/gain.c").is_file()
     assert os.readlink(root / "usr/local/bin/rpi-audiod") == "/usr/local/lib/rpi-audio/rpi-audiod"
     etc = root / "etc/rpi-audio"
     assert (etc / "gadget.env").read_bytes() == (REPO / "config/gadget.env").read_bytes()
@@ -65,7 +66,8 @@ def test_fresh_install_lays_out_files(root):
         assert (root / f"etc/systemd/system/{u}.service").is_file()
     ui = lib / "ui"
     assert os.access(ui / "rpi-audio-ui", os.X_OK)
-    for name in ("font5x7.py", "health.py", "inputs.py", "meters.py", "notices.py", "render.py", "sh1106.py", "telemetry.py",
+    for name in ("font5x7.py", "health.py", "inputs.py", "meters.py", "notices.py", "render.py", "sh1106.py",
+                 "telemetry.py",
                  "ui.py", "uiservice.py", "meter.c"):
         assert (ui / name).is_file(), name
     assert "(test root) skipped: systemctl enable rpi-audio-ui" not in r.stdout   # only with --hat
@@ -298,3 +300,26 @@ def test_standalone_profile_is_installed_with_host(root):
     assert r.returncode == 0, r.stderr
     conf = (root / "etc/rpi-audio/rpi-audio.d/standalone.toml").read_text()
     assert "[engine]\nmode = \"standalone\"\n" in conf
+
+
+def test_user_host_store_survives_redeploy_and_state_is_group_writable(root):
+    assert run(root, '--no-boot-config').returncode == 0
+    state = root / 'var/lib/rpi-audio'
+    store = state / 'hosts.json'
+    content = '{"my-host":{"reserve_in":[1,2],"state":{"names":{}}}}\n'
+    store.write_text(content)
+    assert run(root, '--no-boot-config').returncode == 0
+    assert store.read_text() == content
+    assert state.stat().st_mode & 0o2777 == 0o2775 and store.stat().st_mode & 0o020
+
+
+def test_state_permission_migration_does_not_follow_user_created_links(root):
+    state = root / 'var/lib/rpi-audio'
+    state.mkdir(parents=True)
+    external = root / 'private-data'
+    external.write_text('keep private')
+    external.chmod(0o600)
+    (state / 'hosts.json').symlink_to(external)
+    assert run(root, '--no-boot-config').returncode == 0
+    assert external.stat().st_mode & 0o777 == 0o600
+    assert (state / 'hosts.json').is_symlink() and external.read_text() == 'keep private'

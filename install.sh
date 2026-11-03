@@ -60,7 +60,7 @@ STATE=$R/var/lib/rpi-audio
 UDCDIR=$R/sys/class/udc
 OVERLAY='dtoverlay=dwc2,dr_mode=peripheral'
 units="rpi-audio-gadget rpi-audiod rpi-audio-keepalive rpi-audio-cpu rpi-audio-ui"
-packages="jackd2 jack-example-tools zita-ajbridge"
+packages="jackd2 jack-example-tools zita-ajbridge gcc libjack-jackd2-dev"
 
 say() { echo "$tag: $*"; }
 warn() { echo "$tag: $*" >&2; }
@@ -100,7 +100,7 @@ if ((purge && !uninstall)); then warn "--purge only makes sense with --uninstall
 if ((uninstall)) && [[ -n $hostconf ]]; then warn "--host does not go with --uninstall"; usage; fi
 if ((tuneboot && !bootcfg)); then warn "--tune-boot does not go with --no-boot-config"; usage; fi
 if ((hat && !bootcfg)); then warn "--hat does not go with --no-boot-config"; usage; fi
-if ((hat)); then packages="$packages python3-smbus2 python3-libgpiod gcc libjack-jackd2-dev"; fi
+if ((hat)); then packages="$packages python3-smbus2 python3-libgpiod"; fi
 if ((network)); then packages="$packages g++ git libjack-jackd2-dev"; fi
 if [[ -n $hostconf ]]; then
   [[ $hostconf =~ ^[A-Za-z0-9._-]+$ ]] || die "invalid host name: $hostconf"
@@ -187,12 +187,47 @@ if ((network)) && ((!staging)); then bash "$here/tools/build-network.sh"; fi
 
 install -d "$LIB" "$ETC" "$ETC/rpi-audio.d" "$ETC/devices.d" "$ETC/hosts.d" "$BIN" "$UNITDIR" \
   "$(dirname "$MODULES")" "$(dirname "$JOURNALD")"
+# Runtime setups belong to the user/service, never to the deployed configuration tree.
+install -d "$STATE"
+sysrun chown rpi-audio:audio "$STATE"
+chmod 2775 "$STATE"
+# Update existing data through descriptors so user-created links cannot redirect root's permission changes.
+python3 - "$STATE" "$staging" <<'PY_STATE_PERMISSIONS'
+import errno
+import grp
+import os
+from pathlib import Path
+import stat
+import sys
+
+folder, staged = Path(sys.argv[1]), sys.argv[2] == "1"
+group = None if staged else grp.getgrnam("audio").gr_gid
+for path in folder.iterdir():
+    if path.suffix != ".json" and path.name != "slots.lock":
+        continue
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    except OSError as error:
+        if error.errno in (errno.ELOOP, errno.ENOENT):
+            continue
+        raise
+    try:
+        info = os.fstat(fd)
+        if not stat.S_ISREG(info.st_mode):
+            continue
+        if group is not None:
+            os.fchown(fd, -1, group)
+        os.fchmod(fd, (info.st_mode & 0o666) | 0o060)
+    finally:
+        os.close(fd)
+PY_STATE_PERMISSIONS
 install -m 755 "$here/gadget/rpi-audio-gadget" "$here/gadget/rpi-audio-keepalive" "$LIB/"
 install -m 755 "$here/tools/tonegen.py" "$here/bridge/rpi-audiod/rpi-audiod" "$LIB/"
 install -m 644 "$here/bridge/rpi-audiod/audiod.py" "$here/bridge/rpi-audiod/midi.py" \
   "$here/bridge/rpi-audiod/presets.py" "$here/bridge/rpi-audiod/routing.py" "$here/bridge/rpi-audiod/midiroute.py" \
   "$here/bridge/rpi-audiod/usb.py" "$here/bridge/rpi-audiod/outputs.py" \
-  "$here/bridge/rpi-audiod/sdpserver.py" "$LIB/"
+  "$here/bridge/rpi-audiod/sdpserver.py" "$here/bridge/rpi-audiod/incidents.py" \
+  "$here/bridge/rpi-audiod/readiness.py" "$LIB/"
 ln -sf /usr/local/lib/rpi-audio/rpi-audiod "$BIN/rpi-audiod"
 # The display service: its own folder, since its module names (ui, inputs, render...) are generic.
 install -d "$LIB/ui"
@@ -203,6 +238,13 @@ if ((!staging)) && { ((hat)) || [[ -x $LIB/ui/rpi-audio-meter ]]; }; then
   cc -O2 -std=c11 -Wall -Wextra -Werror "$here/bridge/rpi-audio-ui/meter.c" -ljack -lm -o "$LIB/ui/rpi-audio-meter.new"
   chmod 755 "$LIB/ui/rpi-audio-meter.new"
   mv -f "$LIB/ui/rpi-audio-meter.new" "$LIB/ui/rpi-audio-meter"
+fi
+install -d "$LIB/audio"
+install -m 644 "$here/bridge/audio/gain.c" "$LIB/audio/"
+if ((!staging)); then
+  cc -O2 -std=c11 -Wall -Wextra -Werror "$here/bridge/audio/gain.c" -ljack -lm -o "$LIB/audio/rpi-audio-gain.new"
+  chmod 755 "$LIB/audio/rpi-audio-gain.new"
+  mv -f "$LIB/audio/rpi-audio-gain.new" "$LIB/audio/rpi-audio-gain"
 fi
 install -d "$LIB/network"
 install -m 644 "$here/bridge/network/network.cpp" "$LIB/network/"

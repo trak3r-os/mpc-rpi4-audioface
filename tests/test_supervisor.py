@@ -48,6 +48,7 @@ class FakeChild:
     def __init__(self, world, name, cmd, on_line, stop_signal):
         self.world, self.name, self.cmd, self.on_line, self.stop_signal = world, name, cmd, on_line, stop_signal
         self.started, self.alive_ = world.now, True
+        self.levels = []
         world.next_pid += 1
         self.proc = types.SimpleNamespace(pid=world.next_pid, returncode=None)
 
@@ -56,6 +57,10 @@ class FakeChild:
 
     def die(self, code=1):
         self.alive_, self.proc.returncode = False, code
+
+    def send_level(self, value):
+        self.levels.append(value)
+        return True
 
     def stop(self, grace=1.0):
         if self.alive_:
@@ -117,13 +122,14 @@ class World:
         monkeypatch.setattr(daemon.Midi, "sender", lambda self: None)   # would run aplaymidi
         monkeypatch.setattr(daemon, "STATE", tmp_path / "slots.json")
         monkeypatch.setattr(daemon, "PRESETS", tmp_path / "presets.json")
+        monkeypatch.setattr(daemon, "HOSTS", tmp_path / "hosts.json")
         monkeypatch.setattr(daemon, "CONFIG", tmp_path / "rpi-audio.toml")
         (tmp_path / "run").mkdir()
         monkeypatch.setattr(daemon, "STATUS", tmp_path / "run" / "status.json")
         for name in ("GADGET_SSIZE", "GADGET_MIDI_ID"):
             monkeypatch.delenv(name, raising=False)
 
-    def spawn(self, name, cmd, on_line=None, stop_signal=signal.SIGTERM):
+    def spawn(self, name, cmd, on_line=None, stop_signal=signal.SIGTERM, control=False):
         child = FakeChild(self, name, cmd, on_line, stop_signal)
         self.children.append(child)
         return child
@@ -263,35 +269,58 @@ def zita_names(w):
 
 # --- host starts and stops streaming ------------------------------------------------------------
 
+def primary(items):
+    """Legacy feeder/device assertions exclude the separately tested level and observer clients."""
+    return [item for item in items if getattr(item, 'name', item) != 'observer' and
+            not getattr(item, 'name', item).startswith('level-')]
+
+
+def signal_routes(world):
+    """Source routes; independent gain-to-hardware links are asserted by the output-stage tests."""
+    return world.connections - {frozenset(pair) for pair in world.d.level_links}
+
+
+def signal_calls(world, verb):
+    clients = set(daemon.outputs.LEVEL_CLIENTS.values())
+    return [call for call in world.called(verb) if not
+            (call[1].split(':')[0] in clients and ':capture_' in call[1])]
+
+
+def adapters(daemon):
+    return {key: value for key, value in daemon.output_workers.items()
+            if key != 'observer' and not key.startswith('level-')}
+
+
 def test_host_streaming_brings_up_jackd_bridges_and_routes(monkeypatch, tmp_path):
     w, d = make(monkeypatch, tmp_path)
     w.devices = [usb_device(1, "mixer")]
     streaming(w)
     w.run_loop(1)   # a rate is only believed when seen on two ticks in a row
-    assert d.mode is None and not w.children
+    assert d.mode is None and not primary(w.children)
     assert d.bridges[("usb-mixer", IN)].start == 1 and d.bridges[("usb-mixer", OUT)].start == 1
     w.run_loop(1)
     assert logged(w, "host streaming at 48000 Hz (capture 48000): jack")
     assert d.mode == "jack" and d.jack_ready and logged(w, "jackd is up")
-    assert [c.name for c in w.children] == ["jackd", "mixer_in", "mixer_out"]
-    jackd, a2j, j2a = w.children
+    assert [c.name for c in primary(w.children)] == ["jackd", "mixer_in", "mixer_out"]
+    jackd, a2j, j2a = primary(w.children)
     assert jackd.cmd[:2] == ["jackd", "-R"] and "hw:UAC2Gadget" in jackd.cmd
     assert jackd.cmd[jackd.cmd.index("-r") + 1] == "48000"
     assert (jackd.cmd[jackd.cmd.index("-i") + 1], jackd.cmd[jackd.cmd.index("-o") + 1]) == ("8", "8")
     assert a2j.cmd[0] == "zita-a2j" and j2a.cmd[0] == "zita-j2a"
     assert a2j.stop_signal == j2a.stop_signal == signal.SIGINT   # zita only leaves JACK cleanly on SIGINT
     assert a2j.cmd[a2j.cmd.index("-d") + 1] == "hw:CARD=mixer" and a2j.cmd[a2j.cmd.index("-c") + 1] == "2"
-    assert w.connections == {
-        frozenset(("mixer_in:capture_1", "system:playback_1")), frozenset(("mixer_in:capture_2", "system:playback_2")),
+    assert signal_routes(w) == {
+        frozenset(("mixer_in:capture_1", "level_usb_out:playback_1")),
+        frozenset(("mixer_in:capture_2", "level_usb_out:playback_2")),
         frozenset(("system:capture_1", "mixer_out:playback_1")),
         frozenset(("system:capture_2", "mixer_out:playback_2"))}
 
 
 def test_routes_are_connected_once_and_the_status_file_follows(monkeypatch, tmp_path):
     w, d = bring_up(monkeypatch, tmp_path, usb_device(1, "mixer"))
-    assert len(w.called("jack_connect")) == 4
+    assert len(signal_calls(w, "jack_connect")) == 4
     w.seconds(3)   # many route passes later, nothing is connected twice
-    assert len(w.called("jack_connect")) == 4 and len(w.live()) == 3
+    assert len(signal_calls(w, "jack_connect")) == 4 and len(primary(w.live())) == 3
     status = json.loads((tmp_path / "run" / "status.json").read_text())
     assert (status["feeder"], status["jack_ready"], status["host_playback_rate"]) == ("jack", True, 48000)
     assert status["devices"][0]["identity"] == "usb-mixer" and status["devices"][0][IN]["running"] is True
@@ -299,18 +328,18 @@ def test_routes_are_connected_once_and_the_status_file_follows(monkeypatch, tmp_
 
 def test_host_stops_stops_everything_and_plays_no_silence(monkeypatch, tmp_path):
     w, d = bring_up(monkeypatch, tmp_path, usb_device(1, "mixer"))
-    assert len(w.live()) == 3
+    assert len(primary(w.live())) == 3
     streaming(w, (0, 0))
     w.run_loop(1)   # seen once: nothing yet
-    assert len(w.live()) == 3
+    assert len(primary(w.live())) == 3
     w.run_loop(1)
     assert logged(w, "the host stopped streaming")
     assert not w.live() and d.mode is None and not d.jack_ready and d.jackd is d.player is None
-    assert w.stopped == ["mixer_in", "mixer_out", "jackd"]   # bridges first, then the server
+    assert primary(w.stopped) == ["mixer_in", "mixer_out", "jackd"]   # bridges first, then the server
     assert not w.called("jack_disconnect")   # jackd is going away: nothing is disconnected one by one
-    assert [c.name for c in w.children] == ["jackd", "mixer_in", "mixer_out"]   # and no keepalive player
+    assert [c.name for c in primary(w.children)] == ["jackd", "mixer_in", "mixer_out"]   # and no keepalive player
     w.seconds(2)
-    assert len(w.children) == 3   # still nothing
+    assert len(primary(w.children)) == 3   # still nothing
 
 
 def test_host_recording_only_gets_silence_and_no_bridges(monkeypatch, tmp_path):
@@ -333,12 +362,12 @@ def test_silence_gives_way_to_jack_and_back(monkeypatch, tmp_path):
     w.run_loop(3)
     streaming(w)   # the host starts recording from the Pi too
     w.run_loop(3)
-    assert d.mode == "jack" and w.stopped == ["silence"]
-    assert [c.name for c in w.live()] == ["jackd", "mixer_in", "mixer_out"]
+    assert d.mode == "jack" and primary(w.stopped) == ["silence"]
+    assert [c.name for c in primary(w.live())] == ["jackd", "mixer_in", "mixer_out"]
     streaming(w, (48000, 0))   # and stops recording again
     w.run_loop(3)
-    assert d.mode == "silence" and [c.name for c in w.live()] == ["silence"]
-    assert w.stopped[1:] == ["mixer_in", "mixer_out", "jackd"]
+    assert d.mode == "silence" and [c.name for c in primary(w.live())] == ["silence"]
+    assert primary(w.stopped)[1:] == ["mixer_in", "mixer_out", "jackd"]
 
 
 def test_silence_stops_when_the_host_stops_recording(monkeypatch, tmp_path):
@@ -348,19 +377,20 @@ def test_silence_stops_when_the_host_stops_recording(monkeypatch, tmp_path):
     assert d.mode == "silence"
     streaming(w, (0, 0))
     w.run_loop(2)
-    assert d.mode is None and not w.live() and w.stopped == ["silence"]
+    assert d.mode is None and not w.live() and primary(w.stopped) == ["silence"]
 
 
 def test_rate_change_restarts_the_feeder_and_the_bridges(monkeypatch, tmp_path):
     w, d = bring_up(monkeypatch, tmp_path, usb_device(1, "mixer"))
     streaming(w, (44100, 44100))
     w.run_loop(2)
-    assert d.rate == 44100 and w.stopped[:3] == ["mixer_in", "mixer_out", "jackd"]
+    assert d.rate == 44100 and primary(w.stopped)[:3] == ["mixer_in", "mixer_out", "jackd"]
     jackd = w.live("jackd")[0]
     assert jackd.cmd[jackd.cmd.index("-r") + 1] == "44100"
-    assert zita_names(w) == ["mixer_in", "mixer_out"] and not w.connections   # routes come with the next pass
+    assert zita_names(w) == ["mixer_in", "mixer_out"]
+    assert len(signal_routes(w)) == 4   # routes reconnect as soon as the new server is ready
     w.seconds(1.1)
-    assert len(w.connections) == 4 and w.stopped.count("jackd") == 1
+    assert len(signal_routes(w)) == 4 and primary(w.stopped).count("jackd") == 1
 
 
 def test_a_stop_request_stops_every_child(monkeypatch, tmp_path):
@@ -376,11 +406,11 @@ def test_jackd_dying_restarts_it_and_the_routes_come_back(monkeypatch, tmp_path)
     w.live("jackd")[0].die(1)
     w.run_loop(3)
     assert logged(w, "jackd exited, restarting") and d.jack_fails == 1
-    assert [c.name for c in w.live()] == ["jackd", "mixer_in", "mixer_out"]
-    assert len(w.children) == 6 and d.jack_ready
-    assert not w.connections
-    w.seconds(1.1)   # the next route pass
-    assert len(w.connections) == 4 and len(w.called("jack_connect")) == 8
+    assert [c.name for c in primary(w.live())] == ["jackd", "mixer_in", "mixer_out"]
+    assert len(primary(w.children)) == 6 and d.jack_ready
+    assert len(signal_routes(w)) == 4
+    w.seconds(1.1)   # subsequent passes do not duplicate connections
+    assert len(signal_routes(w)) == 4 and len(signal_calls(w, "jack_connect")) == 8
 
 
 def test_stalled_pointer_restarts_the_feeder_in_the_loop(monkeypatch, tmp_path):
@@ -389,10 +419,10 @@ def test_stalled_pointer_restarts_the_feeder_in_the_loop(monkeypatch, tmp_path):
     streaming(w)
     w.ptr_step = 0   # jackd lives but the gadget's playback pointer never moves
     w.seconds(3.5)
-    assert len(w.children) == 3 and not logged(w, "stalled")   # a new feeder gets STARTUP_S
+    assert len(primary(w.children)) == 3 and not logged(w, "stalled")   # a new feeder gets STARTUP_S
     w.seconds(2)
     assert logged(w, "jackd stalled (RUNNING, pointer still), restarting")
-    assert d.jack_fails == 1 and len(w.live("jackd")) == 1 and len(w.children) == 6
+    assert d.jack_fails == 1 and len(w.live("jackd")) == 1 and len(primary(w.children)) == 6
     assert zita_names(w) == ["mixer_in", "mixer_out"]
 
 
@@ -404,7 +434,7 @@ def test_repeated_jackd_failures_fall_back_to_silence(monkeypatch, tmp_path):
     w.seconds(14)
     assert logged(w, "jackd failed 3 times in a row; silence for 10 s")
     assert d.mode == "silence" and d.target == "jack" and d.jackd is None and d.player
-    assert sum(c.name == "jackd" for c in w.children) == 3
+    assert sum(c.name == "jackd" for c in primary(w.children)) == 3
     assert zita_names(w) == []   # bridges need jackd
 
 
@@ -419,7 +449,7 @@ def test_check_feeder_leaves_a_moving_feeder_alone(monkeypatch, tmp_path):
         d.check_feeder(w.now)
         if step < 49:
             assert d.jack_fails == 2   # a feeder that lived 5 s has not failed yet
-    assert d.jack_fails == 0 and len(w.children) == 1 and not logged(w, "restarting")
+    assert d.jack_fails == 0 and len(primary(w.children)) == 1 and not logged(w, "restarting")
 
 
 def test_check_feeder_stall_needs_startup_and_stall_time(monkeypatch, tmp_path):
@@ -480,7 +510,7 @@ def test_set_mode_is_idempotent_and_none_stops(monkeypatch, tmp_path):
     d.set_mode("jack", w.now)
     first = d.jackd
     d.set_mode("jack", w.now + 1)
-    assert d.jackd is first and len(w.children) == 1
+    assert d.jackd is first and len(primary(w.children)) == 1
     first.die(1)
     d.jackd = None   # the feeder is gone but the mode says it runs: set_mode starts it again
     d.set_mode("jack", w.now + 2)
@@ -488,7 +518,7 @@ def test_set_mode_is_idempotent_and_none_stops(monkeypatch, tmp_path):
     d.set_mode(None, w.now + 3)
     assert d.mode is None and d.jackd is d.player is None and not w.live()
     d.set_mode(None, w.now + 4)
-    assert len(w.children) == 2
+    assert len(primary(w.children)) == 2
 
 
 def test_check_jack_ready_waits_for_jack_lsp(monkeypatch, tmp_path):
@@ -580,7 +610,7 @@ def test_bridge_stop_disconnects_its_routes_unless_told_not_to(monkeypatch, tmp_
     b.stop()
     assert w.called("jack_disconnect") == [("jack_disconnect", f"system:capture_{c + 2}", f"mixer_out:playback_{c}")
                                            for c in (1, 2)]
-    assert b.child is None and w.stopped == ["mixer_out"]
+    assert b.child is None and primary(w.stopped) == ["mixer_out"]
     b.stop()   # nothing running: nothing to do
     assert len(w.called("jack_disconnect")) == 2
     b.tick({"bridge": {}}, w.now + 100)
@@ -706,7 +736,7 @@ def test_unplugged_device_stops_its_bridges_and_keeps_its_slot(monkeypatch, tmp_
     w.seconds(0.7)
     assert logged(w, "mixer (usb-mixer) unplugged")
     assert list(d.devices) == ["usb-synth"] and sorted(d.bridges) == [("usb-synth", IN), ("usb-synth", OUT)]
-    assert zita_names(w) == ["synth_in", "synth_out"] and w.stopped == ["mixer_in", "mixer_out"]
+    assert zita_names(w) == ["synth_in", "synth_out"] and primary(w.stopped) == ["mixer_in", "mixer_out"]
     assert len(w.called("jack_disconnect")) == 4   # one at a time: jackd stays
     assert daemon.load_slots()["in"]["usb-mixer"] == 1   # remembered for when it returns
     assert d.bridges[("usb-synth", IN)].start == 3   # the others do not move
@@ -723,9 +753,9 @@ def test_reenumerated_device_gets_new_bridges_on_the_same_channels(monkeypatch, 
     assert logged(w, "mixer (usb-mixer) re-enumerated")
     new = d.bridges[("usb-mixer", IN)]
     assert new is not old and new.start == 1 and new.dev.card == 4
-    assert old.child is None and w.stopped[:2] == ["mixer_in", "mixer_out"]
+    assert old.child is None and primary(w.stopped)[:2] == ["mixer_in", "mixer_out"]
     w.seconds(1.5)
-    assert zita_names(w) == ["mixer_in", "mixer_out"] and len(w.live()) == 3
+    assert zita_names(w) == ["mixer_in", "mixer_out"] and len(primary(w.live())) == 3
 
 
 def test_a_change_from_the_command_line_moves_the_bridge(monkeypatch, tmp_path):
@@ -737,7 +767,7 @@ def test_a_change_from_the_command_line_moves_the_bridge(monkeypatch, tmp_path):
     daemon.cmd_change("assign usb-mixer in=5")
     d.scan_devices()
     assert b.start == 5 and b.child is None and logged(w, "mixer_in -> gadget IN 5-6")
-    assert ("jack_disconnect", "mixer_in:capture_1", "system:playback_1") in w.calls   # from the old channels
+    assert ("jack_disconnect", "mixer_in:capture_1", "level_usb_out:playback_1") in w.calls   # from the old channels
     assert d.bridges[("usb-mixer", OUT)].start == 1
 
 
@@ -755,14 +785,14 @@ def test_standalone_starts_jackd_on_the_dac_without_a_host(monkeypatch, tmp_path
     w.run_loop(3)
     assert d.mode == "jack" and d.jack_ready and logged(w, "standalone on sndrpihifiberry, 2 ch at 48000 Hz")
     assert not logged(w, "host streaming") and not w.called("amixer", "-c", CARD, "contents")   # nobody asks the gadget
-    jackd = w.children[0]
+    jackd = primary(w.children)[0]
     assert jackd.cmd[:2] == ["jackd", "-R"] and "hw:sndrpihifiberry" in jackd.cmd
     alsa = jackd.cmd[jackd.cmd.index("alsa"):]
     assert alsa[:3] == ["alsa", "-d", "hw:sndrpihifiberry"] and "-P" in alsa   # playback only
     assert [alsa[alsa.index(k) + 1] for k in ("-r", "-p", "-n", "-o")] == ["48000", "256", "3", "2"]
     assert "-i" not in alsa
     assert zita_names(w) == ["mixer_in", "mixer_out"]
-    assert w.connections == set()   # no gadget channels to connect to: routes only
+    assert signal_routes(w) == set()   # no gadget channels to connect to: routes only
     assert not (tmp_path / "slots.json").exists() and d.midi is None
 
 
@@ -783,16 +813,18 @@ def test_standalone_routes_end_in_the_dac_and_unwanted_connections_go(monkeypatc
     w.run_loop(3)
     w.seconds(1.5)
     both = {frozenset((f"{src}:capture_{k}", f"{dst}:playback_{k}")) for k in (1, 2)
-            for src, dst in (("mixer_in", "system"), ("mixer_in", "tracker_out"), ("tracker_in", "system"))}
-    assert w.connections == both   # a stereo pair, channel for channel; the DAC takes both sources (JACK sums)
-    stray = frozenset(("tracker_in:capture_1", "system:playback_2"))   # not a route
+            for src, dst in (("mixer_in", "level_dac_out"), ("mixer_in", "tracker_out"),
+                             ("tracker_in", "level_dac_out"))}
+    assert signal_routes(w) == both   # a stereo pair, channel for channel; the DAC takes both sources (JACK sums)
+    stray = frozenset(("tracker_in:capture_1", "level_dac_out:playback_2"))   # not a route
     w.connections.add(stray)
     w.seconds(1.5)
-    assert stray not in w.connections and w.connections == both
+    assert stray not in w.connections and signal_routes(w) == both
     daemon.cmd_change("unroute usb-mixer local-dac")
     w.seconds(1.5)
-    assert w.connections == {c for c in both if not any(p.startswith("mixer_in") for p in c) or
-                             any(p.startswith("tracker_out") for p in c)}
+    remaining = {c for c in both if not any(p.startswith("mixer_in") for p in c) or
+                 any(p.startswith("tracker_out") for p in c)}
+    assert signal_routes(w) == remaining
 
 
 def test_standalone_status_lists_the_dac_as_a_destination_and_a_mute_cuts_it(monkeypatch, tmp_path):
@@ -809,7 +841,7 @@ def test_standalone_status_lists_the_dac_as_a_destination_and_a_mute_cuts_it(mon
     assert status["routes"] == [{"src": "usb-mixer", "dst": "local-dac", "waiting": None}]
     daemon.cmd_change("mute local-dac out on")
     w.seconds(2.5)
-    assert not any("system:playback_1" in c for c in w.connections)
+    assert not any("level_dac_out:playback_1" in c for c in w.connections)
     status = json.loads((tmp_path / "run" / "status.json").read_text())
     assert status["routes"][0]["waiting"] == "muted" and status["devices"][-1][OUT]["muted"] is True
 
@@ -820,7 +852,7 @@ def test_standalone_waits_instead_of_playing_silence_when_jackd_keeps_failing(mo
     w.seconds(14)
     assert logged(w, "jackd failed 3 times in a row; waiting for 10 s")
     assert d.mode is None and d.target == "jack" and d.jackd is None and d.player is None
-    assert not [c for c in w.children if c.name == "silence"]
+    assert not [c for c in primary(w.children) if c.name == "silence"]
     w.ptr_step = 48
     w.seconds(12)
     assert d.mode == "jack" and d.jackd and d.jackd.alive()   # and it tries again
@@ -946,27 +978,28 @@ def test_slots_that_cannot_be_written_are_still_applied_in_memory(monkeypatch, t
 
 def test_muted_routes_are_cut_and_come_back(monkeypatch, tmp_path):
     w, d = bring_up(monkeypatch, tmp_path, usb_device(1, "mixer"))
-    assert len(w.connections) == 4
+    assert len(signal_routes(w)) == 4
     assert d.command("mute usb-mixer in on") == "ok"
     w.seconds(1.6)   # one scan, one route pass
     assert d.muted[IN] == {"usb-mixer"}
-    assert w.connections == {frozenset(("system:capture_1", "mixer_out:playback_1")),
-                             frozenset(("system:capture_2", "mixer_out:playback_2"))}
-    assert logged(w, "muted mixer_in:capture_1 -> system:playback_1")
+    assert signal_routes(w) == {
+        frozenset(("system:capture_1", "mixer_out:playback_1")),
+        frozenset(("system:capture_2", "mixer_out:playback_2"))}
+    assert logged(w, "muted mixer_in:capture_1 -> level_usb_out:playback_1")
     assert d.command("mute usb-mixer in off") == "ok"
     w.seconds(1.6)
-    assert len(w.connections) == 4 and not d.muted[IN]
+    assert len(signal_routes(w)) == 4 and not d.muted[IN]
 
 
 def test_device_routes_connect_cut_and_leave_the_gadget_alone(monkeypatch, tmp_path):
     w, d = bring_up(monkeypatch, tmp_path, usb_device(1, "mixer"), usb_device(2, "tracker"))
-    gadget = set(w.connections)
+    gadget = set(signal_routes(w))
     assert len(gadget) == 8   # mixer and tracker on the host's channels
     assert d.command("route usb-mixer usb-tracker") == "ok"
     w.seconds(1.6)
     mine = {frozenset(("mixer_in:capture_1", "tracker_out:playback_1")),
             frozenset(("mixer_in:capture_2", "tracker_out:playback_2"))}
-    assert w.connections == gadget | mine
+    assert signal_routes(w) == gadget | mine
     assert d.status_data()["routes"] == [{"src": "usb-mixer", "dst": "usb-tracker", "waiting": None}]
     assert d.command("mute usb-tracker out on") == "ok"
     w.seconds(1.6)
@@ -994,11 +1027,18 @@ def test_connect_routes_waits_for_the_ports(monkeypatch, tmp_path):
     w.devices = [usb_device(1, "mixer")]
     d.scan_devices()
     d.connect_routes()   # zita is not running: its ports do not exist
-    assert not w.called("jack_connect") and not w.connections
+    assert not signal_calls(w, "jack_connect") and not signal_routes(w)
     for b in d.bridges.values():
         b.tick(d.cfg, w.now)
     d.connect_routes()
-    assert len(w.connections) == 4
+    assert len(signal_routes(w)) == 2  # host return exists; USB sends must wait for their gain stage
+    d.set_mode('jack', w.now)
+    d.check_jack_ready()
+    d.sync_outputs(w.now)
+    for bridge in d.bridges.values():
+        bridge.tick(d.cfg, w.now)
+    d.connect_routes()
+    assert len(signal_routes(w)) == 4
 
 
 def test_saved_levels_are_set_once_and_again_on_change_or_return(monkeypatch, tmp_path):
@@ -1318,15 +1358,16 @@ def test_a_midi_command_through_the_loop_changes_the_routes(monkeypatch, tmp_pat
     w.devices = [usb_device(1, "mixer")]
     streaming(w)
     w.run_loop(3)
-    assert len(w.connections) == 4
+    assert len(signal_routes(w)) == 4
     d.midi.events.put(sysex("mute usb-mixer in on"))
     d.midi.events.put(("pc", 16, 4))   # an empty preset
     d.midi.events.put(sysex("ping"))
     w.seconds(1.6)
     assert [text for _, text in replies(d.midi)] == ["ok", f"ok rpi-audio {daemon.VERSION}"]
     assert logged(w, "MIDI command 'mute usb-mixer in on': ok") and logged(w, "MIDI program 4: preset 5: error")
-    assert w.connections == {frozenset(("system:capture_1", "mixer_out:playback_1")),
-                             frozenset(("system:capture_2", "mixer_out:playback_2"))}
+    assert signal_routes(w) == {
+        frozenset(("system:capture_1", "mixer_out:playback_1")),
+        frozenset(("system:capture_2", "mixer_out:playback_2"))}
     status = d.status_data()
     assert status["midi"]["ports"] == 4 and status["devices"][0][IN]["muted"] is True
     assert status["version"] == daemon.VERSION
@@ -1471,18 +1512,18 @@ def test_hub_keeps_local_clock_running_when_host_leaves(monkeypatch, tmp_path):
     w.seconds(1.2)
     clock = d.jackd
     assert d.jack_ready and d.rate == 48000 and d.usb_channels == 26 and d.channels == 2
-    assert not d.output_workers and w.live('keys_in')
+    assert not adapters(d) and w.live('keys_in')
     daemon.cmd_change('route usb-Keys local-dac')
     w.seconds(1.2)
-    assert frozenset(('keys_in:capture_1', 'system:playback_1')) in w.connections
+    assert frozenset(('keys_in:capture_1', 'level_dac_out:playback_1')) in w.connections
     w.rates = (44100, 48000)
     w.seconds(1.2)
     assert d.output_workers['usb-send'].cmd[d.output_workers['usb-send'].cmd.index('-r') + 1] == '44100'
     assert d.output_workers['usb-receive'].cmd[d.output_workers['usb-receive'].cmd.index('-r') + 1] == '48000'
     w.rates = (0, 0)
     w.seconds(1.2)
-    assert d.jackd is clock and clock.alive() and not d.output_workers
-    assert frozenset(('keys_in:capture_1', 'system:playback_1')) in w.connections
+    assert d.jackd is clock and clock.alive() and not adapters(d)
+    assert frozenset(('keys_in:capture_1', 'level_dac_out:playback_1')) in w.connections
 
 
 def test_network_output_toggles_and_failures_do_not_restart_other_outputs(monkeypatch, tmp_path):
@@ -1493,7 +1534,7 @@ def test_network_output_toggles_and_failures_do_not_restart_other_outputs(monkey
     daemon.cmd_change('output network-rtp on')
     daemon.cmd_change('output network-link on')
     w.seconds(1.2)
-    assert set(d.output_workers) == {'usb-send', 'usb-receive', 'network-rtp', 'network-link'}
+    assert set(adapters(d)) == {'usb-send', 'usb-receive', 'network-rtp', 'network-link'}
     rtp = d.output_workers['network-rtp']
     rtp.on_line('{"event":"status","state":"sending","packets":100}')
     assert next(o for o in d.output_status() if o['identity'] == 'network-rtp')['state'] == 'sending'
@@ -1627,3 +1668,245 @@ def test_bad_host_profiles_are_skipped_with_a_warning(monkeypatch, tmp_path, tom
     w, d = make(monkeypatch, tmp_path)
     assert daemon.load_hosts() == {"typo": {"reserve_out": [3]}}
     assert logged(w, "broken.toml") and logged(w, "typo.toml: reserve_in must be a list")
+
+
+def test_overwriting_an_active_host_profile_reassigns_without_an_extra_command(monkeypatch, tmp_path, toml):
+    w, d = bring_up(monkeypatch, tmp_path, usb_device(1, 'mixer'))
+    daemon.cmd_change('host save custom in=')
+    daemon.cmd_change('host custom')
+    w.seconds(1)
+    assert d.bridges[('usb-mixer', IN)].start == 1
+    daemon.cmd_change('host save custom in=1,2')
+    w.seconds(1)
+    assert d.bridges[('usb-mixer', IN)].start == 3
+
+
+def test_changing_hub_host_reservations_keeps_local_bridges_and_explicit_routes(monkeypatch, tmp_path, toml):
+    w, d = make(monkeypatch, tmp_path, engine={'mode': 'hub'})
+    w.devices = [usb_device(1, 'mixer')]
+    w.seconds(1)
+    bridge = d.bridges[('usb-mixer', IN)].child
+    clock = d.jackd
+    daemon.cmd_change('route usb-mixer local-dac')
+    daemon.cmd_change('host save custom in=1,2')
+    daemon.cmd_change('host custom')
+    w.seconds(1)
+    assert d.jackd is clock and d.bridges[('usb-mixer', IN)].child is bridge
+    assert bridge.alive() and d.bridges[('usb-mixer', IN)].start == 3
+    assert frozenset(('mixer_in:capture_1', 'level_dac_out:playback_1')) in w.connections
+
+
+def test_bad_host_table_and_duplicate_options_are_handled(monkeypatch, tmp_path, toml):
+    host_profile(tmp_path, 'bad', 'slots = 123\n')
+    w, d = make(monkeypatch, tmp_path)
+    assert daemon.load_hosts() == {'bad': {}} and logged(w, 'slots must be a table')
+    assert d.command('host save custom in=1 in=2').startswith('error: usage:')
+
+
+def test_full_host_setup_restores_routing_names_levels_and_outputs_but_not_engine(monkeypatch, tmp_path):
+    w, d = make(monkeypatch, tmp_path, engine={'mode': 'hub'})
+    original = {'engine_mode': 'hub', 'in': {'usb-mixer': 3}, 'out': {'usb-mixer': 5},
+                'names': {'usb-mixer': {'name': 'Mixer', 'in': {'1': 'Mic'}}},
+                'volume': {'in': {'usb-mixer': 70}}, 'mute': {'out': ['usb-mixer']},
+                'routes': [{'src': 'usb-mixer', 'dst': 'local-dac'}],
+                'midi_routes': [{'src': 'keys/0', 'dst': 'synth/0'}], 'outputs': {'network-rtp': True}}
+    daemon.update_slots(lambda _: original)
+    assert d.command('host save studio full reserve_in=25,26 reserve_out=1,2') == 'ok'
+    saved = daemon.load_saved_hosts()['studio']
+    assert saved['reserve_in'] == [25, 26] and saved['state']['names'] == original['names']
+    assert 'engine_mode' not in saved['state'] and 'host_profile' not in saved['state']
+    daemon.update_slots(lambda _: {'engine_mode': 'standalone', 'names': {'x': {'name': 'Other'}}})
+    assert d.command('host studio') == 'ok'
+    restored = daemon.load_slots()
+    for key in ('in', 'out', 'names', 'volume', 'mute', 'routes', 'midi_routes', 'outputs'):
+        assert restored[key] == original[key]
+    assert restored['engine_mode'] == 'standalone' and restored['host_profile'] == 'studio'
+    assert 'names' not in daemon.load_saved_hosts()['studio']  # names are inside its saved setup
+
+
+def test_reservations_only_host_does_not_replace_current_setup(monkeypatch, tmp_path):
+    w, d = make(monkeypatch, tmp_path)
+    daemon.update_slots(lambda _: {'names': {'usb-a': {'name': 'A'}}, 'volume': {'out': {'usb-a': 80}}})
+    assert d.command('host save gig reserve_in=1,2 reserve_out=') == 'ok'
+    assert daemon.load_saved_hosts()['gig'] == {'reserve_in': [1, 2], 'reserve_out': []}
+    assert d.command('name usb-a B') == 'ok'
+    assert d.command('host gig') == 'ok'
+    assert daemon.load_slots()['names']['usb-a']['name'] == 'B'
+    assert daemon.load_slots()['volume']['out']['usb-a'] == 80
+
+
+def test_linked_host_loads_latest_scene_and_missing_scene_is_an_atomic_error(monkeypatch, tmp_path):
+    w, d = make(monkeypatch, tmp_path)
+    assert d.command('name usb-a First') == 'ok'
+    assert d.command('preset save 3 Live') == 'ok'
+    assert d.command('host save force reserve_in=25,26 preset=3') == 'ok'
+    assert d.command('name usb-a Other') == 'ok'
+    assert d.command('host force') == 'ok'
+    assert daemon.load_slots()['names']['usb-a']['name'] == 'First'
+    assert d.command('name usb-a Updated') == 'ok'
+    assert d.command('preset save 3') == 'ok'
+    assert d.command('host force') == 'ok'
+    assert daemon.load_slots()['names']['usb-a']['name'] == 'Updated'
+    assert d.command('preset clear 3') == 'ok'
+    before, stamp = daemon.load_slots(), daemon.slots_stamp()
+    assert d.command('host force') == 'error: preset 3 is empty'
+    assert daemon.load_slots() == before and daemon.slots_stamp() == stamp
+    assert d.command('host save missing preset=4') == 'error: preset 4 is empty'
+    assert 'missing' not in daemon.load_saved_hosts()
+
+
+def test_factory_scene_link_is_saved_as_a_user_override_and_rename_tracks_selection(monkeypatch, tmp_path, toml):
+    host_profile(tmp_path, 'pads', '[slots]\nreserve_in = [25,26]\n')
+    w, d = make(monkeypatch, tmp_path)
+    factory = (tmp_path / 'hosts.d/pads.toml').read_bytes()
+    assert d.command('preset save 3') == 'ok'
+    assert d.command('host preset pads 3') == 'ok'
+    assert daemon.load_saved_hosts()['pads'] == {'reserve_in': [25, 26], 'reserve_out': [], 'preset': 3}
+    assert (tmp_path / 'hosts.d/pads.toml').read_bytes() == factory
+    assert d.command('host pads') == 'ok'
+    assert d.command('host rename pads live') == 'ok'
+    assert daemon.load_slots()['host_profile'] == 'live'
+    assert 'preset' not in daemon.load_hosts()['pads'] and daemon.load_hosts()['live']['preset'] == 3
+    assert d.command('host preset live none') == 'ok'
+    assert 'preset' not in daemon.load_saved_hosts()['live']
+    assert d.command('host rename live pads').startswith('error: host profile pads already exists')
+    assert d.command('host rename pads other').startswith('error: no saved host profile')
+    assert d.command('host delete live') == 'ok' and 'host_profile' not in daemon.load_slots()
+
+
+def test_factory_profile_can_reference_a_scene_and_bad_references_are_not_silently_loaded(monkeypatch, tmp_path, toml):
+    host_profile(tmp_path, 'pads', 'preset = 3\n[slots]\nreserve_in = [25,26]\n')
+    host_profile(tmp_path, 'bad', 'preset = 9\n[slots]\nreserve_in = []\n')
+    w, d = make(monkeypatch, tmp_path)
+    assert 'bad' not in daemon.load_hosts()
+    assert d.command('host pads') == 'error: preset 3 is empty'
+    assert d.command('name usb-a Saved') == 'ok'
+    assert d.command('preset save 3') == 'ok'
+    assert d.command('host pads') == 'ok'
+    details = daemon.host_summary(d.cfg, daemon.load_hosts())
+    assert details['pads']['origin'] == 'factory' and details['pads']['preset_available']
+
+
+@pytest.mark.parametrize('command', ['host save x in=1 reserve_in=2', 'host save x full full',
+                                     'host save x full preset=3', 'host save x preset=3 full',
+                                     'host preset x 9', 'host rename x default'])
+def test_host_setup_commands_reject_ambiguous_or_invalid_arguments(command):
+    with pytest.raises(ValueError):
+        midi.parse_command(command)
+
+
+def test_full_host_copy_is_independent_of_all_scene_slots(monkeypatch, tmp_path):
+    w, d = make(monkeypatch, tmp_path)
+    assert d.command('name usb-a Original') == 'ok'
+    assert d.command('preset save 3') == 'ok'
+    assert d.command('host save copy full') == 'ok'
+    assert d.command('name usb-a Later') == 'ok'
+    assert d.command('preset save 3') == 'ok'
+    assert d.command('preset clear 3') == 'ok'
+    assert d.command('host copy') == 'ok'
+    assert daemon.load_slots()['names']['usb-a']['name'] == 'Original'
+    assert daemon.load_presets() == {}
+
+
+def test_renaming_configured_user_profile_tracks_current_effective_selection(monkeypatch, tmp_path):
+    w, d = make(monkeypatch, tmp_path)
+    daemon.CONFIG.write_text('[host]\nprofile = "studio"\n')
+    assert d.command('host save studio') == 'ok'
+    assert 'host_profile' not in daemon.load_slots()
+    assert d.command('host rename studio new-name') == 'ok'
+    assert daemon.load_slots()['host_profile'] == 'new-name'
+
+
+def test_oled_create_only_guard_cannot_overwrite_a_profile_from_a_stale_screen(monkeypatch, tmp_path):
+    w, d = make(monkeypatch, tmp_path)
+    assert d.command('host save host-1 new full') == 'ok'
+    before, state = daemon.load_saved_hosts(), daemon.load_slots()
+    assert d.command('host save host-1 new').startswith('error: host profile host-1 already exists')
+    assert daemon.load_saved_hosts() == before and daemon.load_slots() == state
+
+
+def test_output_levels_change_live_without_touching_other_destinations_or_engine(monkeypatch, tmp_path):
+    w, d = make(monkeypatch, tmp_path, engine={'mode': 'hub'})
+    w.devices = [usb_device(1, 'mixer')]
+    w.rates = (48000, 48000)
+    w.seconds(1.2)
+    clock = d.jackd
+    local, usb = d.output_workers['level-local-dac'], d.output_workers['level-usb-host']
+    assert d.command('output local-dac level 50') == 'ok'
+    w.seconds(1)
+    assert local.levels == [50] and not usb.levels
+    assert d.jackd is clock and d.output_workers['level-local-dac'] is local
+    assert ('level_usb_out:capture_1', 'usb_host_out:playback_1') in d.level_links
+    assert ('level_dac_out:capture_1', 'system:playback_1') in d.level_links
+    assert d.command('output local-dac level 0') == 'ok'
+    w.seconds(1)
+    assert local.levels == [50, 0] and d.jackd is clock
+    assert d.command('preset save 1') == 'ok'
+    assert d.command('output local-dac level 100') == 'ok'
+    assert d.command('preset load 1') == 'ok'
+    assert daemon.load_slots()['output_levels']['local-dac'] == 0
+
+
+def test_gain_failure_does_not_bypass_the_level_or_restart_other_outputs(monkeypatch, tmp_path):
+    w, d = make(monkeypatch, tmp_path, engine={'mode': 'hub'})
+    w.devices = [usb_device(1, 'mixer')]
+    w.rates = (48000, 48000)
+    w.seconds(1)
+    d.command('route usb-mixer local-dac')
+    w.seconds(1)
+    clock, usb = d.jackd, d.output_workers['level-usb-host']
+    local = d.output_workers['level-local-dac']
+    local.die()
+    w.seconds(1.1)
+    assert d.jackd is clock and d.output_workers['level-usb-host'] is usb
+    assert frozenset(('mixer_in:capture_1', 'system:playback_1')) not in w.connections
+    assert d.output_status()[0]['state'] == 'error'
+    assert d.session.snapshot()['counters']['adapter_failures'] == 1
+
+
+def test_profile_status_resolves_saved_setup_and_reports_missing_or_invalid_scene(monkeypatch, tmp_path):
+    w, d = make(monkeypatch, tmp_path, engine={'mode': 'hub'})
+    w.devices = [usb_device(1, 'mixer')]
+    w.seconds(1)
+    d.command('route usb-mixer local-dac')
+    d.command('host save show full')
+    d.command('host show')
+    w.seconds(1.2)
+    assert d.status_data()['profile_readiness']['state'] == 'ready'
+    w.devices = []
+    w.seconds(1)
+    result = d.status_data()['profile_readiness']
+    assert result['state'] == 'partial' and any(i['code'] == 'missing_device' for i in result['issues'])
+    d.command('preset save 3')
+    d.command('host preset show 3')
+    d.command('preset clear 3')
+    assert d.status_data()['profile_readiness']['state'] == 'error'
+    daemon.write_json(daemon.HOSTS, {'broken': {'state': {'routes': 'bad'}}})
+    assert d.status_data()['host_profile_details']['broken']['readiness']['state'] == 'error'
+    before = daemon.load_slots()
+    assert d.command('host broken').startswith('error:') and daemon.load_slots() == before
+
+
+def test_session_observer_counters_survive_views_and_same_boot_service_recreation(monkeypatch, tmp_path):
+    w, d = make(monkeypatch, tmp_path, engine={'mode': 'hub'})
+    w.devices = [usb_device(1, 'mixer')]
+    w.seconds(1)
+    observer = d.output_workers['observer']
+    observer.on_line('{"event":"status","xruns":3,"rate":48000,"period":256}')
+    w.seconds(1)
+    assert d.status_data()['session']['counters']['xruns'] == 3
+    w.devices = []
+    w.seconds(1)
+    assert d.status_data()['session']['counters']['device_disconnects'] == 1
+    d.session.flush(daemon.write_json)
+    restored = daemon.Daemon(d.cfg)
+    assert restored.session.snapshot()['counters']['xruns'] == 3
+    assert restored.session.snapshot()['counters']['device_disconnects'] == 1
+
+
+def test_saved_output_gain_is_used_at_process_start_not_after_the_first_scan(monkeypatch, tmp_path):
+    (tmp_path / 'slots.json').write_text(json.dumps({'output_levels': {'local-dac': 25}}))
+    w, d = make(monkeypatch, tmp_path, engine={'mode': 'hub'})
+    w.run_loop(1)
+    child = d.output_workers['level-local-dac']
+    assert child.cmd[-2:] == ['--level', '25'] and not child.levels

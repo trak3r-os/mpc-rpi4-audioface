@@ -17,7 +17,7 @@ El host USB se representa como origen/destino estable `usb-host`. Los otros dest
 
 La primera entrada en Hub convierte una sola vez los mapas USB guardados en rutas explícitas. Se pueden borrar después sin que reaparezcan. Los dispositivos nuevos se enrutan desde Send audio. Los mapas y el comportamiento automático del modo host original se conservan.
 
-Las escenas guardan rutas, niveles, mute y activación de salidas. El modo de motor y los parámetros de transporte no cambian al cargar una escena.
+Las escenas nuevas guardan mapas de canales, nombres, rutas, niveles, mute y activación de salidas. Las escenas antiguas sin nombres conservan los actuales. Los perfiles de host pueden guardar solo reservas, una copia completa independiente o un vínculo a una escena; los perfiles de usuario se conservan en hosts.json y los usuarios del grupo audio pueden editarlos sin root. El modo de motor y los parámetros de transporte no cambian al cargar una escena.
 
 ## Transporte y SDP
 
@@ -42,8 +42,9 @@ El archivo activo está en `/run/rpi-audio/network-rtp.sdp` y se descarga desde 
 ```text
 Overview → menú
   Send audio       origen → marcar destinos; More output pairs... para pares concretos
-  Outputs          DAC / USB host / Network RTP / Link Audio → Enabled / Details
+  Outputs          DAC / USB host / Network RTP / Link Audio → Enabled / Level / Details
                    Audio mode → Hub / USB host clock / Standalone DAC
+                   Host → perfiles de reservas USB / guardar reservas actuales
   Levels & mute    dispositivo físico → mute / nivel disponible
   MIDI             emisor → receptores
   Scenes           slot → Load / Save here... → confirmar
@@ -64,3 +65,11 @@ Pruebas automatizadas cubren navegación, migración, persistencia, frecuencias 
 Esta versión **solo envía audio por red**. No implementa AES67 completo, sincronización PTP, Dante, recepción de red, SonoBus/AOO ni tarjetas virtuales para Windows/macOS. RTP/PCM con SDP es un transporte estándar, no una certificación AES67. [RTP](https://www.rfc-editor.org/info/rfc3550/), [SDP](https://www.rfc-editor.org/rfc/rfc8866.html), [AES67](https://www.aes.org/publications/standards/preview.cfm?ID=96).
 
 Link Audio se ha contrastado con otro proceso del SDK oficial. Quedan ensayos con Ableton Live físico, hosts USB en modo Hub y medición de latencia/pérdidas entre equipos y sistemas operativos. Las pruebas previas con Linux/Force corresponden al modo host original. Para uso estable, Ethernet es la referencia; wifi se evalúa por separado. [Documentación Link Audio](https://ableton.github.io/link/), [guía de Ableton](https://help.ableton.com/hc/en-us/articles/25425913328924-Link-Audio-FAQ).
+
+## Disponibilidad, niveles e historial
+
+El estado de cada perfil compara su configuración guardada con dispositivos, canales y puertos MIDI presentes. Ready indica requisitos disponibles; Partial explica dispositivos ausentes o recursos/stream pendientes; Error identifica escena inexistente o datos inválidos. No es una prueba de sonido audible ni de recepción RTP.
+
+Cada salida principal tiene un proceso JACK nativo de ganancia independiente: DAC, envío USB, RTP y Link Audio. El nivel 0–100 se guarda en output_levels, se aplica después de sumar sus fuentes y cambia con rampa. La configuración se envía sin reiniciar el proceso ni JACK. Si falla una etapa, no se crea un bypass a volumen completo. Los perfiles/escenas antiguos que carecen de ese campo conservan los niveles actuales.
+
+Un observador JACK sin puertos funciona mientras el motor esté activo y registra xruns fuera de la interfaz. El daemon registra desconexiones, fallos y cambios de rate/búfer. session.json vive en RAM, se conserva entre reinicios del servicio y se reinicia al cambiar el boot_id. History contiene como máximo 64 eventos agrupados, con contadores que conservan su total.

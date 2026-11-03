@@ -323,14 +323,15 @@ def test_name_and_preset_commands_through_the_daemon(monkeypatch, tmp_path):
     assert d.command("preset save 1 Live") == "ok"
     saved = daemon.load_presets()["1"]
     assert saved["name"] == "Live" and len(saved["saved"]) == 16
-    assert saved["state"] == {"in": {"usb-a": 3}, "out": {"usb-a": 5}, "volume": {"out": {"usb-a": 80}}}
-    assert (tmp_path / "presets.json").stat().st_mode & 0o777 == 0o644
+    assert saved["state"] == {"in": {"usb-a": 3}, "out": {"usb-a": 5}, "volume": {"out": {"usb-a": 80}},
+                              "names": {"usb-a": {"name": "My  box", "in": {"2": "Kick"}}}, "output_levels": {}}
+    assert (tmp_path / "presets.json").stat().st_mode & 0o777 == 0o664
     assert d.command("assign usb-a in=9") == "ok"
     assert d.command("name usb-a Renamed") == "ok"
     stamp = daemon.slots_stamp()
     assert d.command("preset load 1") == "ok"
     slots = daemon.load_slots()
-    assert slots["in"] == {"usb-a": 3} and slots["names"]["usb-a"]["name"] == "Renamed"
+    assert slots["in"] == {"usb-a": 3} and slots["names"]["usb-a"]["name"] == "My  box"
     assert daemon.slots_stamp() != stamp   # the service sees the change and re-applies it
     assert d.command("preset save 1") == "ok" and daemon.load_presets()["1"]["name"] == "Live"
     assert d.command("preset save 2") == "ok" and daemon.load_presets()["2"]["name"] == "Preset 2"

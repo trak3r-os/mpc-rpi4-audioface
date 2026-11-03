@@ -53,16 +53,18 @@ def test_save_and_load_preset():
     store = {}
     presets.save_preset(store, state, 1, "", "2026-10-30 10:00")
     assert store["1"] == {"name": "Preset 1", "saved": "2026-10-30 10:00",
-                          "state": {"in": {GP: 3}, "volume": {"out": {GP: 80}}}}
+                          "state": {"in": {GP: 3}, "volume": {"out": {GP: 80}},
+                                    "names": {GP: {"name": "T"}}, "output_levels": {}}}
     presets.save_preset(store, state, 1, "Gig", "2026-10-30 11:00")
     presets.save_preset(store, {"mute": {"in": []}}, 1, "", "2026-10-30 12:00")   # keeps the name
-    assert store["1"] == {"name": "Gig", "saved": "2026-10-30 12:00", "state": {"mute": {"in": []}}}
+    assert store["1"] == {"name": "Gig", "saved": "2026-10-30 12:00",
+                          "state": {"mute": {"in": []}, "names": {}, "output_levels": {}}}
     target = {"in": {"x": 1}, "volume": {"in": {}}, "names": {GP: {"name": "T"}}}
     presets.load_preset(target, store, 1)
-    assert target == {"mute": {"in": []}, "names": {GP: {"name": "T"}}}
+    assert target == {"mute": {"in": []}, "names": {}, "output_levels": {}}
     with pytest.raises(ValueError, match="preset 2 is empty"):
         presets.load_preset(target, store, 2)
-    assert target == {"mute": {"in": []}, "names": {GP: {"name": "T"}}}
+    assert target == {"mute": {"in": []}, "names": {}, "output_levels": {}}
     for bad in ({"1": "junk"}, {"1": {"name": "x"}}, {"1": {"state": []}}):
         with pytest.raises(ValueError):
             presets.load_preset({}, bad, 1)
@@ -70,8 +72,8 @@ def test_save_and_load_preset():
 
 def test_load_ignores_foreign_keys_of_a_hand_edited_preset():
     target = {}
-    presets.load_preset(target, {"1": {"state": {"in": {GP: 2}, "names": {"x": 1}, "junk": 1}}}, 1)
-    assert target == {"in": {GP: 2}}
+    presets.load_preset(target, {"1": {"state": {"in": {GP: 2}, "names": {"x": {"name": "X"}}, "junk": 1}}}, 1)
+    assert target == {"in": {GP: 2}, "names": {"x": {"name": "X"}}}
 
 
 def test_summary():
@@ -79,3 +81,24 @@ def test_summary():
              "9": {"name": "no", "saved": "t"}, "x": {}, "2": "junk"}
     assert presets.summary(store) == [{"slot": 1, "name": "A", "saved": "t1"}, {"slot": 3, "name": "C", "saved": "t3"}]
     assert presets.summary({}) == []
+
+
+def test_legacy_scene_keeps_names_but_new_empty_scene_can_restore_no_custom_names():
+    state = {'names': {'a': {'name': 'Keep me'}}, 'host_profile': 'studio', 'engine_mode': 'hub'}
+    presets.load_preset(state, {'1': {'state': {'in': {'a': 1}}}}, 1)
+    assert state['names'] == {'a': {'name': 'Keep me'}}
+    store = {}
+    presets.save_preset(store, {}, 1, '', '')
+    presets.load_preset(state, store, 1)
+    assert state['names'] == {} and state['engine_mode'] == 'hub' and state['host_profile'] == 'studio'
+
+
+def test_legacy_scene_keeps_output_gains_and_modern_scene_restores_them():
+    state = {'output_levels': {'local-dac': 40}}
+    presets.load_preset(state, {'1': {'state': {}}}, 1)
+    assert state['output_levels'] == {'local-dac': 40}
+    store = {}
+    presets.save_preset(store, state, 1, '', '')
+    state['output_levels']['local-dac'] = 100
+    presets.load_preset(state, store, 1)
+    assert state['output_levels'] == {'local-dac': 40}

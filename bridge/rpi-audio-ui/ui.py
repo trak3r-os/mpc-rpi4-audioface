@@ -264,7 +264,8 @@ class Status(Menu):
 
     def items(self, ui, status, now):
         return [('Machine & buffers', MachineInfo), ('All inputs', lambda: IOStatus('in')),
-                ('All outputs', lambda: IOStatus('out'))]
+                ('All outputs', lambda: IOStatus('out')), ('Profile readiness', ProfileReadiness),
+                ('Session counters', SessionInfo), ('Recent events', RecentEvents)]
 
     def select(self, ui, payload, status, now):
         ui.stack.append(payload())
@@ -339,7 +340,8 @@ class Overview:
                 Row(fit(f"{rate_text} / {device_text}")),
                 Row(fit(f"Routes {audio}   MIDI {midi}")),
                 meter_row("IN", ui.levels.get("in")), meter_row("OUT", ui.levels.get("out")),
-                Row(fit("Push or turn: menu"))]
+                Row(fit('Profile: ' + status['profile_readiness']['state'].title()
+                        if status.get('profile_readiness') else 'Push or turn: menu'))]
 
 
 def seconds(value, zero):
@@ -588,10 +590,15 @@ class OutputActions(Menu):
 
     def items(self, ui, status, now):
         enabled = ui.shown(("output", self.identity), self.output(status).get("enabled", False), now)
-        return [(f"Enabled: {'on' if enabled else 'off'}", ("enable", enabled)), ("Details", ("details", None))]
+        level = ui.shown(('output_level', self.identity), self.output(status).get('level', 100), now)
+        return [(f"Enabled: {'on' if enabled else 'off'}", ('enable', enabled)),
+                (f'Level: {level}%', ('level', level)), ('Details', ('details', None))]
 
     def select(self, ui, payload, status, now):
         action, enabled = payload
+        if action == 'level':
+            ui.stack.append(OutputLevel(self.identity, enabled))
+            return []
         if action == "details":
             ui.stack.append(OutputInfo(self.identity))
             return []
@@ -599,24 +606,142 @@ class OutputActions(Menu):
         return [f"output {self.identity} {'off' if enabled else 'on'}"]
 
 
+class OutputLevel:
+    title = 'Output level'
+
+    def __init__(self, identity, value):
+        self.identity, self.value = identity, value
+
+    def handle(self, event, ui, status, now):
+        if event in ('cw', 'ccw'):
+            self.value = min(100, max(0, self.value + (LEVEL_STEP if event == 'cw' else -LEVEL_STEP)))
+        elif event == 'back':
+            ui.stack.pop()
+        elif event in ('confirm', 'push'):
+            ui.stack.pop()
+            ui.overlay[('output_level', self.identity)] = (self.value, now + OPTIMISM_S)
+            ui.message = 'Output level saved'
+            return [f'output {self.identity} level {self.value}']
+        return []
+
+    def rows(self, ui, status, now):
+        name = next((o['name'] for o in status.get('outputs', []) if o['identity'] == self.identity), 'Output')
+        return [Row(fit(name + ' level'), True), Row(fit('')),
+                Row(fit(f'Level: {self.value}%'), meter=('OUT', round(self.value * 18 / 100), f'{self.value}%', False)),
+                Row(fit(' Turn: change level')), Row(fit(' Press: apply')), Row(fit(' BACK: cancel'))]
+
+
+def next_host_name(status):
+    taken, n = set(status.get('host_profiles', [])), 1
+    while f'host-{n}' in taken:
+        n += 1
+    return f'host-{n}'
+
+
+def host_kind(status, name):
+    return status.get('host_profile_details', {}).get(name, {})
+
+
 class HostProfiles(Menu):
-    title = "Host"
-    icon = "settings"
+    title = 'Host profiles'
+    icon = 'settings'
 
     def items(self, ui, status, now):
-        current = status.get("host_profile") or "default"
-        names = status.get("host_profiles", [])
-        rows = [(("* " if name == current else "") + name, name) for name in ["default", *names]]
-        return rows + [("Save current...", SAVE_HOST)]
+        current = status.get('host_profile_selection', status.get('host_profile')) or 'default'
+        rows = []
+        for name in ['default', *status.get('host_profiles', [])]:
+            kind = host_kind(status, name)
+            mark = 'S' if kind.get('kind') == 'snapshot' else str(kind['preset']) if 'preset' in kind else 'R'
+            state = kind.get('readiness', {}).get('state')
+            availability = '!' if state == 'error' else '~' if state == 'partial' else ''
+            rows.append((f"{'*' if name == current else ' '}{availability}[{mark}] {name}", name))
+        return rows + [('Save current as...', SAVE_HOST)]
 
     def select(self, ui, name, status, now):
-        if name is SAVE_HOST:
-            taken = set(status.get("host_profiles", []))
-            new = next(f"host-{n}" for n in range(1, 100) if f"host-{n}" not in taken)
-            ui.message = f"Saved {new}"
-            return [f"host save {new}"]
-        if name != (status.get("host_profile") or "default"):
-            ui.stack.append(Confirm("Change host?", "Channels may move", [f"host {name}"], "Switching host..."))
+        ui.stack.append(HostSaveAs() if name is SAVE_HOST else HostActions(name))
+        return []
+
+
+class HostSaveAs(Menu):
+    title = 'Save current as...'
+    icon = 'preset'
+
+    def items(self, ui, status, now):
+        return [('Reservations only', False), ('Full setup + names', True)]
+
+    def select(self, ui, full, status, now):
+        name = next_host_name(status)
+        ui.stack.pop()
+        ui.message = f'Saved {name}'
+        return [f"host save {name} new" + (' full' if full else '')]
+
+
+class HostActions(Menu):
+    icon = 'settings'
+
+    def __init__(self, name):
+        super().__init__()
+        self.name = name
+
+    def heading(self, ui, status):
+        return self.name
+
+    def items(self, ui, status, now):
+        rows = [('Use this profile', 'use'), ('Details', 'details')]
+        if self.name != 'default':
+            rows.append(('Attach a scene...', 'scene'))
+        if host_kind(status, self.name).get('origin') == 'user':
+            rows += [('Update from current', 'overwrite'), ('Delete profile...', 'delete')]
+        return rows
+
+    def select(self, ui, action, status, now):
+        name, info = self.name, host_kind(status, self.name)
+        if action == 'details':
+            ui.stack.append(HostInfo(name))
+        elif action == 'scene':
+            ui.stack.append(HostScenes(name))
+        elif action == 'overwrite':
+            ui.stack.append(HostOverwrite(name))
+        elif action == 'delete':
+            ui.stack.append(Confirm('Delete profile?', name, [f'host delete {name}'], 'Profile deleted'))
+        else:
+            if info.get('kind') == 'preset' and not info.get('preset_available', True):
+                ui.message = 'Linked scene is empty'
+                return []
+            text = 'Replace audio setup' if info.get('kind') in ('preset', 'snapshot') else 'Channels may move'
+            ui.stack.append(Confirm('Use host profile?', text, [f'host {name}'], 'Profile loaded'))
+        return []
+
+
+class HostOverwrite(HostSaveAs):
+    title = 'Update profile'
+
+    def __init__(self, name):
+        super().__init__()
+        self.name = name
+
+    def select(self, ui, full, status, now):
+        text = 'Full setup + names' if full else 'Reservations only'
+        ui.stack.append(Confirm('Overwrite profile?', text,
+                                [f'host save {self.name}' + (' full' if full else '')], 'Profile saved'))
+        return []
+
+
+class HostScenes(Menu):
+    title = 'Attach a scene'
+    icon = 'preset'
+
+    def __init__(self, name):
+        super().__init__()
+        self.name = name
+
+    def items(self, ui, status, now):
+        return [('Reservations only', None), *[(f"Scene {p['slot']}: {p.get('name', '')}", p['slot'])
+                                               for p in status.get('presets', [])]]
+
+    def select(self, ui, slot, status, now):
+        ui.stack.append(Confirm('Replace saved setup?', f'Scene {slot}' if slot else 'Reservations only',
+                                [f"host preset {self.name} {slot or 'none'}"], 'Profile link saved'))
         return []
 
 
@@ -810,7 +935,7 @@ class OutputInfo(Info):
         output = self.output(status)
         detail = output.get("detail", "")
         rows = [f"State: {output.get('state', 'unknown')}", output.get("protocol", ""),
-                f"Channels: {output.get('channels', '?')}"]
+                f"Channels: {output.get('channels', '?')}", f"Level: {output.get('level', 100)}%"]
         if output.get("address"):
             rows.append(f"{output['address']}:{output['port']}")
         rows += [detail[n:n + 20] for n in range(0, len(detail), 20)]
@@ -827,6 +952,110 @@ class OutputInfo(Info):
         if metrics:
             rows += [f"XRuns: {metrics.get('xruns', 0)}", f"Dropped: {metrics.get('dropped_frames', 0)}"]
         return rows
+
+
+class HostInfo(Info):
+    icon = 'settings'
+
+    def __init__(self, name):
+        super().__init__()
+        self.name = name
+
+    def heading(self, ui, status):
+        return self.name
+
+    def details(self, ui, status):
+        info = host_kind(status, self.name)
+        kind = info.get('kind', 'reservations')
+        rows = [{'factory': 'Factory profile', 'user': 'Your saved profile',
+                 'configuration': 'Installation default'}.get(info.get('origin'), 'Host profile'),
+                {'snapshot': 'Full setup + names', 'preset': f"Linked scene {info.get('preset')}",
+                 'reservations': 'Reservations only'}[kind]]
+        readiness = info.get('readiness')
+        if readiness:
+            rows += ['State: ' + readiness['state'].title()]
+            for issue in readiness.get('issues', []):
+                text = issue['message']
+                rows += [text[n:n + 20] for n in range(0, len(text), 20)]
+        if kind == 'preset' and not info.get('preset_available', True):
+            rows.append('Linked scene is empty')
+        for side in ('in', 'out'):
+            rows.append('Reserved ' + side.upper() + ':')
+            channels = ','.join(map(str, info.get('reserve_' + side, []))) or 'none'
+            rows += [channels[n:n + 20] for n in range(0, len(channels), 20)]
+        rows += ['Use applies the setup', 'Engine mode stays', 'Rename: MIDI or CLI']
+        return rows
+
+
+class ProfileReadiness(Info):
+    title = 'Profile readiness'
+    icon = 'info'
+
+    def details(self, ui, status):
+        info = status.get('profile_readiness')
+        if not info:
+            return ['No profile status']
+        rows = [status.get('host_profile_selection') or 'default', 'State: ' + info['state'].title()]
+        for issue in info.get('issues', []):
+            text = issue['message']
+            rows += [text[n:n + 20] for n in range(0, len(text), 20)]
+        if not info.get('issues'):
+            rows.append('Requirements present')
+        rows.append('Saved profile checked')
+        rows.append('Not a sound test')
+        return rows
+
+
+class SessionInfo(Info):
+    title = 'Session counters'
+    icon = 'info'
+
+    def details(self, ui, status):
+        session = status.get('session', {})
+        if not session.get('started'):
+            return ['No session data']
+        counts = session.get('counters', {})
+        labels = [('XRuns', 'xruns'), ('Engine faults', 'engine_faults'), ('Bridge faults', 'bridge_failures'),
+                  ('USB unplug', 'usb_disconnects'), ('Devices lost', 'device_disconnects'),
+                  ('TX dropped frames', 'network_dropped_frames'), ('Rate changes', 'rate_changes'),
+                  ('Buffer changes', 'buffer_changes'), ('Adapter faults', 'adapter_failures'),
+                  ('Link send stops', 'network_stops'), ('USB budget blocks', 'bandwidth_blocks')]
+        rows = ['Observer: ' + ('active' if session.get('monitor_available') else 'waiting'),
+                'Since:', session['started']]
+        rows += [f'{label}: {counts.get(key, 0)}' for label, key in labels]
+        rows += ['Retained this boot', 'Reset after reboot']
+        return rows
+
+
+class RecentEvents(Menu):
+    title = 'Recent events'
+    icon = 'info'
+
+    def items(self, ui, status, now):
+        return [(event.get('last_time', event['time'])[-8:] + ' ' + event['detail'], event['id'])
+                for event in reversed(status.get('session', {}).get('events', []))]
+
+    def select(self, ui, payload, status, now):
+        ui.stack.append(EventInfo(payload))
+        return []
+
+
+class EventInfo(Info):
+    title = 'Event details'
+    icon = 'info'
+
+    def __init__(self, identity):
+        super().__init__()
+        self.identity = identity
+
+    def details(self, ui, status):
+        event = next((e for e in status.get('session', {}).get('events', []) if e['id'] == self.identity), {})
+        if not event:
+            return ['Event no longer kept']
+        text = event['detail']
+        return [event['severity'].title(), event['time'], f"Count: {event['count']}",
+                *[text[n:n + 20] for n in range(0, len(text), 20)],
+                *(['Last: ' + event['last_time'][-8:]] if event.get('last_time') else [])]
 
 
 class MachineInfo(Info):

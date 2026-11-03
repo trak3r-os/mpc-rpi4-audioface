@@ -12,8 +12,12 @@ Restart=always
 RestartSec=1
 User=rpi-audio
 Group=audio
+# The service and local audio-group users can edit their saved profiles without root.
 StateDirectory=rpi-audio
+StateDirectoryMode=2775
+# RAM-only incident history survives service restarts until the next boot.
 RuntimeDirectory=rpi-audio
+RuntimeDirectoryPreserve=yes
 # jackd and the zita bridges run realtime and lock their memory.
 LimitRTPRIO=95
 LimitMEMLOCK=infinity

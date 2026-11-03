@@ -164,6 +164,59 @@ def diagrams():
     save(image, "13-pins.png")
 
 
+def build_diagrams():
+    """Module checklists, with a readable single-column version for narrow screens."""
+    groups = [
+        ("1. Core computer", "1 x Raspberry Pi 4 Model B\n1 x microSD card\n1 x 5.1 V / 3 A Pi supply"),
+        ("2. USB host connection", "1 x power/data splitter\n2 x USB data cables\nHost computer or sampler"),
+        ("3. Local audio", "1 x pHAT DAC + fitted header\n1 x stereo line cable\nAmplifier or powered speakers"),
+        ("4. Front panel", "1 x SH1106 I2C OLED\n1 x encoder with PUSH; 2 x buttons\n"
+         "Or one compatible combined panel"),
+        ("5. Physical assembly", "GPIO leads / header access\nSpacers, fasteners, knob\n"
+         "Enclosure and cooling as needed"),
+        ("6. External equipment", "USB audio / MIDI gear + cables\nEthernet cable if wanted\n"
+         "Powered USB hub only if needed"),
+    ]
+    steps = [
+        ("1. Prepare the card", "Write 64-bit Raspberry Pi OS\nSet your own login and network\n"
+         "Enable SSH for remote setup"),
+        ("2. Mount the DAC", "Disconnect all power and USB\nAlign the 40-pin header\nFit spacers; leave GPIO access"),
+        ("3. Wire the controls", "Use the chapter's physical pins\n3.3 V OLED, shared ground\n"
+         "Keep DAC I2S signals free"),
+        ("4. Connect the cables", "Supply -> splitter POWER\nDATA POWER -> Pi USB-C\n"
+         "USB2 DATA -> host (after setup)"),
+        ("5. Install and reboot", "Install with --hat --network\nReboot to enable the overlays\n"
+         "Check doctor, status and OLED"),
+        ("6. Verify one path", "Choose Hub for local listening\nRoute one USB source to pHAT\n"
+         "Then check USB and network"),
+    ]
+    for title, cards, note, name in [
+        ("Build checklist: parts by function", groups,
+         "Quantities and compatibility notes are in the BOM. These are diagrams, not product photographs.",
+         "21-build-parts.png"),
+        ("Build sequence: one step at a time", steps,
+         "Use the instructions for your exact boards. Disconnect power before changing GPIO wiring.",
+         "22-build-steps.png"),
+    ]:
+        image, draw = sheet(title, 840)
+        for index, (heading, detail) in enumerate(cards):
+            x = 42 + (index % 2) * 700
+            y = 105 + (index // 2) * 225
+            box(draw, (x, y, x + 655, y + 190), heading, detail, TEAL if index % 2 == 0 else BLUE)
+        draw.text((42, 795), note, font=font(22), fill=MUTED)
+        save(image, name)
+        mobile = Image.new("RGB", (720, 1510), PAPER)
+        mobile_draw = ImageDraw.Draw(mobile)
+        mobile_draw.text((28, 24), "Parts checklist" if name.startswith("21") else "Build sequence",
+                         font=font(31, True), fill=INK)
+        for index, (heading, detail) in enumerate(cards):
+            y = 90 + index * 225
+            box(mobile_draw, (28, y, 692, y + 195), heading, detail, TEAL if index % 2 == 0 else BLUE)
+        mobile_draw.text((28, 1455), "See the guide for wiring and checks.", font=font(24), fill=MUTED)
+        (IMAGES / "mobile").mkdir(exist_ok=True)
+        mobile.save(IMAGES / "mobile" / name, optimize=True)
+
+
 def examples():
     mixer = {"identity": "usb-mixer", "card": "CODEC", "name": "Mixer",
              "in": {"channels": 2, "rate": 48000, "start": 1, "running": True, "level": 80, "muted": False}}
@@ -190,6 +243,8 @@ def examples():
     outputs = [("local-dac", "pHAT DAC", "active", "I2S"), ("usb-host", "USB host", "waiting", "USB"),
                ("network-rtp", "Network RTP", "sending", "RTP/PCM"),
                ("network-link", "Link Audio", "waiting", "Link Audio")]
+    alone["host_profiles"] = ["akai-force", "generic"]
+    alone["host_profile"] = None
     alone["outputs"] = [{"identity": identity, "name": name, "enabled": True, "state": state,
                          "protocol": protocol, "channels": 2, "address": "239.69.1.1", "port": 5004,
                          "sdp": "/run/rpi-audio/network-rtp.sdp", "http_port": 8080}
@@ -260,16 +315,45 @@ def screenshots():
     presets.cursor = 1
     pair("10-presets.png", ("Choose a slot", screen(presets, host, live_hw)),
          ("Confirm before saving", screen(ui.Confirm("Save scene?", "Replace slot 2?", [], ""), host, live_hw)))
+    linked = copy.deepcopy(alone)
+    linked['host_profile_details'] = {
+        'akai-force': {'origin': 'user', 'kind': 'preset', 'preset': 3,
+                       'preset_available': True, 'reserve_in': [25, 26], 'reserve_out': [1, 2],
+                       'readiness': {'state': 'ready', 'issues': []}}}
+    pair('17-host-profiles.png', ('Save a separate setup', screen(ui.HostSaveAs(), alone, hw)),
+         ('Profile linked to scene 3', screen(ui.HostInfo('akai-force'), linked, hw)))
     pair("14-outputs.png", ("Output switches and states", screen(ui.Outputs(), alone, hw)),
          ("RTP connection details", screen(ui.OutputInfo("network-rtp"), alone, hw)))
     health_hw = {**hw, 'machine': {'cpu_pct': 23, 'memory_pct': 48, 'temperature': 46.5, 'uptime': 7200},
                  'pcm': {'sndrpihifiberry/out': {'buffer_size': 768, 'period_size': 256}}}
     alone['engine'] = {'rate': 48000, 'period': 256, 'periods': 3}
+    alone['session'] = {'counters': {'xruns': 0}}
     pair('15-status.png', ('Machine health', screen(ui.MachineInfo(), alone, health_hw)),
          ('Inputs with real-peak layout', screen(ui.IOStatus('in'), alone, health_hw, {'p0': 0.25, 'p1': 0.5})))
     pair('16-status-saver.png',
          ('Status saver: machine', panel(ui.saver_rows('status', 0, status=alone, hardware=health_hw))),
          ('Status saver: buffers', panel(ui.saver_rows('status', 6, status=alone, hardware=health_hw))))
+    ready = copy.deepcopy(alone)
+    ready['profile_readiness'] = {'state': 'ready', 'issues': []}
+    partial = copy.deepcopy(ready)
+    partial['profile_readiness'] = {'state': 'partial', 'issues': [{'message': 'Missing: Guitar Rig'}]}
+    pair('18-profile-readiness.png', ('Saved requirements present', screen(ui.ProfileReadiness(), ready, hw)),
+         ('A required device is missing', screen(ui.ProfileReadiness(), partial, hw)))
+    ready['outputs'][0]['level'] = 80
+    controls = ui.OutputActions('local-dac')
+    controls.cursor = 1
+    pair('19-output-levels.png', ('Choose the output level', screen(controls, ready, hw)),
+         ('Change, then press to apply', screen(ui.OutputLevel('local-dac', 50), ready, hw)))
+    ready['session'] = {'started': '2026-11-03 12:00:00', 'monitor_available': True,
+                        'counters': {'xruns': 3, 'device_disconnects': 1},
+                        'events': [{'id': 1, 'time': '2026-11-03 12:03:00', 'kind': 'xruns',
+                                    'detail': 'JACK xrun notifications', 'count': 3, 'severity': 'warning'},
+                                   {'id': 2, 'time': '2026-11-03 12:05:00', 'kind': 'device_disconnects',
+                                    'detail': 'Guitar Rig: unplugged', 'count': 1, 'severity': 'warning'}]}
+    counters = ui.SessionInfo()
+    counters.cursor = 7
+    pair('20-session-history.png', ('Session-wide counters', screen(counters, ready, hw)),
+         ('Open an event for details', screen(ui.RecentEvents(), ready, hw)))
     pair("11-settings.png", ("Display preferences", screen(ui.Settings(), idle, hw)),
          ("WiFi details (example)", screen(ui.WifiInfo(), idle, hw)))
 
@@ -361,6 +445,7 @@ def build_html():
 def main():
     IMAGES.mkdir(parents=True, exist_ok=True)
     diagrams()
+    build_diagrams()
     screenshots()
     build_html()
     print(f"Built {OUT.relative_to(ROOT) / 'index.html'} and {len(list(IMAGES.glob('*.png')))} figures")

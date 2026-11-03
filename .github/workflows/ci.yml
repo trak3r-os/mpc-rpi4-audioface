@@ -1,11 +1,11 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 # Checks that need no hardware. The armhf/Docker builds, and anything that touches a Pi or a
-# host, stay out of CI.
+# host, stay out of CI. Run only when a GitHub release is published.
 name: ci
 
 on:
-  push:
-  pull_request:
+  release:
+    types: [published]
 
 permissions:
   contents: read

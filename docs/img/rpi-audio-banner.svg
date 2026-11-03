@@ -1,0 +1,121 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="780" viewBox="0 0 1600 780" role="img" aria-labelledby="title description">
+  <!-- SPDX-License-Identifier: GPL-3.0-or-later -->
+  <title id="title">rpi-audio — Your gear. One audio hub.</title>
+  <desc id="description">A Raspberry Pi 4 with an OLED and rotary encoder routes USB audio and MIDI equipment to a pHAT DAC, a 26 by 26 USB host interface, and stereo RTP or Link Audio network sends.</desc>
+  <defs>
+    <linearGradient id="background" x1="0" y1="0" x2="1" y2="1">
+      <stop stop-color="#14273b"/><stop offset="1" stop-color="#080f1d"/>
+    </linearGradient>
+    <linearGradient id="panel" x1="0" y1="0" x2="0" y2="1">
+      <stop stop-color="#29435a"/><stop offset="1" stop-color="#152638"/>
+    </linearGradient>
+    <linearGradient id="knob" x1="0" y1="0" x2="1" y2="1">
+      <stop stop-color="#e5edf3"/><stop offset=".55" stop-color="#a6bbc9"/><stop offset="1" stop-color="#526c80"/>
+    </linearGradient>
+    <radialGradient id="glow">
+      <stop stop-color="#45d8be" stop-opacity=".12"/><stop offset="1" stop-color="#45d8be" stop-opacity="0"/>
+    </radialGradient>
+    <pattern id="dots" width="28" height="28" patternUnits="userSpaceOnUse">
+      <circle cx="2" cy="2" r="1" fill="#82a8be" opacity=".11"/>
+    </pattern>
+    <marker id="arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto-start-reverse">
+      <path d="M0 0 8 4 0 8" fill="none" stroke="#67e0c4" stroke-width="1.6" stroke-linejoin="round"/>
+    </marker>
+  </defs>
+  <style>
+    text { font-family:DejaVu Sans,Arial,sans-serif; }
+    .white { fill:#f1f6fb; } .muted { fill:#a9bed1; } .mint { fill:#67e0c4; }
+    .heading { font-size:24px; font-weight:700; } .detail { font-size:19px; }
+    .wire { fill:none; stroke:#67e0c4; stroke-width:3; stroke-linecap:round; stroke-linejoin:round; }
+    .icon { fill:none; stroke:#b1c7da; stroke-width:2.5; stroke-linecap:round; stroke-linejoin:round; }
+    .card { fill:#142539; stroke:#34506b; stroke-width:1.5; }
+  </style>
+  <rect width="1600" height="780" rx="26" fill="url(#background)"/>
+  <rect width="1600" height="780" rx="26" fill="url(#dots)"/>
+  <ellipse cx="796" cy="444" rx="488" ry="340" fill="url(#glow)"/>
+  <path d="M65 65v-15m12 15v-25m12 25v-10m12 10v-21" stroke="#67e0c4" stroke-width="5" stroke-linecap="round"/>
+  <text x="120" y="68" class="white" font-size="35" font-weight="700" letter-spacing="-1">rpi-audio</text>
+  <rect x="1217" y="37" width="318" height="43" rx="21" fill="#20354a" stroke="#45647c"/>
+  <text x="1376" y="65" class="muted" font-size="17" font-weight="700" text-anchor="middle" letter-spacing="1">DIY · RASPBERRY PI 4</text>
+  <text x="64" y="170" class="white" font-size="65" font-weight="700" letter-spacing="-2">Your gear. <tspan class="mint">One audio hub.</tspan></text>
+  <text x="66" y="220" class="muted" font-size="26">Bring USB audio and MIDI together. Choose where the sound goes.</text>
+  <text x="66" y="264" class="white" font-size="20" font-weight="700">26 × 26 USB</text>
+  <circle cx="247" cy="257" r="3" class="mint"/>
+  <text x="268" y="264" class="white" font-size="20">4 MIDI cables</text>
+  <circle cx="444" cy="257" r="3" class="mint"/>
+  <text x="465" y="264" class="white" font-size="20">OLED + encoder</text>
+  <circle cx="672" cy="257" r="3" class="mint"/>
+  <text x="693" y="264" class="white" font-size="20">Scenes + host profiles</text>
+
+  <!-- Inputs: ordinary USB audio and MIDI equipment. -->
+  <rect x="64" y="338" width="353" height="267" rx="20" class="card"/>
+  <text x="92" y="381" class="mint" font-size="17" font-weight="700" letter-spacing="1.6">YOUR USB GEAR</text>
+  <g class="icon">
+    <rect x="91" y="411" width="34" height="23" rx="4"/>
+    <path d="M97 417h2m8 0h11m-21 10h9m7 0h5"/>
+    <path d="m92 478 5-10 7 19 8-29 6 20h8"/>
+    <rect x="91" y="520" width="35" height="24" rx="3"/>
+    <path d="M99 521v22m9-22v22m9-22v22m-18-12h7m2 0h7"/>
+  </g>
+  <text x="142" y="430" class="white" font-size="18">Interfaces + mixers</text>
+  <text x="142" y="484" class="white" font-size="18">Instruments + processors</text>
+  <text x="142" y="538" class="white" font-size="18">Keyboards + MIDI gear</text>
+  <text x="92" y="578" class="muted" font-size="17">Plug into the Pi's USB-A ports</text>
+  <path d="M435 472H527" class="wire" marker-start="url(#arrow)" marker-end="url(#arrow)"/>
+  <text x="481" y="445" class="muted" font-size="15" text-anchor="middle">USB</text>
+
+  <!-- Stylised reference hardware, not a board assembly drawing. -->
+  <rect x="552" y="324" width="468" height="310" rx="28" fill="#050b14" opacity=".5"/>
+  <rect x="542" y="314" width="468" height="310" rx="28" fill="url(#panel)" stroke="#5c7c94" stroke-width="2"/>
+  <circle cx="564" cy="337" r="4" fill="#8da7bb"/><circle cx="987" cy="337" r="4" fill="#8da7bb"/>
+  <circle cx="564" cy="599" r="4" fill="#8da7bb"/><circle cx="987" cy="599" r="4" fill="#8da7bb"/>
+  <text x="579" y="357" class="white" font-size="22" font-weight="700">rpi-audio</text>
+  <text x="973" y="357" class="mint" font-size="14" text-anchor="end" letter-spacing="1.8">AUDIO ROUTER</text>
+  <rect x="578" y="384" width="257" height="152" rx="10" fill="#09141c" stroke="#4a677c"/>
+  <rect x="589" y="395" width="235" height="130" rx="3" fill="#0b252b"/>
+  <text x="604" y="421" fill="#9ff8e4" font-size="16" font-weight="700" letter-spacing="1">HUB</text>
+  <text x="808" y="421" fill="#9ff8e4" font-size="14" text-anchor="end">48.0 kHz</text>
+  <path d="M603 432h205" stroke="#32635e"/>
+  <text x="604" y="458" fill="#9ff8e4" font-size="16">USB → pHAT + network</text>
+  <g fill="#67e0c4">
+    <rect x="605" y="485" width="15" height="25" rx="2"/><rect x="626" y="474" width="15" height="36" rx="2"/>
+    <rect x="647" y="480" width="15" height="30" rx="2"/><rect x="668" y="467" width="15" height="43" rx="2"/>
+    <rect x="689" y="489" width="15" height="21" rx="2"/><rect x="710" y="477" width="15" height="33" rx="2"/>
+  </g>
+  <text x="807" y="504" fill="#9ff8e4" font-size="14" text-anchor="end">LIVE</text>
+  <circle cx="918" cy="459" r="54" fill="#0a1523" stroke="#4f6b80" stroke-width="2"/>
+  <circle cx="918" cy="457" r="44" fill="url(#knob)"/>
+  <circle cx="918" cy="457" r="34" fill="#597285" stroke="#d6e0e7" stroke-opacity=".3"/>
+  <path d="m918 427v14" stroke="#eaf3f8" stroke-width="5" stroke-linecap="round"/>
+  <circle cx="884" cy="546" r="11" fill="#67e0c4"/>
+  <circle cx="954" cy="546" r="11" fill="#b6a3f4"/>
+  <text x="884" y="574" class="muted" font-size="11" text-anchor="middle">CONFIRM</text>
+  <text x="954" y="574" class="muted" font-size="11" text-anchor="middle">BACK</text>
+  <text x="579" y="574" class="muted" font-size="17">Route · Mix · Save · Monitor</text>
+
+  <!-- Simultaneous destinations in Hub mode. Network outputs are send-only. -->
+  <path d="M1029 473h51m0-127v254m0-254h27m-27 127h27m-27 127h27" class="wire"/>
+  <path d="M1092 346h17" class="wire" marker-end="url(#arrow)"/>
+  <path d="M1092 473h17" class="wire" marker-end="url(#arrow)"/>
+  <path d="M1092 600h17" class="wire" marker-end="url(#arrow)"/>
+  <rect x="1125" y="299" width="411" height="98" rx="17" class="card"/>
+  <rect x="1125" y="426" width="411" height="98" rx="17" class="card"/>
+  <rect x="1125" y="553" width="411" height="98" rx="17" class="card"/>
+  <g class="icon">
+    <path d="M1149 329h14l14-10v40l-14-10h-14zm37 2q12 9 0 18"/>
+    <rect x="1149" y="451" width="39" height="26" rx="3"/><path d="M1168 477v10m-14 0h28"/>
+    <path d="M1168 578v16m-15 10v-10h30v10"/>
+    <rect x="1159" y="576" width="18" height="10" rx="2"/>
+    <rect x="1145" y="604" width="16" height="10" rx="2"/><rect x="1176" y="604" width="16" height="10" rx="2"/>
+  </g>
+  <text x="1210" y="339" class="white heading">Listen locally</text>
+  <text x="1210" y="371" class="muted detail">pHAT DAC · stereo line out</text>
+  <text x="1210" y="466" class="white heading">Record over USB</text>
+  <text x="1210" y="498" class="muted detail">26 in × 26 out + USB MIDI</text>
+  <text x="1210" y="593" class="white heading">Send audio over LAN</text>
+  <text x="1210" y="625" class="muted detail">RTP/PCM or Link Audio · stereo</text>
+
+  <path d="M65 683h1470" stroke="#34506b"/>
+  <text x="65" y="728" class="white" font-size="22">Local listening. USB recording. Network sends. <tspan class="mint">Your routing, saved.</tspan></text>
+  <text x="1535" y="728" class="muted" font-size="16" font-weight="700" text-anchor="end">OPEN SOURCE · GPL-3.0-or-later</text>
+</svg>

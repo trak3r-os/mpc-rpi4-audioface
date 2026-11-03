@@ -68,6 +68,7 @@ F0 7D 52 42 <ASCII text> F7      reply
 | `status` | JSON | The same content as `/run/rpi-audio/status.json`, with `version` |
 | `assign IDENTITY [in=N] [out=N] [midi=K]` | `ok` | Pins the first IN channel, the first OUT channel or the MIDI cable. `midi=` without `/P` means `/0` |
 | `mute IDENTITY in\|out on\|off` | `ok` | Cuts or restores the audio routes in that direction |
+| `output ID level PERCENT` | `ok` | Independent main destination level, 0–100; ID is local-dac, usb-host, network-rtp or network-link. Same CLI/MIDI command; saved in scenes and full profiles |
 | `volume IDENTITY in\|out PERCENT` | `ok` | The device's own level, 0 to 100: `in` is its capture (what reaches the host) and `out` its playback |
 | `name IDENTITY [TEXT]` | `ok` | The device name. Without text, it clears it |
 | `name IDENTITY in\|out K [TEXT]` | `ok` | The name of channel K (from 1) of the device in that direction. Without text, it clears it |
@@ -78,24 +79,34 @@ F0 7D 52 42 <ASCII text> F7      reply
 | `preset save N [TEXT]` | `ok` | Saves the current routing in preset N (1 to 8) |
 | `preset load N` | `ok` or `error: preset N is empty` | Restores the routing saved in preset N |
 | `preset clear N` | `ok` | Deletes preset N |
-| `host NAME` | `ok` or `error: unknown host profile` | Selects a host profile: the gadget channels held back for that host (`reserve_in`, `reserve_out`). Takes effect within a second or two, with no engine restart; devices on a reserved channel move to a free block |
+| `host NAME` | `ok` or `error: unknown host profile` | Selects a host profile and restores its full setup or linked scene when present, plus its reserved channels (`reserve_in`, `reserve_out`). Takes effect within a second or two, with no engine restart; devices on a reserved channel move to a free block |
 | `host default` | `ok` | Back to the configuration's `[host] profile` or `[slots]` |
-| `host save NAME [in=K,K] [out=K,K]` | `ok` | Saves a profile of your own. Without `in=` or `out=` it keeps what is reserved now; `in=` alone reserves nothing |
+| `host save NAME [reserve_in=K,K] [reserve_out=K,K]` | `ok` | Saves current reservations only; empty `reserve_in=` reserves nothing. `in=` / `out=` remain aliases |
+| `host save NAME full [reserve_in=K,K] [reserve_out=K,K]` | `ok` | Stores reservations and an independent full copy of channel maps, names, levels, mute, routes and output flags |
+| `host save NAME preset=N` | `ok` | Stores current reservations with a reference to scene N (1–8), which must exist |
+| `host preset NAME N\|none` | `ok` | Attaches a scene to an existing profile, or clears its setup and keeps only reservations; applies at next selection |
+| `host rename OLD NEW` | `ok` | Renames a saved user profile and tracks an active selection; refuses an existing target name |
 | `host delete NAME` | `ok` or `error: no saved host profile` | Deletes a profile you saved (the ones shipped in `hosts.d` stay) |
 
-Commands change the stored state (`slots.json`, and `presets.json` for presets), exactly like the command line (`rpi-audiod assign|mute|volume|route|unroute|name|preset ...`). The service applies the change within one or two seconds. With an unknown identity, the command is still stored and applied when the device shows up.
+Commands change the stored state (`slots.json`, `presets.json` for scenes, `hosts.json` for user profiles), exactly like the command line (`rpi-audiod assign|mute|volume|route|unroute|name|preset ...`). The service applies the change within one or two seconds. With an unknown identity, the command is still stored and applied when the device shows up.
 
 ### Host profiles
 
-- A host profile is a name for the gadget channels held back for one kind of host (for example `akai-force` reserves IN 25-26, the Force's own inputs). They ship in `/etc/rpi-audio/hosts.d/NAME.toml` (`[slots] reserve_in`, `reserve_out`); the ones you save are in `hosts.json`, next to `slots.json`, and a saved profile replaces a shipped one with the same name.
-- The choice is stored in `slots.json` (`host_profile`) and overrides `[host] profile` and `[slots]` of the configuration, key by key. `status` lists `host_profile` and `host_profiles`.
-- On the display: Outputs > Host. Choose a profile (asks to confirm, as channels may move), or "Save current..." to store what is reserved now as `host-1`, `host-2`...
+Factory profiles ship in `/etc/rpi-audio/hosts.d/NAME.toml`; their `[slots]` table declares `reserve_in` / `reserve_out`. An optional **top-level** `preset = 3` links a factory profile to scene 3. Saved profiles live in `/var/lib/rpi-audio/hosts.json`, beside slots and presets. Deploy never replaces this store. Local audio-group users and the service can write it without root.
+
+A profile can hold reservations only, an independent complete setup (`state`), or a live reference to a scene (`preset`). A full copy uses no scene slot. Its state contains the same setup keys as a new scene, including names; it excludes engine mode, WiFi and host-profile selection. A linked profile loads the current contents of that scene whenever `host NAME` is selected. Saving a profile or changing its link does not select it. Selecting a missing/empty scene fails before any current state is written.
+
+`host preset akai-force 3` creates a user override with the factory reservations and a scene reference. The original TOML stays unchanged. Deleting your override reveals the factory profile. Renaming works on saved profiles, including overrides; it does not edit factory files. Scene references remain slot numbers when a host is renamed.
+
+`host_profile` stores the selection. `host default` follows `[host] profile`, or `[slots]` when none is configured. In Hub, changing reservations updates preferred USB allocations without stopping local bridges. Explicit audio routes change only when a full setup or scene is loaded. Loading a setup can immediately change routes, names, levels, mute and output flags; it never changes engine mode. The state and profile commands use the shared lock.
+
+On the OLED: Outputs → Host → **Save current as...** → **Reservations only** / **Full setup + names** creates `host-1`, `host-2`, etc. Select a profile → **Use this profile**, **Details**, or **Attach a scene...**. User profiles also offer confirmed updates and deletion. Rename using the same CLI/MIDI text command. `status` publishes small `host_profile_details` metadata with type, origin, reservations and linked-scene availability; full snapshots stay in the store.
 
 ### Device routes
 
 - `route` joins two USB devices, with no host involved: what SRC captures is played into DST. It makes JACK connections between their bridges, so it needs the audio engine to be running, and it works next to the host's own channels without touching them.
 - A device is never routed to itself: its playback often leaks into its capture, and that would be a loop.
-- Several routes may feed one destination (JACK sums them) and one source may feed several. Levels are the devices' own (`volume`), not per route.
+- Several routes may feed one destination (JACK sums them) and one source may feed several. Device hardware levels use `volume`; independent main destination levels use `output ID level N`, applied after mixing.
 - A route whose device is absent, muted or still starting waits and is made when it can be. `mute IDENTITY in` cuts the routes it feeds and `mute IDENTITY out` those that reach it.
 - In standalone mode (`docs/STANDALONE.md`) the local DAC is a destination named `local-dac` (settings: `[standalone] identity`): `route usb-mixer local-dac`. It has no capture, no level of its own, and `mute local-dac out on` cuts what reaches it.
 
@@ -113,13 +124,13 @@ Commands change the stored state (`slots.json`, and `presets.json` for presets),
 - **Maximum length:** 24 characters for a device name and 16 for a channel name. A longer one gives `error: ...` and changes nothing.
 - **Channel form:** it is recognised when the word after `IDENTITY` is `in` or `out` and the next one is an integer. An integer below 1 is an error. **A device name cannot start with `in N` or `out N`** (with `N` an integer): it would be taken for the channel form. `in` or `out` alone, or followed by something else (`in the mix`), are fine.
 - The device name takes priority over the profile name (`name` in `devices.d`), and a channel name over `names_in` / `names_out`, channel by channel.
-- Names are not part of presets: loading a preset leaves them as they are.
+- New scenes and full host setups save device and channel names. Legacy scenes without a names field preserve the current names.
 
 ### Presets
 
-- A preset stores the routing state: the `in`, `out`, `midi`, `mute`, `volume`, `in_channels`, `out_channels` and `routes` keys of `slots.json`. It does not store names.
+- A new scene stores `in`, `out`, `midi`, `mute`, `volume`, `in_channels`, `out_channels`, `routes`, `midi_routes`, `outputs`, `output_levels`, `hub_routes_initialized` and `names` from slots.json. Engine mode and host-profile selection remain unchanged.
 - `preset save N TEXT` names it (up to 24 characters, same bytes). Without text it keeps the preset's name, or uses `Preset N` if the slot was empty. It also stores the time.
-- `preset load N` replaces those keys of `slots.json` with the preset's (keys the preset lacks are removed) and leaves `names` alone. The service re-applies it like any other change: it reassigns channels and MIDI cables, and restores levels and mutes.
+- `preset load N` replaces those keys of `slots.json` with the preset's (keys the preset lacks are removed) and restores names for new scenes. Legacy scenes that lack names or output levels preserve those current settings. The service re-applies it like any other change: it reassigns channels and MIDI cables, and restores levels and mutes.
 - `save`, `load` and `clear` take the same lock as `slots.json` (`slots.lock`), so they are atomic against other writers.
 
 ### Program Change
@@ -184,3 +195,7 @@ Besides what was already there, `status` (the SysEx reply and `status.json`) car
 
 - The key is the slot number, from "1" to "8". `state` holds the routing keys of `slots.json` that existed when it was saved (see Presets).
 - It is written like `slots.json`: a temporary file that replaces the previous one, readable by all, under the same lock (`slots.lock`).
+
+### Readiness and monitoring status
+
+The full status publishes `profile_readiness` and per-profile readiness in `host_profile_details`. It distinguishes ready requirements, partial availability and invalid/missing setups. `session` contains the boot-scoped monitoring session, counters and up to 64 timestamped/coalesced events; `monitor_available` requires fresh independent observer telemetry. These diagnostics are omitted from a large MIDI status reply to keep it bounded; the complete file is `/run/rpi-audio/status.json`. No OLED view is needed to collect session events.

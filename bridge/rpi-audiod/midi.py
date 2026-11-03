@@ -18,9 +18,10 @@ SYSEX_HEAD = bytes((0xF0, 0x7D, 0x52, 0x41))  # non-commercial id 7D, then "RA":
 REPLY_HEAD = bytes((0xF0, 0x7D, 0x52, 0x42))  # "RB": a reply, never taken for a command when echoed
 SYSEX_END = 0xF7
 USAGE = {
-    "output": "output local-dac|usb-host|network-rtp|network-link on|off",
+    "output": "output local-dac|usb-host|network-rtp|network-link on|off | output ID level PERCENT",
     "engine": "engine host|standalone|hub",
-    "host": "host NAME|default | host save NAME [in=K,K] [out=K,K] | host delete NAME",
+    "host": "host NAME|default | host save NAME [reserve_in=K,K] [reserve_out=K,K] [full|preset=N] [new] "
+            "| host preset NAME N|none | host rename OLD NEW | host delete NAME",
     "ping": "ping",
     "status": "status",
     "assign": "assign IDENTITY [in=N] [out=N] [midi=K]",
@@ -245,21 +246,41 @@ def parse_preset(text, usage):
 HOST_NAME = r"[A-Za-z0-9._-]{1,32}"
 
 
+HOST_ACTIONS = ('save', 'delete', 'rename', 'preset')
+
+
 def parse_host(rest, usage):
-    """host NAME, host default, host save NAME [in=K,K] [out=K,K] or host delete NAME. A save without
-    in= or out= keeps what is reserved now; `in=` alone reserves nothing."""
-    if len(rest) == 1 and re.fullmatch(HOST_NAME, rest[0]) and rest[0] not in ("save", "delete"):
-        return Command("host", None, (("action", "select"), ("name", rest[0])))
-    if len(rest) == 2 and rest[0] == "delete" and re.fullmatch(HOST_NAME, rest[1]):
-        return Command("host", None, (("action", "delete"), ("name", rest[1])))
-    if len(rest) >= 2 and rest[0] == "save" and re.fullmatch(HOST_NAME, rest[1]) and rest[1] not in ("save", "delete", "default"):
+    def valid(name):
+        return re.fullmatch(HOST_NAME, name) and name not in (*HOST_ACTIONS, 'default')
+
+    if len(rest) == 1 and (rest[0] == 'default' or valid(rest[0])):
+        return Command('host', None, (('action', 'select'), ('name', rest[0])))
+    if len(rest) == 2 and rest[0] == 'delete' and valid(rest[1]):
+        return Command('host', None, (('action', 'delete'), ('name', rest[1])))
+    if len(rest) == 3 and rest[0] == 'rename' and valid(rest[1]) and valid(rest[2]):
+        return Command('host', None, (('action', 'rename'), ('name', rest[1]), ('new_name', rest[2])))
+    if len(rest) == 3 and rest[0] == 'preset' and valid(rest[1]):
+        slot = None if rest[2] == 'none' else number('preset', rest[2], 1, presets.SLOTS)
+        return Command('host', None, (('action', 'preset'), ('name', rest[1]), ('preset', slot)))
+    if len(rest) >= 2 and rest[0] == 'save' and valid(rest[1]):
         given = {}
         for word in rest[2:]:
-            key, eq, value = word.partition("=")
-            if not eq or key not in ("in", "out") or key in given:
+            if word in ('full', 'new') and word not in given:
+                if word == 'full' and 'preset' in given:
+                    raise usage
+                given[word] = True
+                continue
+            key, eq, value = word.partition('=')
+            key = {'in': 'reserve_in', 'out': 'reserve_out'}.get(key, key)
+            if not eq or key not in ('reserve_in', 'reserve_out', 'preset') or key in given:
                 raise usage
-            given[f"reserve_{key}"] = sorted({number(key, k, 1) for k in value.split(",")} if value else set())
-        return Command("host", None, (("action", "save"), ("name", rest[1]), *given.items()))
+            if key == 'preset':
+                if 'full' in given:
+                    raise usage
+                given[key] = number('preset', value, 1, presets.SLOTS)
+            else:
+                given[key] = sorted({number(key, k, 1) for k in value.split(',')} if value else set())
+        return Command('host', None, (('action', 'save'), ('name', rest[1]), *given.items()))
     raise usage
 
 
@@ -287,10 +308,12 @@ def parse_command(text):
         return Command(verb, None, (("mode", rest[0]),))
     if verb == "host":
         return parse_host(rest, usage)
-    if verb == "output":
-        if len(rest) != 2 or rest[0] not in outputs.IDS or rest[1] not in ("on", "off"):
+    if verb == 'output':
+        if len(rest) == 3 and rest[0] in outputs.IDS and rest[1] == 'level':
+            return Command(verb, rest[0], (('level', number('level', rest[2], 0, 100)),))
+        if len(rest) != 2 or rest[0] not in outputs.IDS or rest[1] not in ('on', 'off'):
             raise usage
-        return Command(verb, rest[0], (("on", rest[1] == "on"),))
+        return Command(verb, rest[0], (('on', rest[1] == 'on'),))
     if verb in ("midiroute", "midiunroute"):
         if len(rest) != 2:
             raise usage
@@ -336,8 +359,12 @@ def status_reply(data, limit=STATUS_LIMIT):
     if len(text.encode()) <= limit:
         return text
     data = copy.deepcopy(data)
+    data.pop("session", None)
+    data.pop("profile_readiness", None)
     data.pop("engine", None)
     data.pop("bridge_buffer", None)
+    data.pop("host_profiles", None)
+    data.pop("host_profile_details", None)
     data.pop("outputs", None)  # adapter diagnostics stay in the full local status file
     data.pop("time", None)
     data["devices"] = [dev for dev in data.get("devices", []) if not dev.get("virtual")]
@@ -407,8 +434,11 @@ def apply_command(state, cmd):
             state.pop("host_profile", None)
         else:
             state["host_profile"] = cmd.arg("name")
-    elif cmd.verb == "output":
-        state.setdefault("outputs", {})[cmd.identity] = cmd.arg("on")
+    elif cmd.verb == 'output':
+        if cmd.arg('level') is not None:
+            state.setdefault('output_levels', {})[cmd.identity] = cmd.arg('level')
+        else:
+            state.setdefault('outputs', {})[cmd.identity] = cmd.arg('on')
     elif cmd.verb == "midiroute":
         midiroute.add(state, midiroute.Link(cmd.identity, cmd.arg("dst")))
     elif cmd.verb == "midiunroute":
@@ -436,17 +466,30 @@ def apply_command(state, cmd):
     return state, "ok"
 
 
-def apply_host(store, cmd, current):
-    """The profile store (hosts.json) after host save or delete, which is not modified. `current` is what
-    is reserved now, {IN: [...], OUT: [...]}, for a save that gives no channels.
-    ValueError when deleting a profile that is not in the store (the ones of hosts.d are not deletable)."""
-    store, name = copy.deepcopy(store or {}), cmd.arg("name")
-    if cmd.arg("action") == "delete":
+def apply_host(store, cmd, current, state=None):
+    """Save reservations or a full setup, delete or rename a user-owned profile; never mutates its inputs."""
+    store, name = copy.deepcopy(store or {}), cmd.arg('name')
+    action = cmd.arg('action')
+    if action in ('delete', 'rename'):
         if name not in store:
-            raise ValueError(f"no saved host profile {name}")
-        del store[name]
+            raise ValueError(f'no saved host profile {name}')
+        if action == 'rename':
+            new = cmd.arg('new_name')
+            if new != name and new in store:
+                raise ValueError(f'host profile {new} already exists')
+            if new != name:
+                store[new] = store.pop(name)
+        else:
+            del store[name]
+    elif action == 'save':
+        profile = {f'reserve_{d}': cmd.arg(f'reserve_{d}', current.get(d, [])) for d in (IN, OUT)}
+        if cmd.arg('full', False):
+            profile['state'] = presets.capture_state(state or {})
+        elif cmd.arg('preset') is not None:
+            profile['preset'] = cmd.arg('preset')
+        store[name] = profile
     else:
-        store[name] = {f"reserve_{d}": cmd.arg(f"reserve_{d}", current.get(d, [])) for d in (IN, OUT)}
+        raise ValueError('not a host save, delete or rename command')
     return store
 
 

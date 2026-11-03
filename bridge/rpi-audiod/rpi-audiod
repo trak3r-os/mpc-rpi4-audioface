@@ -61,6 +61,8 @@ import audiod
 import midi
 import midiroute
 import presets
+import incidents
+import readiness
 import outputs
 import routing
 import sdpserver
@@ -152,10 +154,21 @@ def load_hosts():
     except (OSError, ValueError):
         saved = {}
     for name, entry in (saved.items() if isinstance(saved, dict) else ()):
-        profile, warnings = audiod.parse_host({"slots": entry if isinstance(entry, dict) else {}}, f"hosts.json {name}")
+        if not isinstance(entry, dict):
+            log(f'rpi-audiod: host profile hosts.json {name}: expected an object; ignored')
+            continue
+        data = {'slots': entry, **({'preset': entry['preset']} if 'preset' in entry else {})}
+        profile, warnings = audiod.parse_host(data, f'hosts.json {name}')
+        if 'state' in entry:
+            if not isinstance(entry['state'], dict) or 'preset' in entry:
+                profile = None
+                warnings.append(f'hosts.json {name}: invalid or conflicting setup; profile ignored')
+            elif profile is not None:
+                profile['state'] = copy.deepcopy(entry['state'])
         for w in warnings:
-            log(f"rpi-audiod: host profile {w}")
-        hosts[name] = profile   # a saved profile replaces the one of hosts.d with its name
+            log(f'rpi-audiod: host profile {w}')
+        if profile is not None:
+            hosts[name] = profile
     return hosts
 
 
@@ -214,7 +227,7 @@ def write_json(path, data):
     try:
         with os.fdopen(fd, "w") as f:
             f.write(json.dumps(data, indent=1, sort_keys=True) + "\n")
-        os.chmod(tmp, 0o644)
+        os.chmod(tmp, 0o664 if path.parent == STATE.parent else 0o644)
         os.replace(tmp, path)
     except BaseException:
         with contextlib.suppress(OSError):
@@ -280,21 +293,69 @@ def update_presets(change):
             write_json(STATE, new)
 
 
+def host_summary(cfg, hosts):
+    """Small read-only metadata for the OLED; full snapshots stay in hosts.json."""
+    saved, scenes = load_saved_hosts(), load_presets()
+
+    def describe(profile, origin):
+        slot = profile.get('preset')
+        scene = scenes.get(str(slot), {})
+        available = isinstance(scene, dict) and isinstance(scene.get('state'), dict)
+        return {'origin': origin,
+                'kind': 'snapshot' if 'state' in profile else 'preset' if slot is not None else 'reservations',
+                **{f'reserve_{d}': profile.get(f'reserve_{d}', cfg.get('slots', {}).get(f'reserve_{d}', []))
+                   for d in (IN, OUT)},
+                **({'preset': slot, 'preset_available': available} if slot is not None else {})}
+    result = {name: describe(profile, 'user' if name in saved else 'factory') for name, profile in hosts.items()}
+    result['default'] = describe(hosts.get(cfg.get('host', {}).get('profile'), {}), 'configuration')
+    return result
+
+
 def save_host_command(cmd):
-    """host NAME|default selects a profile (slots.json); host save and delete change hosts.json."""
-    name, action = cmd.arg("name"), cmd.arg("action")
-    if action == "select":
-        if name != "default" and name not in load_hosts():
-            raise ValueError(f"unknown host profile {name}; known: {', '.join(load_hosts()) or 'none'}")
-        update_slots(lambda state: midi.apply_command(state, cmd)[0])
-        return
+    """Apply a host and its setup atomically, or edit user-owned profiles under the state lock."""
+    name, action = cmd.arg('name'), cmd.arg('action')
     with locked():
-        state = load_slots()
-        current = effective_reserved(load_config(), state, load_hosts())
-        store = midi.apply_host(load_saved_hosts(), cmd, current)
+        state, cfg, hosts = load_slots(), load_config(), load_hosts()
+        if action == 'select':
+            if name != 'default' and name not in hosts:
+                raise ValueError(f"unknown host profile {name}; known: {', '.join(hosts) or 'none'}")
+            selected = name if name != 'default' else cfg.get('host', {}).get('profile')
+            profile = hosts.get(selected, {})
+            if 'preset' in profile:
+                presets.load_preset(state, load_presets(), profile['preset'])
+            elif 'state' in profile:
+                presets.restore_state(state, profile['state'])
+            state, _ = midi.apply_command(state, cmd)
+            write_json(STATE, state)
+            return
+        if action == 'preset':
+            if name not in hosts:
+                raise ValueError(f'unknown host profile {name}')
+            slot = cmd.arg('preset')
+            if slot is not None:
+                presets.load_preset({}, load_presets(), slot)  # validate before writing anything
+            profile = {f'reserve_{d}': hosts[name].get(f'reserve_{d}', cfg['slots'].get(f'reserve_{d}', []))
+                       for d in (IN, OUT)}
+            if slot is not None:
+                profile['preset'] = slot
+            store = load_saved_hosts()
+            store[name] = profile
+        else:
+            if action == 'save' and cmd.arg('new', False) and name in hosts:
+                raise ValueError(f'host profile {name} already exists; refresh and choose a new name')
+            if action == 'rename' and cmd.arg('new_name') != name and cmd.arg('new_name') in hosts:
+                raise ValueError(f"host profile {cmd.arg('new_name')} already exists")
+            if action == 'save' and cmd.arg('preset') is not None:
+                presets.load_preset({}, load_presets(), cmd.arg('preset'))
+            current = effective_reserved(cfg, state, hosts)
+            store = midi.apply_host(load_saved_hosts(), cmd, current, state)
         write_json(HOSTS, store)
-        if action == "delete" and state.get("host_profile") == name:
-            write_json(STATE, {k: v for k, v in state.items() if k != "host_profile"})
+        if (state.get('host_profile') or cfg.get('host', {}).get('profile')) == name:
+            if action == 'delete':
+                state.pop('host_profile', None)
+            elif action == 'rename':
+                state['host_profile'] = cmd.arg('new_name')
+        write_json(STATE, state)  # refresh reservations; attaching a setup applies on the next explicit selection
 
 
 def save_command(cmd):
@@ -318,12 +379,15 @@ class Child:
     is logged once with a count (a stuck zita says "Starting synchronisation." forever).
     With on_line, each line goes to it instead. stop_signal is what stop() sends first."""
 
-    def __init__(self, name, cmd, on_line=None, stop_signal=signal.SIGTERM):
+    def __init__(self, name, cmd, on_line=None, stop_signal=signal.SIGTERM, control=False):
         self.name, self.cmd, self.started, self.on_line = name, cmd, time.monotonic(), on_line
         self.stop_signal = stop_signal
-        self.proc = subprocess.Popen(cmd, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
-                                     stderr=subprocess.STDOUT, text=True, errors="replace")
-        threading.Thread(target=self._pump, daemon=True).start()
+        self.proc = subprocess.Popen(cmd, stdin=subprocess.PIPE if control else subprocess.DEVNULL,
+                                     stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, errors="replace")
+        if control:
+            os.set_blocking(self.proc.stdin.fileno(), False)
+        self.pump = threading.Thread(target=self._pump, daemon=True)
+        self.pump.start()
 
     def _pump(self):
         last, count = None, 0
@@ -345,6 +409,13 @@ class Child:
     def alive(self):
         return self.proc.poll() is None
 
+    def send_level(self, percent):
+        try:
+            data = f'{percent}\n'.encode()
+            return os.write(self.proc.stdin.fileno(), data) == len(data)
+        except (OSError, ValueError, AttributeError):
+            return False
+
     def stop(self, grace=1.0):
         if self.alive():
             self.proc.send_signal(self.stop_signal)
@@ -354,6 +425,9 @@ class Child:
                 log(f"rpi-audiod: {self.name} ignored {signal.Signals(self.stop_signal).name}, killing it")
                 self.proc.kill()
                 self.proc.wait()
+        if self.proc.stdin:
+            self.proc.stdin.close()
+        self.pump.join(timeout=0.2)
 
 
 class Device:
@@ -455,12 +529,16 @@ class Bridge:
         self.holding = False                              # has its share of the budget: started, not stopped
         self.placed = False                               # its gadget channels (or none) were logged
         self.child, self.backoff, self.next_try, self.start = None, 1.0, 0.0, None
+        self.send_client = "system"
         self.gadget = True                                # False: no host, so no gadget channels to connect
 
     def routes(self):
         if self.start is None or not self.gadget:
             return []
-        return audiod.routes(self.client, self.direction, self.start, self.kept)
+        pairs = audiod.routes(self.client, self.direction, self.start, self.kept)
+        if self.direction == IN and self.send_client != 'system':
+            pairs = [(src, dst.replace('system:', self.send_client + ':', 1)) for src, dst in pairs]
+        return pairs
 
     def check_budget(self, used, budget):
         """True when zita may start; otherwise records why, logging when that starts or ends."""
@@ -810,13 +888,21 @@ class Daemon:
         self.next_scan = self.next_routes = self.next_status = self.next_midi = self.next_midi_routes = 0.0
         self.stopping = False
         self.restart_requested = False
-        self.output_state = {}
+        self.output_state = load_slots()  # initial gain must be correct before any source is connected
         self.output_workers, self.output_metrics = {}, {}
         self.output_retry = {}
         self.next_outputs = 0.0
         self.sdp_server = None
         self.sdp_error = ""
         self.next_sdp = 0.0
+        self.level_sent, self.level_links = {}, set()
+        self.session = incidents.Session(STATUS.with_name('session.json'), clock=time.monotonic,
+                                         wall=lambda: time.strftime('%Y-%m-%d %H:%M:%S'))
+        self.next_observation = 0.0
+        self.last_observation = None
+        self.first_scan = True
+        self.observer_seen = None
+        self.note("monitor_starts", "Session monitor started")
         try:
             self.network = outputs.network(cfg.get("network", {}))
             self.network_error = ""
@@ -824,6 +910,36 @@ class Daemon:
             self.network, self.network_error = None, str(error)
         if self.hub:
             update_slots(outputs.migrate_host_routes)
+
+    def note(self, kind, detail, count=1, severity='info'):
+        if hasattr(self, 'session'):
+            self.session.event(kind, detail, count, severity)
+
+    def observe_system(self, now):
+        if now < self.next_observation:
+            return
+        self.next_observation = now + 0.5
+        observation = (udc_state(), self.rates)
+        if self.last_observation is not None:
+            old_usb, old_rates = self.last_observation
+            usb_state, rates = observation
+            if old_usb != usb_state:
+                if usb_state == 'not attached' and old_usb not in ('', 'unknown', 'not attached'):
+                    self.note('usb_disconnects', 'USB host disconnected', severity='warning')
+                elif usb_state == 'configured':
+                    self.note('usb_connections', 'USB host connected')
+            for side, before, after in zip(('to host', 'from host'), old_rates, rates):
+                if before and after and before != after:
+                    self.note('rate_changes', f'USB {side}: {before} -> {after} Hz')
+                elif before and not after:
+                    self.note('stream_stops', f'USB {side}: stream stopped')
+                elif after and not before:
+                    self.note('stream_starts', f'USB {side}: {after} Hz')
+        self.last_observation = observation
+        try:
+            self.session.flush(write_json)
+        except OSError as error:
+            log(f'rpi-audiod: cannot retain session history: {error}')
 
     # --- what feeds the gadget -------------------------------------------------------
 
@@ -861,6 +977,8 @@ class Daemon:
         if self.sdp_server:
             self.sdp_server.close()
             self.sdp_server = None
+        self.level_links.clear()
+        self.level_sent.clear()
         for child in self.output_workers.values():
             child.stop()
         self.output_workers.clear()
@@ -902,6 +1020,8 @@ class Daemon:
                 self.jack_fails = 0
             return
         log(f"rpi-audiod: {child.name} {'exited' if died else f'stalled ({state}, pointer still)'}, restarting")
+        self.note("engine_faults", f"{child.name}: exited" if died else f"{child.name}: stalled",
+                  severity="warning")
         if self.jackd:
             self.jack_fails += 1
             if self.jack_fails >= JACK_FAILS:
@@ -914,6 +1034,7 @@ class Daemon:
     def check_jack_ready(self):
         if self.jackd and not self.jack_ready and run("jack_lsp").returncode == 0:
             self.jack_ready = True
+            self.next_outputs = self.next_routes = 0.0
             log("rpi-audiod: jackd is up")
 
     # --- devices, slots and routes -----------------------------------------------------
@@ -952,7 +1073,7 @@ class Daemon:
             for i in self.devices:
                 b = self.bridges.get((i, direction))
                 if b and (b.start != assigned[direction].get(i) or not b.placed):
-                    if b.start is not None:
+                    if b.gadget and b.start is not None:
                         b.stop()
                     b.start, b.placed = assigned[direction].get(i), True
                     log(f"rpi-audiod: {b.client} -> gadget {direction.upper()} "
@@ -1027,6 +1148,8 @@ class Daemon:
             if new is None or new.usbbus != dev.usbbus or new.card != dev.card:
                 why = "unplugged" if new is None else "re-enumerated"
                 log(f"rpi-audiod: {dev.id} ({i}) {why}")
+                self.note("device_disconnects" if new is None else "device_reenumerations",
+                          f"{dev.id}: {why}", severity="warning")
                 for direction in (IN, OUT):
                     b = self.bridges.pop((i, direction), None)
                     if b:
@@ -1044,16 +1167,21 @@ class Daemon:
                 + ", ".join(f"{d} {'unknown, not checked' if v is None else f'{v} B'}"
                             for d, v in dev.loads.items() if dev.plans[d]))
             self.devices[i] = dev
+            if not self.first_scan:
+                self.note("device_connections", f"{dev.id}: connected")
             for direction in (IN, OUT):
                 if dev.plans[direction] and not dev.kept[direction]:
                     log(f"rpi-audiod: {dev.id}: the profile ignores every {direction.upper()} channel; no bridge")
                 elif dev.plans[direction]:
                     self.bridges[(i, direction)] = Bridge(dev, direction)
                     self.bridges[(i, direction)].gadget = not (self.standalone or self.hub)
+                    if direction == IN and not (self.standalone or self.hub):
+                        self.bridges[(i, direction)].send_client = outputs.LEVEL_CLIENTS[outputs.USB]
             if dev.usbbus not in self.seen_usbbus:
                 self.seen_usbbus.add(dev.usbbus)
                 self.raise_volumes(dev)
             changed = True
+        self.first_scan = False
         if changed or slots_stamp() != self.slots_stamp:
             self.reassign()
 
@@ -1073,9 +1201,11 @@ class Daemon:
                 connected = frozenset((src, dst)) in pairs
                 if muted and connected:
                     if run("jack_disconnect", src, dst).returncode == 0:
+                        pairs.discard(frozenset((src, dst)))
                         log(f"rpi-audiod: muted {src} -> {dst}")
                 elif not muted and not connected and src in ports and dst in ports:
                     if run("jack_connect", src, dst).returncode == 0:
+                        pairs.add(frozenset((src, dst)))
                         log(f"rpi-audiod: connected {src} -> {dst}")
         self.connect_device_routes(ports, pairs)
 
@@ -1083,21 +1213,59 @@ class Daemon:
         """Brings the connections between the bridges to the stored device-to-device routes."""
         bridges = {key: (b.client, b.channels) for key, b in self.bridges.items() if b.child and b.child.alive()}
         clients = {b.client for b in self.bridges.values()}
-        if self.standalone or self.hub:   # the local card's system:playback_N
-            bridges[(self.sink["identity"], OUT)] = ("system", self.sink["channels"])
+        if self.sink:
             clients.add("system")
-        if self.hub:
-            for key, side, client in (("usb-receive", IN, "usb_host_in"), ("usb-send", OUT, "usb_host_out")):
-                child = self.output_workers.get(key)
+
+        def gain(identity):
+            child = self.output_workers.get('level-' + identity)
+            return outputs.LEVEL_CLIENTS[identity] if child and child.alive() else None
+
+        level_links = set()
+        for identity, client in outputs.LEVEL_CLIENTS.items():
+            clients.add(client)
+            if not gain(identity) or not outputs.enabled(self.output_state, identity,
+                                                         identity not in (outputs.RTP, outputs.LINK)):
+                continue
+            target, channels = None, 2
+            if identity == 'local-dac' and self.sink:
+                target, channels = 'system', self.sink['channels']
+                bridges[(self.sink['identity'], OUT)] = (client, channels)
+                clients.add('system')
+            elif identity == outputs.USB:
+                child = self.output_workers.get('usb-send')
+                if self.hub and child and child.alive():
+                    target = 'usb_host_out'
+                elif not (self.hub or self.standalone):
+                    target = 'system'
+                channels = self.usb_channels
+                if self.hub and target:
+                    bridges[(outputs.USB, OUT)] = (client, channels)
+            elif identity in (outputs.RTP, outputs.LINK):
+                child = self.output_workers.get(identity)
                 if child and child.alive():
-                    bridges[(outputs.USB, side)] = (client, self.usb_channels)
-                    clients.add(client)
-        for identity, client in ((outputs.RTP, "network_rtp_out"), (outputs.LINK, "network_link_out")):
-            child = self.output_workers.get(identity)
+                    target = 'network_rtp_out' if identity == outputs.RTP else 'network_link_out'
+                    bridges[(identity, OUT)] = (client, 2)
+                    clients.add(target)
+            if target:
+                level_links.update((f'{client}:capture_{n}', f'{target}:playback_{n}')
+                                   for n in range(1, channels + 1))
+        if self.hub:
+            child = self.output_workers.get('usb-receive')
             if child and child.alive():
-                bridges[(identity, OUT)] = (client, 2)
-                clients.add(client)
+                bridges[(outputs.USB, IN)] = ('usb_host_in', self.usb_channels)
+                clients.add('usb_host_in')
         want, pending = routing.wanted(self.routes, bridges, self.muted, ports)
+        # Legacy gadget connections remain ours while host mode is using the USB gain stage.
+        if not (self.hub or self.standalone):
+            for (identity, side), bridge in self.bridges.items():
+                if identity not in self.muted[side] and (side != IN or outputs.enabled(self.output_state, outputs.USB)):
+                    want.update((a, b) for a, b in bridge.routes() if a in ports and b in ports)
+        for src, dst in self.level_links - level_links:
+            if frozenset((src, dst)) in pairs:
+                if run('jack_disconnect', src, dst).returncode == 0:
+                    pairs.discard(frozenset((src, dst)))
+        self.level_links = level_links
+        want.update((src, dst) for src, dst in level_links if src in ports and dst in ports)
         self.route_state = {r: "" for r in self.routes}
         self.route_state.update(pending)
         connect, disconnect = routing.reconcile(want, pairs, clients)
@@ -1112,10 +1280,34 @@ class Daemon:
         try:
             data = json.loads(line)
             if isinstance(data, dict) and data.get("event") == "status":
+                previous = self.output_metrics.get(identity, {})
                 self.output_metrics[identity] = data
+                if identity == 'observer':
+                    self.observer_seen = time.monotonic()
+                    self.session.observe('observer/xruns', data.get('xruns'), 'xruns', 'JACK xrun notifications')
+                    for field, kind in (('rate', 'rate_changes'), ('period', 'buffer_changes')):
+                        value = data.get(field)
+                        if type(value) is int and value > 0:
+                            before = self.session.value('engine_' + field, value)
+                            if before and before != value:
+                                self.note(kind, f'JACK {field}: {before} -> {value}')
+                elif identity in (outputs.RTP, outputs.LINK):
+                    if (identity == outputs.LINK and previous.get('state') == 'sending' and
+                            data.get('state') == 'waiting'):
+                        self.note('network_stops', 'Link Audio stopped delivering buffers', severity='warning')
+                    self.session.observe(identity + '/dropped', data.get('dropped_frames'),
+                                         'network_dropped_frames', identity + ': dropped audio frames')
         except ValueError:
             if line.strip():
                 log(f"[{identity}] {line}")
+
+    def adapter_label(self, key):
+        names = {'local-dac': self.sink.get('name', 'pHAT DAC'), outputs.USB: 'USB host',
+                 outputs.RTP: 'Network RTP', outputs.LINK: 'Link Audio', 'observer': 'Audio monitor',
+                 'usb-send': 'USB send', 'usb-receive': 'USB return'}
+        if key.startswith('level-'):
+            return names.get(key[len('level-'):], key) + ' level'
+        return names.get(key, key)
 
     def sync_outputs(self, now):
         """Independent clients: changing an output never restarts the local JACK clock."""
@@ -1141,11 +1333,26 @@ class Daemon:
                                      "--address", self.network["address"], "--port", str(self.network["port"]),
                                      "--ttl", str(self.network["ttl"]),
                                      "--sdp", str(STATUS.with_name("network-rtp.sdp"))]
+        helper = str(Path(__file__).resolve().parent / 'audio/rpi-audio-gain')
+        if self.jack_ready:
+            desired['observer'] = [helper, '--client', 'rpi_audio_session', '--channels', '0']
+            targets = []
+            if self.sink:
+                targets.append(('local-dac', self.sink['channels']))
+            if (self.hub and self.rates[0]) or not (self.hub or self.standalone):
+                targets.append((outputs.USB, self.usb_channels))
+            targets += [(identity, 2) for identity in (outputs.RTP, outputs.LINK) if identity in desired]
+            for identity, channels in targets:
+                desired['level-' + identity] = [helper, '--client', outputs.LEVEL_CLIENTS[identity],
+                                                '--channels', str(channels), '--level',
+                                                str(outputs.level(self.output_state, identity))]
         for key, child in list(self.output_workers.items()):
-            if key not in desired or child.cmd != desired[key] or not child.alive():
+            compare = lambda command: command[:-2] if key.startswith('level-') else command  # noqa: E731
+            if key not in desired or compare(child.cmd) != compare(desired[key]) or not child.alive():
                 failed = not child.alive()
                 if failed:
                     self.output_retry[key] = now + 5.0
+                    self.note('adapter_failures', f'{self.adapter_label(key)}: stopped', severity='warning')
                 child.stop()
                 del self.output_workers[key]
                 if not failed:
@@ -1157,15 +1364,29 @@ class Daemon:
             if key in self.output_workers or now < self.output_retry.get(key, 0):
                 continue
             try:
+                self.session.reset_observer(key + ('/xruns' if key == 'observer' else '/dropped'))
+                if key == 'observer':
+                    self.observer_seen = None
                 self.output_metrics.pop(key, None)
                 self.output_workers[key] = Child(key, command, stop_signal=signal.SIGINT if key.startswith("usb-")
                                                  else signal.SIGTERM,
                                                  on_line=None if key.startswith("usb-") else
-                                                 lambda line, identity=key: self.output_line(identity, line))
+                                                 lambda line, identity=key: self.output_line(identity, line),
+                                                 control=key.startswith("level-"))
+                if key.startswith('level-'):
+                    self.level_sent[key] = int(command[-1])
                 self.next_routes = 0.0
             except OSError as error:
+                if not self.output_metrics.get(key, {}).get('error'):
+                    self.note('adapter_failures', f'{self.adapter_label(key)}: {error}', severity='warning')
                 self.output_metrics[key] = {"error": str(error)}
                 self.output_retry[key] = now + 5.0
+
+        for key, child in self.output_workers.items():
+            if key.startswith('level-'):
+                value = outputs.level(self.output_state, key[len('level-'):])
+                if value != self.level_sent.get(key) and child.send_level(value):
+                    self.level_sent[key] = value
 
         if self.network and self.network["http_port"] and self.sdp_server is None and now >= self.next_sdp:
             try:
@@ -1200,12 +1421,20 @@ class Daemon:
                 child = self.output_workers.get(identity)
                 running = bool(child and child.alive())
                 reason = self.network_error or metrics.get("error", "Waiting for network adapter")
-            failed = metrics.get("error") or (self.network_error and identity in (outputs.RTP, outputs.LINK))
+            gain_child = self.output_workers.get('level-' + identity)
+            gain_running = bool(gain_child and gain_child.alive())
+            gain_metrics = self.output_metrics.get('level-' + identity, {})
+            if running and not gain_running:
+                reason = gain_metrics.get('error', 'Output volume is not ready')
+            running = bool(running and gain_running)
+            failed = (gain_metrics.get('error') or metrics.get("error") or
+                      (self.network_error and identity in (outputs.RTP, outputs.LINK)))
             state = "disabled" if not enabled else "error" if failed else "waiting" if not running else \
                     metrics.get("state", "active")
             status.append({"identity": identity, "name": name, "protocol": protocol, "client": client,
                            "channels": self.usb_channels if identity == outputs.USB else 2,
                            "enabled": enabled, "running": running, "state": state,
+                           "level": outputs.level(self.output_state, identity), "gain_running": gain_running,
                            "detail": "Disabled" if not enabled else metrics.get("detail", "") if running else reason,
                            **({"address": self.network["address"], "port": self.network["port"],
                                "sdp": str(STATUS.with_name("network-rtp.sdp")),
@@ -1302,7 +1531,9 @@ class Daemon:
         if self.standalone or self.hub:
             k = self.sink
             devices.append({"identity": k["identity"], "card": k["card"], "name": k["name"], "local": True,
-                            OUT: {"channels": k["channels"], "rate": k["rate"], "running": self.jack_ready,
+                            OUT: {"channels": k["channels"], "rate": k["rate"], "running": self.jack_ready and
+                                  bool(self.output_workers.get("level-local-dac") and
+                                       self.output_workers["level-local-dac"].alive()),
                                   "muted": k["identity"] in self.muted[OUT], "fixed_level": True}})
         if self.hub:
             devices.append({"identity": outputs.USB, "name": "USB host", "virtual": True, "card": self.usb_card,
@@ -1316,8 +1547,9 @@ class Daemon:
             devices.append({"identity": output["identity"], "name": output["name"], "virtual": True,
                             OUT: {"channels": 2, "running": output["running"], "rate": self.rate,
                                   "fixed_level": True, "muted": not output["enabled"]}})
+        hosts = load_hosts()
         engine = self.sink if self.standalone or self.hub else self.cfg.get('engine', {})
-        return {"engine": {"rate": self.sink.get('rate', max(self.rates)),
+        data = {"engine": {"rate": self.sink.get('rate', max(self.rates)),
                            "period": engine.get('period', 64), "periods": engine.get('periods', 3)},
                 "bridge_buffer": {"period": self.cfg.get('bridge', {}).get('period', 256),
                                   "periods": self.cfg.get('bridge', {}).get('periods', 2)},
@@ -1325,7 +1557,9 @@ class Daemon:
                 "host_capture_rate": capture_rate, "feeder": self.mode, "jack_ready": self.jack_ready,
                 "gadget_channels": self.usb_channels if self.hub else self.channels,
                 "engine_mode": "hub" if self.hub else "standalone" if self.standalone else "host",
-                "host_profile": self.host_name(load_slots()), "host_profiles": sorted(load_hosts()),
+                "host_profile": self.host_name(load_slots()), "host_profiles": sorted(hosts),
+                "host_profile_details": host_summary(self.cfg, hosts),
+                "host_profile_selection": load_slots().get("host_profile"),
                 "outputs": self.output_status(), "devices": devices, "presets": presets.summary(load_presets()),
                 "midi": self.midi.status() if self.midi else None,
                 **({"routes": [{**routing.entry(r), "waiting": why or None} for r, why in self.route_state.items()]}
@@ -1337,6 +1571,31 @@ class Daemon:
                 **({"midi_routes": [{**midiroute.entry(k), "waiting": why or None}
                                     for k, why in self.midi_state.items()]} if self.midi_state else {}),
                 **({"midi_ports": self.midi_ports} if self.standalone or self.hub else {})}
+        session = getattr(self, 'session', None)
+        data['session'] = session.snapshot() if session else {'counters': {}, 'events': []}
+        observer = self.output_workers.get('observer')
+        data['session']['monitor_available'] = bool(observer and observer.alive() and
+                                                    self.observer_seen is not None and
+                                                    time.monotonic() - self.observer_seen < 2.5)
+        data['session']['monitor'] = (self.output_metrics.get('observer', {})
+                                      if data['session']['monitor_available'] else {})
+        scenes = load_presets()
+        midi_present = [e['endpoint'] for e in (data.get('midi') or {}).get('endpoints', [])]
+        for name, info in data['host_profile_details'].items():
+            profile = hosts.get(name if name != 'default' else self.cfg.get('host', {}).get('profile'), {})
+            setup = profile.get('state', {})
+            if 'preset' in profile:
+                scene = scenes.get(str(profile['preset']), {})
+                if not isinstance(scene, dict) or not isinstance(scene.get('state'), dict):
+                    info['readiness'] = {'state': 'error', 'issues': [
+                        {'code': 'scene', 'identity': '', 'message': f"Scene {profile['preset']} is empty"}]}
+                    continue
+                setup = scene['state']
+            info['readiness'] = readiness.assess(setup, data, info, midi_present)
+        selected = load_slots().get('host_profile') or 'default'
+        data['profile_readiness'] = data['host_profile_details'].get(selected, {}).get('readiness') or {
+            'state': 'error', 'issues': [{'code': 'profile', 'identity': '', 'message': 'Host profile is missing'}]}
+        return data
 
     # --- main loop ---------------------------------------------------------------------
 
@@ -1373,12 +1632,18 @@ class Daemon:
             self.check_feeder(now)
             self.check_jack_ready()
             self.sync_outputs(now)
+            self.observe_system(now)
             if now >= self.next_scan:
                 self.scan_devices()
                 self.next_scan = now + 0.5
             if self.jack_ready:
                 for b in self.bridges.values():
+                    if b.child and not b.child.alive():
+                        self.note('bridge_failures', f'{b.client}: bridge exited', severity='warning')
+                    was_blocked = bool(b.blocked)
                     b.tick(self.cfg, now, self.bus_used(b), self.fs_budget)
+                    if b.blocked and not was_blocked:
+                        self.note('bandwidth_blocks', f'{b.client}: {b.blocked}', severity='warning')
                 if now >= self.next_routes:
                     self.connect_routes()
                     self.next_routes = now + 1.0
@@ -1397,7 +1662,10 @@ class Daemon:
                     log(f"rpi-audiod: cannot write {STATUS}: {e}")
                 self.next_status = now + 60.0 if not STATUS.parent.is_dir() else now + 2.0
             time.sleep(TICK)
+        if self.restart_requested:
+            self.note("mode_changes", "Audio engine mode changed")
         self.stop_feeder()
+        self.session.flush(write_json)
         if self.midi:
             self.midi.stop_listener()
         log("rpi-audiod: stopped")
@@ -1450,7 +1718,20 @@ def cmd_status(_):
     if s.get("presets"):
         print("  presets: " + ", ".join(f"{p['slot']} {p['name']} ({p['saved']})" for p in s["presets"]))
     for output in s.get("outputs", []):
-        print(f"  output {output['name']}: {output['state']} ({output['protocol']}) {output['detail']}")
+        print(f"  output {output['name']}: {output['state']}, level {output.get('level', 100)}% "
+              f"({output['protocol']}) {output['detail']}")
+    profile = s.get('profile_readiness')
+    if profile:
+        print(f"  profile {s.get('host_profile_selection') or 'default'}: {profile['state']}")
+        for issue in profile.get('issues', []):
+            print('    ' + issue['message'])
+    session = s.get('session', {})
+    if session.get('started'):
+        counts = session.get('counters', {})
+        print(f"  session since {session['started']}: {counts.get('xruns', 0)} xruns, "
+              f"{counts.get('network_dropped_frames', 0)} TX dropped frames")
+        for event in session.get('events', [])[-5:]:
+            print(f"    {event['time']} {event['detail']} (x{event['count']})")
     m = s.get("midi")
     if m:
         state = ("on client %s" % m["client"]) if m["client"] is not None else "not found"
@@ -1539,12 +1820,19 @@ def cmd_change(text):
     """assign, mute, volume, name and preset from the command line: the same commands, and the
     same checks, as on the MIDI control port (docs/MIDI.md)."""
     try:
-        save_command(midi.parse_command(text))
+        command = midi.parse_command(text)
+        save_command(command)
     except ValueError as e:
         sys.exit(f"rpi-audiod: {e}")
     except OSError as e:
-        sys.exit(f"rpi-audiod: cannot save {STATE}: {e} (run it as root or as the rpi-audio user)")
-    print("rpi-audiod: saved; the service applies it within a second or two")
+        sys.exit(f"rpi-audiod: cannot save: {e} (use an account in the audio group)")
+    if command.verb == 'host' and command.arg('action') in ('save', 'preset'):
+        name = command.arg('name')
+        print(f'rpi-audiod: profile {name} saved; apply it with: rpi-audiod host {name}')
+    elif command.verb == 'host' and command.arg('action') in ('rename', 'delete'):
+        print('rpi-audiod: host profile updated')
+    else:
+        print('rpi-audiod: saved; the service applies it within a second or two')
 
 
 def main():
@@ -1560,7 +1848,8 @@ def main():
     h.add_argument("words", nargs="+", metavar="WORD", help="see docs/MIDI.md")
     o = sub.add_parser("output")
     o.add_argument("identity", choices=outputs.IDS)
-    o.add_argument("value", choices=("on", "off"))
+    o.add_argument("value", choices=("on", "off", "level"))
+    o.add_argument("percent", nargs="?", type=int)
     a = sub.add_parser("assign")
     a.add_argument("identity")
     a.add_argument("--in", dest="in_", type=int, help="first gadget IN channel (Pi -> host)")
@@ -1600,7 +1889,8 @@ def main():
     if args.cmd == "host":
         return cmd_change(" ".join(["host", *args.words]))
     if args.cmd == "output":
-        return cmd_change(f"output {args.identity} {args.value}")
+        suffix = "" if args.percent is None else f" {args.percent}"
+        return cmd_change(f"output {args.identity} {args.value}{suffix}")
     if args.cmd == "assign":
         keys = [f"{k}={v}" for k, v in (("in", args.in_), ("out", args.out), ("midi", args.midi)) if v is not None]
         return cmd_change(" ".join(["assign", args.identity, *keys]))

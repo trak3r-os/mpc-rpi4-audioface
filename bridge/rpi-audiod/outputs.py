@@ -14,6 +14,15 @@ def enabled(state, identity, default=True):
     return value if isinstance(value, bool) else default
 
 
+LEVEL_CLIENTS = {'local-dac': 'level_dac_out', USB: 'level_usb_out',
+                 RTP: 'level_rtp_out', LINK: 'level_link_out'}
+
+
+def level(state, identity):
+    value = state.get('output_levels', {}).get(identity, 100)
+    return value if type(value) is int and 0 <= value <= 100 else 100
+
+
 def network(table):
     address = str(table.get("address", "239.69.1.1"))
     address = str(ipaddress.IPv4Address(address))

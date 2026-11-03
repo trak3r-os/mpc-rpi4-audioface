@@ -2,6 +2,8 @@
 
 A 128×64 OLED, a rotary encoder with a push button, and two more buttons control rpi-audio without a host: pick a preset, choose which device feeds which, mute, set levels. The display is one more client of the service. It sends the same commands as the command line and the MIDI control port (`docs/MIDI.md`), so the audio never depends on it, and everything keeps working with no display attached.
 
+For a new assembly, start with the [bill of materials and illustrated build steps](MANUAL.md#16-build-your-own-device). They cover the complete Pi/DAC/panel, power/data splitter, GPIO wiring and first-start checks. This page documents the display implementation and configurable pins.
+
 **Status:** running on a Pi 4 with the wiring below (`rpi-audio-ui.service`). The encoder, PUSH and BACK were checked physically. The earlier GPIO 23 CONFIRM wiring did not deliver a reliable press; the default is now GPIO 5, with physical confirmation still pending. PUSH and CONFIRM now perform the same action throughout, including scene saving and loading. See the [illustrated user guide](MANUAL.md) for step-by-step use and [current session notes](hw/2026-11-03-oled-wifi.md) for validation. The terminal simulator `tools/ui-sim.py` needs no hardware.
 
 ## Controls
@@ -36,14 +38,14 @@ These indicators are hidden while the screensaver runs, so they do not leave fix
   Meters read real JACK samples through passive input taps, without opening ALSA devices or changing existing routes. A native C callback collects peaks; Python reads its output without blocking and draws at most five frames per second. The helper never starts JACK and runs only while Overview is visible and awake. Closing the view, entering the screensaver, or losing JACK stops the helper; stale samples become unavailable. The UI unit permits realtime scheduling and memory locking for the native JACK thread; the Python/GPIO loop keeps normal priority. `install.sh --hat` installs the compiler and JACK headers and builds `rpi-audio-meter`. Later updates rebuild an already installed helper as well.
 
 - **Send audio:** first the source stereo pair, then destinations as `[ ]`, `[x]` or waiting `[~]`. **More output pairs...** offers individual destination pairs. A device is not offered to itself.
-- **Outputs:** pHAT DAC, USB host, Network RTP and Link Audio, each with a state, enable switch and details. Audio mode selects Hub, USB host clock or Standalone DAC and confirms the interruption.
+- **Outputs:** pHAT DAC, USB host, Network RTP and Link Audio, each with a state, enable switch, independent output Level and details. Host offers reservations-only profiles, full setup copies and scene links; Save current as generates a free host-N name. Use this profile, scene changes, overwrites and deletion have explicit actions and confirmations. Audio mode selects Hub, USB host clock or Standalone DAC and confirms the interruption.
 - **Scenes:** eight slots, each with visible Load and Save here actions; saving asks before replacing the slot.
 - **MIDI:** choose a sender, then select receivers. The local list is available in Hub/Standalone; original host mode continues using gadget MIDI cable mapping.
 - **Levels & mute:** physical devices' In/Out mute and available hardware levels. `~` marks a bridge waiting for USB bandwidth.
 
 - **Connections:** USB-host and WiFi details, then a list of the physical audio/MIDI devices, available even when audio is idle. Select a device to see its mode, bus, bridge state, input/output channels, active rates, MIDI capability, assigned USB channel ranges and MIDI cables. Saved assignments are explicitly marked `saved` while idle; standalone mode uses local routing instead. Scroll to the lower rows for mappings and failure reasons. Prefixes: `A+M` audio and MIDI, `I/O` full-duplex audio, `IN` capture only, `OUT` playback only, `MID` MIDI only, `LOC` local DAC. In Hub, To USB and From USB show explicit selected routes instead of claiming the old reservations are connected. USB details show the engine mode (USB bridge, Hub or Standalone), connection state, sample rate and gadget channels. WiFi details show the connection, network name, IP and signal. These screens are read-only; use Levels & mute, Send audio or MIDI to change routing and levels.
 
-- **Status:** Machine & buffers shows CPU/RAM bars, temperature, rate, buffers and DSP data. All inputs and All outputs show separate real peak bars and endpoint details. Tap XRuns is scoped to the running meter helper.
+- **Status:** Machine & buffers shows CPU/RAM bars, temperature, rate, buffers and DSP data. All inputs and All outputs show separate real peak bars and endpoint details. Profile readiness reports Ready/Partial/Error with reasons. Session counters and Recent events use the independent always-on JACK observer and retain history through service restarts during this boot.
 
 - **Settings:** the display's own settings. CONFIRM steps a row to its next value and wraps round. A change applies at once and is kept across restarts.
 
@@ -51,7 +53,7 @@ These indicators are hidden while the screensaver runs, so they do not leave fix
   |---|---|
   | Sleep | never, 15 s, 30 s, 1, 2, 5 or 10 min without input before the display goes dark (`idle_s`) |
   | Saver | off, 10, 20, 30 or 60 s, 2 or 5 min without input before the screensaver (`saver_s`) |
-  | Style | `bounce` (the name drifts round the screen) or `clock` (the time drifts) (`saver_style`) |
+  | Style | `bounce` (moving name), `clock` (moving time) or `status` (machine and buffer panels) (`saver_style`) |
   | Bright | 10, 25, 50, 75 or 100 % (`contrast`) |
   | Flip | turns the picture 180° (`flip`) |
   | Encoder | normal or reversed (`invert_encoder`) |
@@ -94,10 +96,10 @@ Settings go in the `[ui]` table of `/etc/rpi-audio/rpi-audio.toml` or a file in 
 | `contrast` | 127 | 0 to 255 |
 | `idle_s` | 60 | seconds before the display goes dark; 0 never |
 | `saver_s` | 30 | seconds before the screensaver; 0 never |
-| `saver_style` | `"bounce"` | `"bounce"` or `"clock"` |
+| `saver_style` | `"bounce"` | `"bounce"`, `"clock"` or `"status"` |
 | `invert_encoder` | false | for a knob that turns the wrong way |
 | `pins` | the table above | BCM numbers, only the ones that differ: `pins = { confirm = 23 }` |
 
 What the Settings screen keeps goes in `/var/lib/rpi-audio-ui/settings.json` and wins over the file; delete it to go back to the file's values. A key that is unknown or has a wrong value is logged and ignored. Clockwise is the encoder's A line (TRA) changing before B, as on a KY-040; swap with `invert_encoder` if yours is wired the other way.
 
-The `status` screensaver rotates machine, buffer and audio-summary panels every six seconds and moves them on both axes, without a fixed footer. Metrics come from the background `/proc`/sysfs snapshot and passive JACK helper. Active Status views also report JACK rate, period, DSP load and xrun notifications since the helper started. Separate endpoint meters are bounded to 64 groups and 128 taps; unavailable measurements show `--`. The first touch wakes the display; Sleep still applies.
+The `status` screensaver rotates machine, buffer and audio-summary panels every six seconds and moves them on both axes, without a fixed footer. Metrics come from the background `/proc`/sysfs snapshot and passive JACK helper. Active Status views also report JACK rate, period, DSP load while the separate session observer collects xrun notifications even with the OLED asleep. Separate endpoint meters are bounded to 64 groups and 128 taps; unavailable measurements show `--`. The first touch wakes the display; Sleep still applies.

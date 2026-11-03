@@ -53,7 +53,9 @@ def machine_lines(status, hardware, levels):
     period = actual.get('period_size', period)
     buffer_frames = actual.get('buffer_size', period * periods)
     buffer_label = 'Engine buf' if actual else 'Config buf'
-    dsp, xruns = levels.get('_dsp_load'), levels.get('_xruns')
+    monitor = status.get('session', {}).get('monitor', {})
+    dsp = levels.get('_dsp_load', monitor.get('dsp_load'))
+    xruns = status.get('session', {}).get('counters', {}).get('xruns')
     temperature = machine.get('temperature')
     mem = machine.get('memory_pct')
     midi = status.get('midi') or {}
@@ -67,6 +69,6 @@ def machine_lines(status, hardware, levels):
             f"{buffer_label}: {buffer_frames} f" if buffer_frames else 'Engine buf: --',
             f"Buffer: {buffer_frames * 1000 / rate:.1f} ms" if buffer_frames and rate else 'Buffer: -- ms',
             f"DSP load: {dsp:.1f}%" if dsp is not None else 'DSP load: --',
-            f"Tap XRuns: {xruns}" if xruns is not None else 'Tap XRuns: --',
+            f"Session XRuns: {xruns}" if xruns is not None else 'Session XRuns: --',
             f"Uptime: {machine['uptime'] / 3600:.1f} h" if 'uptime' in machine else 'Uptime: --',
             f"MIDI cables: {midi.get('ports', 0)}", f"MIDI routes: {len(status.get('midi_routes', []))}"]

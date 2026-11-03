@@ -405,7 +405,7 @@ def test_output_switches_details_and_engine_confirmation():
     press(u, st, 'cw', 'push', 'push')
     assert press(u, st, 'push') == ['output network-rtp on']
     assert 'Enabled: on' in text(u, st)[1]
-    press(u, st, 'cw', 'push')
+    press(u, st, 'cw', 'cw', 'push')
     assert '/network-rtp.sdp' in u.screen.details(u, st)
     press(u, st, 'back', 'back', 'cw', 'push', 'cw', 'push')
     assert text(u, st)[0].strip() == 'Restart audio?'
@@ -445,10 +445,66 @@ def test_hub_details_show_explicit_usb_routes_instead_of_old_reservations():
 def test_host_row_lists_profiles_and_confirms_a_change():
     st = status(outputs=[], host_profile=None, host_profiles=['akai-force', 'generic'])
     u = display.UI()
-    press(u, st, 'cw', 'push', 'cw', 'push')   # Outputs, then the Host row after Audio mode
-    assert text(u, st)[0].strip() == 'Host'
-    assert [line.strip() for line in text(u, st)[1:4]] == ['* default', 'akai-force', 'generic']
-    assert press(u, st, 'push') == []   # the current one: nothing to confirm
+    press(u, st, 'cw', 'push', 'cw', 'push')
+    assert text(u, st)[0].strip() == 'Host profiles'
+    assert [line.lstrip('> ').rstrip() for line in text(u, st)[1:4]] == [
+        '*[R] default', '[R] akai-force', '[R] generic']
     press(u, st, 'cw', 'push')
-    assert text(u, st)[0].strip() == 'Change host?'
+    assert press(u, st, 'push') == []
+    assert text(u, st)[0].strip() == 'Use host profile?'
     assert press(u, st, 'push') == ['host akai-force']
+
+
+def test_oled_can_save_both_host_types_without_typing_a_name():
+    st = status(host_profiles=['host-1', 'generic'])
+    for full, command in ((False, 'host save host-2 new'), (True, 'host save host-2 new full')):
+        u = display.UI()
+        u.stack = [display.HostProfiles()]
+        press(u, st, *('cw',) * 3, 'push')
+        assert isinstance(u.screen, display.HostSaveAs)
+        if full:
+            press(u, st, 'cw')
+        assert press(u, st, 'push') == [command]
+        assert isinstance(u.screen, display.HostProfiles)
+
+
+def test_oled_profile_actions_confirm_setup_loading_and_scene_linking():
+    st = status(presets=[{'slot': 3, 'name': 'Live'}], host_profiles=['studio'],
+                host_profile_details={'studio': {'origin': 'user', 'kind': 'snapshot'}})
+    for button in ('push', 'confirm'):
+        u = display.UI()
+        u.stack = [display.HostActions('studio')]
+        press(u, st, button)
+        assert 'Replace audio setup' in text(u, st)[2]
+        assert press(u, st, 'back') == []
+        press(u, st, 'cw', 'cw', button, 'cw', button)
+        assert text(u, st)[0].strip() == 'Replace saved setup?'
+        assert press(u, st, button) == ['host preset studio 3']
+
+
+def test_output_level_editor_is_bounded_and_back_cancels():
+    st = status(outputs=[{'identity': 'local-dac', 'name': 'pHAT DAC', 'enabled': True, 'level': 100}])
+    for button in ('push', 'confirm'):
+        u = display.UI()
+        u.stack = [display.OutputActions('local-dac')]
+        press(u, st, 'cw', button, 'cw')
+        assert u.screen.value == 100
+        press(u, st, *('ccw',) * 10)
+        assert press(u, st, button) == ['output local-dac level 50']
+        press(u, st, button, *('ccw',) * 40)
+        assert u.screen.value == 0
+        assert press(u, st, 'back') == []
+
+
+def test_profile_readiness_and_session_history_have_human_readable_details():
+    st = status(profile_readiness={'state': 'partial', 'issues': [{'message': 'Missing: GP-150'}]},
+                session={'started': '2026-11-03 12:00:00', 'monitor_available': True, 'counters': {'xruns': 3},
+                         'events': [{'id': 1, 'time': '2026-11-03 12:01:00', 'severity': 'warning',
+                                     'detail': 'USB host disconnected', 'count': 1}]})
+    u = display.UI()
+    assert 'State: Partial' in display.ProfileReadiness().details(u, st)
+    assert 'Missing: GP-150' in display.ProfileReadiness().details(u, st)
+    assert 'XRuns: 3' in display.SessionInfo().details(u, st)
+    u.stack = [display.RecentEvents()]
+    press(u, st, 'push')
+    assert isinstance(u.screen, display.EventInfo) and 'Count: 1' in u.screen.details(u, st)

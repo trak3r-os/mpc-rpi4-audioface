@@ -43,14 +43,14 @@ def test_pcm_buffer_detail_and_unavailable_values_are_distinct():
 def test_status_screensaver_rotates_measured_pages_and_moves_every_pixel_region():
     positions, contents = set(), set()
     for tick in range(40):
-        rows = ui.saver_rows('status', tick * 3, status=STATUS,
+        rows = ui.saver_rows('status', tick * 3, status={**STATUS, 'session': {'counters': {'xruns': 2}}},
                              hardware={'machine': {'cpu_pct': 25, 'memory_pct': 50, 'temperature': 42}},
                              levels={'_rate': 48000, '_period': 256, '_dsp_load': 3, '_xruns': 2})
         assert len(rows) == 8 and all(len(r.text) == 21 and not r.footer and not r.inverse for r in rows)
         lit = [(n, r.text) for n, r in enumerate(rows) if r.text.strip()]
         positions.add((lit[0][0], len(lit[0][1]) - len(lit[0][1].lstrip())))
         contents.update(r.text.strip() for r in rows)
-    assert len(positions) >= 4 and 'Rate: 48 kHz' in contents and 'Tap XRuns: 2' in contents
+    assert len(positions) >= 4 and 'Rate: 48 kHz' in contents and 'Session XRuns: 2' in contents
 
 
 def test_machine_and_pcm_read_actual_proc_values_and_tolerate_missing_data(tmp_path):

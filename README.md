@@ -1,13 +1,35 @@
 # rpi-audio
 
-[![CI](https://github.com/trak3r-os/mpc-rpi4-audioface/actions/workflows/ci.yml/badge.svg)](https://github.com/trak3r-os/mpc-rpi4-audioface/actions/workflows/ci.yml)
-![License: GPL-3.0-or-later](https://img.shields.io/badge/license-GPL--3.0--or--later-blue)
+[![rpi-audio: a Raspberry Pi 4 routes USB audio and MIDI gear to a pHAT DAC, a 26×26 USB host interface, and stereo RTP or Link Audio network sends](docs/img/rpi-audio-banner.svg)](docs/MANUAL.md)
+
+[![Release CI](https://img.shields.io/github/actions/workflow/status/trak3r-os/mpc-rpi4-audioface/ci.yml?event=release&style=flat-square&logo=github&label=release%20CI)](https://github.com/trak3r-os/mpc-rpi4-audioface/actions/workflows/ci.yml)
+[![License: GPL-3.0-or-later](https://img.shields.io/badge/license-GPL--3.0--or--later-60cbb3?style=flat-square)](LICENSE)
+[![Last commit](https://img.shields.io/github/last-commit/trak3r-os/mpc-rpi4-audioface?style=flat-square&logo=github)](https://github.com/trak3r-os/mpc-rpi4-audioface/commits/main/)
+[![GitHub issues](https://img.shields.io/github/issues/trak3r-os/mpc-rpi4-audioface?style=flat-square&logo=github)](https://github.com/trak3r-os/mpc-rpi4-audioface/issues)
+[![GitHub stars](https://img.shields.io/github/stars/trak3r-os/mpc-rpi4-audioface?style=flat-square&logo=github)](https://github.com/trak3r-os/mpc-rpi4-audioface/stargazers)
+
+[![Raspberry Pi 4](https://img.shields.io/badge/Raspberry_Pi-4-C51A4A?style=flat-square&logo=raspberrypi&logoColor=white)](docs/MANUAL.md#16-build-your-own-device)
+[![USB Audio Class 2](https://img.shields.io/badge/USB_Audio_Class_2-26_in_%C3%97_26_out-267d9c?style=flat-square)](docs/MANUAL.md#6-record-over-usb)
+[![USB MIDI](https://img.shields.io/badge/USB_MIDI-4_virtual_cables-7660ac?style=flat-square)](docs/MIDI.md)
+[![RTP / PCM](https://img.shields.io/badge/Network-RTP%2FPCM-087d76?style=flat-square)](docs/MANUAL.md#12-network-audio)
+[![Link Audio](https://img.shields.io/badge/Network-Link_Audio-087d76?style=flat-square)](docs/MANUAL.md#ableton-link-audio)
+[![English illustrated manual](https://img.shields.io/badge/Guide-English_%C2%B7_illustrated-2563ad?style=flat-square)](docs/MANUAL.md)
+
+**Topics:** [raspberry-pi](https://github.com/topics/raspberry-pi) · [usb-audio](https://github.com/topics/usb-audio) · [midi](https://github.com/topics/midi) · [jack-audio](https://github.com/topics/jack-audio) · [network-audio](https://github.com/topics/network-audio) · [rtp](https://github.com/topics/rtp) · [ableton-link](https://github.com/topics/ableton-link) · [diy](https://github.com/topics/diy)
+
+CI runs only when a GitHub release is published. Pushes, pull requests and draft-release edits do not start it. The Release CI badge tracks release runs.
 
 **A Raspberry Pi 4 that works as a USB audio hub.** Plug your USB sound cards, guitar processors, mixers and MIDI gear into the Pi, and plug the Pi into a computer or a standalone sampler. The host sees one class-compliant USB audio interface, **26 in × 26 out at 44.1 kHz, 16-bit by default**, plus **4 USB MIDI ports**. Each device gets its own channels.
 
 **New to the box?** Start with the [illustrated English user guide](docs/MANUAL.md), readable directly on GitHub. An [HTML edition](docs/manual/index.html) with the same illustrated steps is included for a browser or GitHub Pages; GitHub's file viewer displays HTML source. The guide covers USB recording, standalone pHAT listening, controls, meters, simultaneous outputs, network audio and scenes.
 
+**Building your own?** The [build guide and bill of materials](docs/MANUAL.md#16-build-your-own-device) lists quantities, required and optional parts, power/data connections, GPIO wiring, assembly, installation and first checks. It distinguishes the tested hardware from untested substitutes.
+
 The OLED now opens on Overview and includes connection notices, live peak meters and channel/MIDI mappings. **Hub mode combines pHAT, USB host and network outputs** with a continuous local clock. Install network adapters with `sudo ./install.sh --network`, then select Outputs → Audio mode → Hub. RTP/PCM offers an SDP download at `http://PI-IP:8080/network-rtp.sdp`; Link Audio uses Ableton’s official SDK. Both network outputs start disabled. See [implementation and test limits](docs/OUTPUTS.md) and [project research](docs/NETWORK_RESEARCH.md). Network input and full AES67 are not implemented.
+
+Host profiles can save reservations only, an independent full setup including names, or a link to one of the eight scenes. Use Outputs → Host → Save current as..., or `rpi-audiod host save NAME full`. User profiles survive deployments in hosts.json and local audio-group users can save them without sudo. See the [host-profile steps](docs/MANUAL.md#save-and-choose-a-host-profile).
+
+Profiles now report Ready/Partial/Error with missing-resource details. Outputs offers independent software levels for pHAT, USB-host send, RTP and Link Audio. Status includes session-wide counters and a bounded event history collected while the OLED sleeps, retained across service restarts during the same boot.
 
 ```mermaid
 flowchart LR
@@ -41,6 +63,8 @@ It was built for the Akai Force, which can use only one USB audio interface at a
 - **Runs without a screen.** Everything starts at boot, and `rpi-audiod doctor` checks the installation.
 
 ## How it works
+
+The diagram and clock description below show the original **USB host clock** mode. In **Hub**, JACK instead runs continuously on the local DAC at 48 kHz; separate USB bridges follow the host's rates, and local, USB and network destinations can run together. **Standalone** uses the local clock without the USB audio bridge. See the [mode comparison](docs/MANUAL.md#1-what-the-box-does).
 
 ```mermaid
 flowchart LR
@@ -84,6 +108,8 @@ sequenceDiagram
 The full protocol is in [docs/MIDI.md](docs/MIDI.md).
 
 ## What you need
+
+For the complete DAC/OLED/encoder build, use the [parts list with quantities and assembly instructions](docs/MANUAL.md#16-build-your-own-device). The short list below covers the USB hub itself.
 
 - A **Raspberry Pi 4** with its official power supply.
 - A **USB-C data/power splitter**. We use the "USB-C/PWR Splitter" from 8086 (8086.net/p/usbcs). The Pi 4 has only one USB-C port, and it is both its power input and its gadget (device-mode) port. The splitter lets you feed power from the supply and send data to the host over separate connectors. Wiring we used: supply to POWER, DATA POWER to the Pi, USB2 DATA to the host.
@@ -188,7 +214,7 @@ rpi-audiod preset save 1 Live                  # save the routing as preset 1 (1
 rpi-audiod preset load 1                       # restore it (also: preset clear N)
 ```
 
-`IDENTITY` is the device identity shown by `rpi-audiod status`. `IN` is Pi to host, and `OUT` is host to Pi. Channel blocks are sticky: they are kept in `/var/lib/rpi-audio/slots.json`. Presets are in `presets.json` next to it. A preset stores routing (channels, MIDI cables, mutes, levels), not names.
+`IDENTITY` is the device identity shown by `rpi-audiod status`. `IN` is Pi to host, and `OUT` is host to Pi. Channel blocks are sticky: they are kept in `/var/lib/rpi-audio/slots.json`. Presets are in `presets.json` next to it. New presets store routing, channel assignments, MIDI cables, mutes, device/output levels, output switches and custom names. The USB interface stays at 26 channels per direction when scenes change; engine mode and network transport settings remain separate.
 
 ### Device profiles
 
