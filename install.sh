@@ -9,7 +9,8 @@
 #   sudo ./install.sh [--host NAME] [--no-enable] [--force-config] [--no-boot-config] [--tune-boot] [--hat] [--network] [-y]
 #   sudo ./install.sh --uninstall [--purge]
 #
-#   --host NAME        also install tools/hosts/NAME.toml as /etc/rpi-audio/rpi-audio.d/NAME.toml
+#   --host NAME        make host profile NAME (config/hosts.d/) the default one, or install tools/hosts/NAME.toml
+#                      as /etc/rpi-audio/rpi-audio.d/NAME.toml (e.g. standalone). All profiles are always installed.
 #                      (rpi-audiod settings for that host, e.g. akai-force)
 #   --no-enable        leave the boot enable state of the units as it is (by default
 #                      rpi-audio-gadget, rpi-audiod and rpi-audio-cpu are enabled,
@@ -103,7 +104,8 @@ if ((hat)); then packages="$packages python3-smbus2 python3-libgpiod gcc libjack
 if ((network)); then packages="$packages g++ git libjack-jackd2-dev"; fi
 if [[ -n $hostconf ]]; then
   [[ $hostconf =~ ^[A-Za-z0-9._-]+$ ]] || die "invalid host name: $hostconf"
-  [[ -f $here/tools/hosts/$hostconf.toml ]] || die "no tools/hosts/$hostconf.toml in this clone"
+  [[ -f $here/tools/hosts/$hostconf.toml || -f $here/config/hosts.d/$hostconf.toml ]] \
+    || die "no tools/hosts/$hostconf.toml or config/hosts.d/$hostconf.toml in this clone"
 fi
 
 # --- Where we are -----------------------------------------------------------
@@ -183,7 +185,7 @@ if ((network)) && ((!staging)); then bash "$here/tools/build-network.sh"; fi
 
 # --- Files ------------------------------------------------------------------
 
-install -d "$LIB" "$ETC" "$ETC/rpi-audio.d" "$ETC/devices.d" "$BIN" "$UNITDIR" \
+install -d "$LIB" "$ETC" "$ETC/rpi-audio.d" "$ETC/devices.d" "$ETC/hosts.d" "$BIN" "$UNITDIR" \
   "$(dirname "$MODULES")" "$(dirname "$JOURNALD")"
 install -m 755 "$here/gadget/rpi-audio-gadget" "$here/gadget/rpi-audio-keepalive" "$LIB/"
 install -m 755 "$here/tools/tonegen.py" "$here/bridge/rpi-audiod/rpi-audiod" "$LIB/"
@@ -265,7 +267,19 @@ install_config "$here/config/rpi-audio.toml"
 for f in "$here"/config/devices.d/*.toml; do
   [[ -e $f ]] && install -m 644 "$f" "$ETC/devices.d/"
 done
-if [[ -n $hostconf ]]; then install -m 644 "$here/tools/hosts/$hostconf.toml" "$ETC/rpi-audio.d/"; fi
+# Host profiles (chosen at runtime: `rpi-audiod host NAME`): added or replaced, never removed.
+for f in "$here"/config/hosts.d/*.toml; do
+  [[ -e $f ]] && install -m 644 "$f" "$ETC/hosts.d/"
+done
+if [[ -n $hostconf ]]; then
+  if [[ -f $here/tools/hosts/$hostconf.toml ]]; then
+    install -m 644 "$here/tools/hosts/$hostconf.toml" "$ETC/rpi-audio.d/"
+  else
+    # --host NAME of a profile: the one used until the display or `rpi-audiod host` picks another.
+    rm -f "$ETC/rpi-audio.d/$hostconf.toml"   # where earlier versions put its [slots]
+    printf '[host]\nprofile = "%s"\n' "$hostconf" > "$ETC/rpi-audio.d/host.toml"
+  fi
+fi
 
 install -m 644 "$here/systemd/rpi-audio-gadget.service" "$here/systemd/rpi-audio-keepalive.service" \
   "$here/systemd/rpi-audiod.service" "$here/systemd/rpi-audio-cpu.service" "$here/systemd/rpi-audio-ui.service" \

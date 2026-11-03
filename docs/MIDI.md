@@ -78,8 +78,18 @@ F0 7D 52 42 <ASCII text> F7      reply
 | `preset save N [TEXT]` | `ok` | Saves the current routing in preset N (1 to 8) |
 | `preset load N` | `ok` or `error: preset N is empty` | Restores the routing saved in preset N |
 | `preset clear N` | `ok` | Deletes preset N |
+| `host NAME` | `ok` or `error: unknown host profile` | Selects a host profile: the gadget channels held back for that host (`reserve_in`, `reserve_out`). Takes effect within a second or two, with no engine restart; devices on a reserved channel move to a free block |
+| `host default` | `ok` | Back to the configuration's `[host] profile` or `[slots]` |
+| `host save NAME [in=K,K] [out=K,K]` | `ok` | Saves a profile of your own. Without `in=` or `out=` it keeps what is reserved now; `in=` alone reserves nothing |
+| `host delete NAME` | `ok` or `error: no saved host profile` | Deletes a profile you saved (the ones shipped in `hosts.d` stay) |
 
 Commands change the stored state (`slots.json`, and `presets.json` for presets), exactly like the command line (`rpi-audiod assign|mute|volume|route|unroute|name|preset ...`). The service applies the change within one or two seconds. With an unknown identity, the command is still stored and applied when the device shows up.
+
+### Host profiles
+
+- A host profile is a name for the gadget channels held back for one kind of host (for example `akai-force` reserves IN 25-26, the Force's own inputs). They ship in `/etc/rpi-audio/hosts.d/NAME.toml` (`[slots] reserve_in`, `reserve_out`); the ones you save are in `hosts.json`, next to `slots.json`, and a saved profile replaces a shipped one with the same name.
+- The choice is stored in `slots.json` (`host_profile`) and overrides `[host] profile` and `[slots]` of the configuration, key by key. `status` lists `host_profile` and `host_profiles`.
+- On the display: Outputs > Host. Choose a profile (asks to confirm, as channels may move), or "Save current..." to store what is reserved now as `host-1`, `host-2`...
 
 ### Device routes
 

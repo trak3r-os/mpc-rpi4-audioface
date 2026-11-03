@@ -152,6 +152,23 @@ def allocate(present, saved, sizes_saved, total, reserved, align=2, preferred=No
     return assigned, parked, saved
 
 
+def parse_host(data, filename):
+    """(profile, warnings) from a host profile (hosts.d/NAME.toml): the gadget channels held back
+    for that host, {"reserve_in": [...], "reserve_out": [...]}, 1-based. A key that is not a list
+    of channel numbers is left out, with a warning."""
+    profile, warnings = {}, []
+    slots = data.get("slots", {})
+    for key in ("reserve_in", "reserve_out"):
+        if key not in slots:
+            continue
+        value = slots[key]
+        if isinstance(value, list) and all(type(k) is int and k >= 1 for k in value):
+            profile[key] = value
+        else:
+            warnings.append(f"{filename}: {key} must be a list of channel numbers; ignored")
+    return profile, warnings
+
+
 def kept_channels(channels, ignore):
     """The device channels (1-based) that get a gadget slot, out of `channels`."""
     return [k for k in range(1, channels + 1) if k not in ignore]

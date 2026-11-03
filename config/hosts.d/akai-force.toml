@@ -1,5 +1,5 @@
-# rpi-audiod settings for the Akai Force, installed by `tools/deploy.sh --host akai-force`
-# as /etc/rpi-audio/rpi-audio.d/akai-force.toml.
+# Host profile: the Akai Force (docs/hosts/akai-force.md). Selected at runtime with
+# `rpi-audiod host akai-force` or on the OLED (Outputs > Host); a file here only lists what the host needs.
 
 [slots]
 # With the mpc_internal_io add-on, MPC inputs 25/26 are the Force's own inputs

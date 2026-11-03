@@ -8,8 +8,8 @@
 # --enable also enables rpi-audio-gadget.service and rpi-audiod.service at boot
 # (and disables rpi-audio-keepalive.service, which rpi-audiod replaces). Without
 # it they are started by hand (`sudo systemctl start rpi-audio-gadget rpi-audiod`).
-# --host NAME installs tools/hosts/NAME.toml as /etc/rpi-audio/rpi-audio.d/NAME.toml
-# (rpi-audiod settings for that host, e.g. akai-force).
+# --host NAME makes the host profile NAME (config/hosts.d/, e.g. akai-force) the default one; the display or
+# `rpi-audiod host NAME` change it at runtime. NAME may also be a tools/hosts/NAME.toml (e.g. standalone).
 # --hat also turns on the I2C bus and the hifiberry-dac overlay (a display and a DAC on the 40-pin header; install.sh --hat,
 # with a backup of config.txt; takes effect after a reboot, which this script never does) and, with --enable,
 # starts rpi-audio-ui.service (the OLED and its encoder).
@@ -35,8 +35,8 @@ while (($#)); do
   esac
   shift
 done
-if [[ -n $hostconf && ! -f $root/tools/hosts/$hostconf.toml ]]; then
-  echo "deploy: no tools/hosts/$hostconf.toml" >&2
+if [[ -n $hostconf && ! -f $root/tools/hosts/$hostconf.toml && ! -f $root/config/hosts.d/$hostconf.toml ]]; then
+  echo "deploy: no config/hosts.d/$hostconf.toml or tools/hosts/$hostconf.toml" >&2
   exit 2
 fi
 

@@ -1570,3 +1570,60 @@ def test_usb_output_switch_also_cuts_legacy_host_sends_but_keeps_return(monkeypa
     daemon.cmd_change('output usb-host off')
     w.seconds(1.2)
     assert not sends & w.connections and returns <= w.connections and d.jackd is clock
+
+
+# --- host profiles ------------------------------------------------------------------------------
+
+@pytest.fixture(autouse=False)
+def toml():
+    return pytest.importorskip("tomllib")   # the daemon needs it (Python 3.11+) to read hosts.d
+
+
+def host_profile(tmp_path, name, body):
+    (tmp_path / "hosts.d").mkdir(exist_ok=True)
+    (tmp_path / "hosts.d" / f"{name}.toml").write_text(body)
+
+
+def test_host_profile_chosen_at_runtime_moves_devices_off_its_reserved_channels(monkeypatch, tmp_path, toml):
+    host_profile(tmp_path, "pads", "[slots]\nreserve_in = [1, 2]\n")
+    host_profile(tmp_path, "plain", "[slots]\nreserve_in = []\n")
+    w, d = bring_up(monkeypatch, tmp_path, usb_device(1, "mixer"))
+    assert d.bridges[("usb-mixer", IN)].start == 1
+    daemon.cmd_change("host pads")
+    w.seconds(3)
+    assert d.bridges[("usb-mixer", IN)].start == 3 and d.mode == "jack"   # no restart of the engine
+    status = json.loads((tmp_path / "run" / "status.json").read_text())
+    assert (status["host_profile"], status["host_profiles"]) == ("pads", ["pads", "plain"])
+    daemon.cmd_change("host default")
+    w.seconds(3)
+    assert d.bridges[("usb-mixer", IN)].start == 3   # sticky: the saved block is free, so it stays
+    assert json.loads((tmp_path / "run" / "status.json").read_text())["host_profile"] is None
+
+
+def test_host_profile_default_comes_from_the_configuration(monkeypatch, tmp_path, toml):
+    host_profile(tmp_path, "pads", "[slots]\nreserve_in = [1, 2]\nreserve_out = [5]\n")
+    w, d = make(monkeypatch, tmp_path, host={"profile": "pads"}, slots={"reserve_out": [1, 2]})
+    hosts = daemon.load_hosts()
+    assert d.reserved({}, hosts) == {IN: [1, 2], OUT: [5]}
+    assert d.reserved({"host_profile": "pads"}, {}) == {IN: [], OUT: [1, 2]}   # profile missing: [slots] stands
+    assert logged(w, "no host profile pads")
+    d.reserved({"host_profile": "pads"}, {})
+    assert len(logged(w, "no host profile pads")) == 1   # said once
+
+
+def test_host_command_rejects_unknown_profiles_and_bad_names(monkeypatch, tmp_path, toml):
+    host_profile(tmp_path, "pads", "[slots]\nreserve_in = [1]\n")
+    w, d = make(monkeypatch, tmp_path)
+    assert d.command("host nope") == "error: unknown host profile nope; known: pads"
+    assert d.command("host ../x").startswith("error: usage: host NAME|default")
+    assert d.command("host") .startswith("error: usage")
+    assert d.command("host pads") == "ok" and daemon.load_slots()["host_profile"] == "pads"
+    assert d.command("host default") == "ok" and "host_profile" not in daemon.load_slots()
+
+
+def test_bad_host_profiles_are_skipped_with_a_warning(monkeypatch, tmp_path, toml):
+    host_profile(tmp_path, "broken", "[slots\n")
+    host_profile(tmp_path, "typo", '[slots]\nreserve_in = "25"\nreserve_out = [3]\n')
+    w, d = make(monkeypatch, tmp_path)
+    assert daemon.load_hosts() == {"typo": {"reserve_out": [3]}}
+    assert logged(w, "broken.toml") and logged(w, "typo.toml: reserve_in must be a list")

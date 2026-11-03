@@ -1,0 +1,5 @@
+# Host profile: any USB host with nothing special about its channels. No gadget channel is held back
+# on the IN side; the OUT side keeps [slots] reserve_out of rpi-audio.toml.
+
+[slots]
+reserve_in = []

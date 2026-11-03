@@ -550,6 +550,10 @@ class OutputPairs(Menu):
         return [f"{'unroute' if on else 'route'} {src} {dst} src={src_pair} dst={dst_pair}"]
 
 
+SAVE_HOST = object()  # the HostProfiles row that saves the current reservation as a new profile
+HOST_ROW = object()   # the Outputs row that opens HostProfiles; the others carry an output identity
+
+
 class Outputs(Menu):
     title = "Outputs"
     icon = "device"
@@ -559,10 +563,13 @@ class Outputs(Menu):
         rows = [(f"[{labels.get(o['state'], o['state'])}] {o['name']}", o["identity"])
                 for o in status.get("outputs", [])]
         rows.append((f"Audio mode: {status.get('engine_mode', 'host')}", None))
+        if status.get("host_profiles"):
+            rows.append((f"Host: {status.get('host_profile') or 'default'}", HOST_ROW))
         return rows
 
     def select(self, ui, identity, status, now):
-        ui.stack.append(EngineModes() if identity is None else OutputActions(identity))
+        ui.stack.append(EngineModes() if identity is None else HostProfiles() if identity is HOST_ROW
+                        else OutputActions(identity))
         return []
 
 
@@ -590,6 +597,27 @@ class OutputActions(Menu):
             return []
         ui.overlay[("output", self.identity)] = (not enabled, now + OPTIMISM_S)
         return [f"output {self.identity} {'off' if enabled else 'on'}"]
+
+
+class HostProfiles(Menu):
+    title = "Host"
+    icon = "settings"
+
+    def items(self, ui, status, now):
+        current = status.get("host_profile") or "default"
+        names = status.get("host_profiles", [])
+        rows = [(("* " if name == current else "") + name, name) for name in ["default", *names]]
+        return rows + [("Save current...", SAVE_HOST)]
+
+    def select(self, ui, name, status, now):
+        if name is SAVE_HOST:
+            taken = set(status.get("host_profiles", []))
+            new = next(f"host-{n}" for n in range(1, 100) if f"host-{n}" not in taken)
+            ui.message = f"Saved {new}"
+            return [f"host save {new}"]
+        if name != (status.get("host_profile") or "default"):
+            ui.stack.append(Confirm("Change host?", "Channels may move", [f"host {name}"], "Switching host..."))
+        return []
 
 
 class EngineModes(Menu):

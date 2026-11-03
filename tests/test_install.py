@@ -38,7 +38,7 @@ def test_bad_arguments(root):
     r = run(root, "--bogus")
     assert r.returncode == 2 and "usage:" in r.stderr
     r = run(root, "--host", "nonexistent")
-    assert r.returncode == 1 and "no tools/hosts/nonexistent.toml" in r.stderr
+    assert r.returncode == 1 and "no tools/hosts/nonexistent.toml or config/hosts.d/nonexistent.toml" in r.stderr
     r = run(root, "--host", "../x")
     assert r.returncode == 1 and "invalid host name" in r.stderr
 
@@ -57,7 +57,9 @@ def test_fresh_install_lays_out_files(root):
     etc = root / "etc/rpi-audio"
     assert (etc / "gadget.env").read_bytes() == (REPO / "config/gadget.env").read_bytes()
     assert (etc / "rpi-audio.toml").is_file()
-    assert (etc / "rpi-audio.d/akai-force.toml").is_file()
+    assert (etc / "hosts.d/akai-force.toml").is_file() and (etc / "hosts.d/generic.toml").is_file()
+    assert (etc / "rpi-audio.d/host.toml").read_text() == '[host]\nprofile = "akai-force"\n'
+    assert not (etc / "rpi-audio.d/akai-force.toml").exists()
     assert (etc / "devices.d/valeton-gp150.toml").is_file()
     for u in ("rpi-audio-gadget", "rpi-audiod", "rpi-audio-keepalive", "rpi-audio-cpu", "rpi-audio-ui"):
         assert (root / f"etc/systemd/system/{u}.service").is_file()

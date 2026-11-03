@@ -440,3 +440,15 @@ def test_hub_details_show_explicit_usb_routes_instead_of_old_reservations():
     details = display.DeviceInfo(GP).details(display.UI(), st)
     assert 'State: Bridged' in details and 'To USB: 7-8' in details and 'From USB: 3-4 ~' in details
     assert not any('unassigned' in line for line in details if 'USB' in line)
+
+
+def test_host_row_lists_profiles_and_confirms_a_change():
+    st = status(outputs=[], host_profile=None, host_profiles=['akai-force', 'generic'])
+    u = display.UI()
+    press(u, st, 'cw', 'push', 'cw', 'push')   # Outputs, then the Host row after Audio mode
+    assert text(u, st)[0].strip() == 'Host'
+    assert [line.strip() for line in text(u, st)[1:4]] == ['* default', 'akai-force', 'generic']
+    assert press(u, st, 'push') == []   # the current one: nothing to confirm
+    press(u, st, 'cw', 'push')
+    assert text(u, st)[0].strip() == 'Change host?'
+    assert press(u, st, 'push') == ['host akai-force']

@@ -20,6 +20,7 @@ SYSEX_END = 0xF7
 USAGE = {
     "output": "output local-dac|usb-host|network-rtp|network-link on|off",
     "engine": "engine host|standalone|hub",
+    "host": "host NAME|default | host save NAME [in=K,K] [out=K,K] | host delete NAME",
     "ping": "ping",
     "status": "status",
     "assign": "assign IDENTITY [in=N] [out=N] [midi=K]",
@@ -241,6 +242,27 @@ def parse_preset(text, usage):
                                     ("text", label(m[3] or "", presets.NAME_MAX, "preset name"))))
 
 
+HOST_NAME = r"[A-Za-z0-9._-]{1,32}"
+
+
+def parse_host(rest, usage):
+    """host NAME, host default, host save NAME [in=K,K] [out=K,K] or host delete NAME. A save without
+    in= or out= keeps what is reserved now; `in=` alone reserves nothing."""
+    if len(rest) == 1 and re.fullmatch(HOST_NAME, rest[0]) and rest[0] not in ("save", "delete"):
+        return Command("host", None, (("action", "select"), ("name", rest[0])))
+    if len(rest) == 2 and rest[0] == "delete" and re.fullmatch(HOST_NAME, rest[1]):
+        return Command("host", None, (("action", "delete"), ("name", rest[1])))
+    if len(rest) >= 2 and rest[0] == "save" and re.fullmatch(HOST_NAME, rest[1]) and rest[1] not in ("save", "delete", "default"):
+        given = {}
+        for word in rest[2:]:
+            key, eq, value = word.partition("=")
+            if not eq or key not in ("in", "out") or key in given:
+                raise usage
+            given[f"reserve_{key}"] = sorted({number(key, k, 1) for k in value.split(",")} if value else set())
+        return Command("host", None, (("action", "save"), ("name", rest[1]), *given.items()))
+    raise usage
+
+
 def parse_command(text):
     """A Command from the text of a control SysEx (docs/MIDI.md). Raises ValueError with
     the message for the error reply."""
@@ -263,6 +285,8 @@ def parse_command(text):
         if len(rest) != 1 or rest[0] not in ("host", "standalone", "hub"):
             raise usage
         return Command(verb, None, (("mode", rest[0]),))
+    if verb == "host":
+        return parse_host(rest, usage)
     if verb == "output":
         if len(rest) != 2 or rest[0] not in outputs.IDS or rest[1] not in ("on", "off"):
             raise usage
@@ -376,6 +400,13 @@ def apply_command(state, cmd):
     device, port = split_endpoint(cmd.identity or "")
     if cmd.verb == "engine":
         state["engine_mode"] = cmd.arg("mode")
+    elif cmd.verb == "host":
+        if cmd.arg("action") != "select":
+            raise ValueError("host save and delete change the profile store, not slots.json")
+        if cmd.arg("name") == "default":
+            state.pop("host_profile", None)
+        else:
+            state["host_profile"] = cmd.arg("name")
     elif cmd.verb == "output":
         state.setdefault("outputs", {})[cmd.identity] = cmd.arg("on")
     elif cmd.verb == "midiroute":
@@ -403,6 +434,20 @@ def apply_command(state, cmd):
     else:
         raise ValueError(f"{cmd.verb} is not a state change")
     return state, "ok"
+
+
+def apply_host(store, cmd, current):
+    """The profile store (hosts.json) after host save or delete, which is not modified. `current` is what
+    is reserved now, {IN: [...], OUT: [...]}, for a save that gives no channels.
+    ValueError when deleting a profile that is not in the store (the ones of hosts.d are not deletable)."""
+    store, name = copy.deepcopy(store or {}), cmd.arg("name")
+    if cmd.arg("action") == "delete":
+        if name not in store:
+            raise ValueError(f"no saved host profile {name}")
+        del store[name]
+    else:
+        store[name] = {f"reserve_{d}": cmd.arg(f"reserve_{d}", current.get(d, [])) for d in (IN, OUT)}
+    return store
 
 
 def apply_preset(state, store, cmd, saved):

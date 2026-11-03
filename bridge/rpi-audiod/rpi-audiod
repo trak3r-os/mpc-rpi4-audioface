@@ -70,6 +70,7 @@ from audiod import IN, OUT
 CONFIG = Path(os.environ.get("RPI_AUDIO_CONFIG", "/etc/rpi-audio/rpi-audio.toml"))
 STATE = Path(os.environ.get("STATE_DIRECTORY", "/var/lib/rpi-audio")) / "slots.json"
 PRESETS = STATE.with_name("presets.json")
+HOSTS = STATE.with_name("hosts.json")   # host profiles saved at runtime (`host save`), next to those of hosts.d
 STATUS = Path(os.environ.get("RUNTIME_DIRECTORY", "/run/rpi-audio")) / "status.json"
 TICK = 0.1
 STALL_S = 1.5        # gadget playback pointer still for this long: the feeder is stuck
@@ -129,6 +130,48 @@ def load_profiles():
         if profile:
             profiles.append(profile)
     return profiles
+
+
+def load_hosts():
+    """The host profiles, {name: {"reserve_in": [...], ...}}: those in hosts.d next to the config (name
+    being the file name without .toml; a file that does not parse is skipped with a warning), then the
+    ones saved at runtime in hosts.json, which win."""
+    hosts = {}
+    for path in sorted(CONFIG.parent.glob("hosts.d/*.toml")):
+        try:
+            with open(path, "rb") as f:
+                profile, warnings = audiod.parse_host(tomllib.load(f), path.name)
+        except (OSError, tomllib.TOMLDecodeError) as e:
+            profile, warnings = None, [f"{path.name}: {e}; file ignored"]
+        for w in warnings:
+            log(f"rpi-audiod: host profile {w}")
+        if profile is not None:
+            hosts[path.stem] = profile
+    try:
+        saved = json.loads(HOSTS.read_text())
+    except (OSError, ValueError):
+        saved = {}
+    for name, entry in (saved.items() if isinstance(saved, dict) else ()):
+        profile, warnings = audiod.parse_host({"slots": entry if isinstance(entry, dict) else {}}, f"hosts.json {name}")
+        for w in warnings:
+            log(f"rpi-audiod: host profile {w}")
+        hosts[name] = profile   # a saved profile replaces the one of hosts.d with its name
+    return hosts
+
+
+def load_saved_hosts():
+    try:
+        data = json.loads(HOSTS.read_text())
+    except (OSError, ValueError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def effective_reserved(cfg, slots, hosts):
+    """{IN: [...], OUT: [...]}: the gadget channels held back. The selected host profile (the saved
+    choice, else [host] profile) overrides [slots] of the configuration, key by key."""
+    profile = hosts.get(slots.get("host_profile") or cfg.get("host", {}).get("profile") or "", {})
+    return {d: profile.get(f"reserve_{d}", cfg["slots"].get(f"reserve_{d}", [])) for d in (IN, OUT)}
 
 
 def gadget_setting(name, default):
@@ -237,9 +280,29 @@ def update_presets(change):
             write_json(STATE, new)
 
 
+def save_host_command(cmd):
+    """host NAME|default selects a profile (slots.json); host save and delete change hosts.json."""
+    name, action = cmd.arg("name"), cmd.arg("action")
+    if action == "select":
+        if name != "default" and name not in load_hosts():
+            raise ValueError(f"unknown host profile {name}; known: {', '.join(load_hosts()) or 'none'}")
+        update_slots(lambda state: midi.apply_command(state, cmd)[0])
+        return
+    with locked():
+        state = load_slots()
+        current = effective_reserved(load_config(), state, load_hosts())
+        store = midi.apply_host(load_saved_hosts(), cmd, current)
+        write_json(HOSTS, store)
+        if action == "delete" and state.get("host_profile") == name:
+            write_json(STATE, {k: v for k, v in state.items() if k != "host_profile"})
+
+
 def save_command(cmd):
     """Saves the change of an assign, mute, volume, name or preset Command. Raises ValueError
     (a command that cannot run, like loading an empty preset) or OSError (cannot write)."""
+    if cmd.verb == "host":
+        save_host_command(cmd)
+        return
     if cmd.verb == "preset":
         update_presets(lambda state, store: midi.apply_preset(state, store, cmd, time.strftime("%Y-%m-%d %H:%M")))
     else:
@@ -739,6 +802,7 @@ class Daemon:
             log(f"rpi-audiod: [usb] fs_budget {cfg['usb']['fs_budget']!r} is not a number; using {usb.FS_BUDGET}")
             self.fs_budget = usb.FS_BUDGET
         self.slots_stamp = None
+        self.unknown_host = None   # the host profile already warned about
         ports = 0 if self.standalone else int(gadget_setting("GADGET_MIDI_PORTS", 0))
         midi_id = gadget_setting("GADGET_MIDI_ID", cfg["midi"].get("card", "MIDIGadget"))
         self.midi = Midi(cfg, ports, midi_id) if ports else None
@@ -860,11 +924,11 @@ class Daemon:
         if self.standalone:
             self.place_without_gadget()
             return
-        reserved = {IN: self.cfg["slots"].get("reserve_in", []),
-                    OUT: self.cfg["slots"].get("reserve_out", [])}
+        hosts = load_hosts()
         assigned = {}
 
         def allocate(slots):
+            reserved = self.reserved(slots, hosts)
             if self.hub:
                 outputs.migrate_host_routes(slots)
             for direction in (IN, OUT):
@@ -894,6 +958,18 @@ class Daemon:
                     log(f"rpi-audiod: {b.client} -> gadget {direction.upper()} "
                         + (f"{b.start}-{b.start + b.size - 1}" if b.start else "parked: no free channels"))
         self.take_state(slots)
+
+    def host_name(self, slots):
+        """The selected host profile: the saved choice (`host NAME`), else [host] profile, else None."""
+        return slots.get("host_profile") or self.cfg.get("host", {}).get("profile") or None
+
+    def reserved(self, slots, hosts):
+        """effective_reserved, saying once when the selected profile does not exist."""
+        name = self.host_name(slots)
+        if name and name not in hosts and name != self.unknown_host:
+            log(f"rpi-audiod: no host profile {name} in hosts.d; using [slots] of the configuration")
+        self.unknown_host = name if name not in hosts else None
+        return effective_reserved(self.cfg, slots, hosts)
 
     def place_without_gadget(self):
         """Standalone: no gadget channels to give out (and the saved ones, the host mode's, stay as they are).
@@ -1249,6 +1325,7 @@ class Daemon:
                 "host_capture_rate": capture_rate, "feeder": self.mode, "jack_ready": self.jack_ready,
                 "gadget_channels": self.usb_channels if self.hub else self.channels,
                 "engine_mode": "hub" if self.hub else "standalone" if self.standalone else "host",
+                "host_profile": self.host_name(load_slots()), "host_profiles": sorted(load_hosts()),
                 "outputs": self.output_status(), "devices": devices, "presets": presets.summary(load_presets()),
                 "midi": self.midi.status() if self.midi else None,
                 **({"routes": [{**routing.entry(r), "waiting": why or None} for r, why in self.route_state.items()]}
@@ -1479,6 +1556,8 @@ def main():
     sub.add_parser("doctor")
     e = sub.add_parser("engine")
     e.add_argument("mode", choices=("host", "standalone", "hub"))
+    h = sub.add_parser("host", help="host NAME|default, host save NAME [in=K,K] [out=K,K], host delete NAME")
+    h.add_argument("words", nargs="+", metavar="WORD", help="see docs/MIDI.md")
     o = sub.add_parser("output")
     o.add_argument("identity", choices=outputs.IDS)
     o.add_argument("value", choices=("on", "off"))
@@ -1518,6 +1597,8 @@ def main():
         return cmd_doctor(args)
     if args.cmd == "engine":
         return cmd_change(f"engine {args.mode}")
+    if args.cmd == "host":
+        return cmd_change(" ".join(["host", *args.words]))
     if args.cmd == "output":
         return cmd_change(f"output {args.identity} {args.value}")
     if args.cmd == "assign":
