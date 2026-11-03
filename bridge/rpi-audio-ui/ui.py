@@ -13,7 +13,7 @@ Display: ROWS rows of COLS characters, the first one a title."""
 import time
 import math
 import health
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 COLS, ROWS = 21, 8   # 6x8-pixel cells on a 128x64 display (bridge/rpi-audio-ui/font5x7.py)
 BODY = ROWS - 2            # title and persistent connection bar leave six content rows
@@ -43,6 +43,10 @@ class Row:
     scroll: tuple = ()
     footer: tuple = ()
     meter: tuple = ()
+    label: str = ""       # full, untruncated name for the graphical renderer
+    badge: str = ""       # separate right-aligned state
+    tick: int = 0         # quantised marquee time; zero keeps the initial view
+    large: str = ""       # double-size value, occupying this row and the next
 
 
 def fit(text, width=COLS):
@@ -213,6 +217,9 @@ class Menu:
     def heading(self, ui, status):
         return self.title
 
+    def badge(self, ui, status, payload):
+        return ""
+
     def handle(self, event, ui, status, now):
         items = self.items(ui, status, now)
         self.cursor = min(self.cursor, max(len(items) - 1, 0))
@@ -234,13 +241,18 @@ class Menu:
         self.cursor = min(self.cursor, max(len(items) - 1, 0))
         self.top = min(max(self.top, self.cursor - visible + 1), self.cursor)
         scroll = (self.top, len(items), visible) if len(items) > visible else ()
-        out = [Row(fit(self.heading(ui, status)), True, icon=self.icon, scroll=scroll)]
+        title = self.heading(ui, status)
+        out = [Row(fit(title), True, icon=self.icon, scroll=scroll, label=title)]
         if not items:
             out.append(Row(fit(" (nothing here)")))
         for n, (text, payload) in list(enumerate(items))[self.top:self.top + visible]:
             selected = n == self.cursor
             icon = getattr(payload, "icon", "") if isinstance(self, Home) else ""
-            out.append(Row(fit((">" if selected else " ") + text), inverse=selected, selected=selected, icon=icon))
+            badge = self.badge(ui, status, payload)
+            width = COLS - 1 - (len(badge) + 1 if badge else 0)
+            line = text[:width].ljust(width) + (" " + badge if badge else "")
+            out.append(Row(fit((">" if selected else " ") + line), inverse=selected, selected=selected,
+                           icon=icon, label=text, badge=badge))
         return out
 
 
@@ -297,7 +309,8 @@ class IOStatus(Menu):
         for n, (name, endpoint) in list(enumerate(items))[self.top:self.top + visible]:
             selected = n == self.cursor
             state = 'mute' if endpoint.get('muted') else 'on' if endpoint.get('running') else 'wait'
-            rows.append(Row(fit(f"{'>' if selected else ' '}[{state}] {name}"), selected, selected))
+            rows.append(Row(fit(f"{'>' if selected else ' '}{name}"), selected, selected,
+                            label=name, badge=state))
             rows.append(meter_row(self.side.upper(), ui.levels.get(endpoint['meter'])))
         if not items:
             rows.append(Row(fit(' No audio endpoints')))
@@ -561,13 +574,16 @@ class Outputs(Menu):
     icon = "device"
 
     def items(self, ui, status, now):
-        labels = {"disabled": "off", "waiting": "wait", "sending": "send", "active": "on", "error": "error"}
-        rows = [(f"[{labels.get(o['state'], o['state'])}] {o['name']}", o["identity"])
-                for o in status.get("outputs", [])]
+        rows = [(o['name'], o['identity']) for o in status.get('outputs', [])]
         rows.append((f"Audio mode: {status.get('engine_mode', 'host')}", None))
         if status.get("host_profiles"):
             rows.append((f"Host: {status.get('host_profile') or 'default'}", HOST_ROW))
         return rows
+
+    def badge(self, ui, status, payload):
+        output = next((o for o in status.get('outputs', []) if o['identity'] == payload), {})
+        return {'disabled': 'off', 'waiting': 'wait', 'sending': 'send', 'active': 'on',
+                'error': 'err'}.get(output.get('state'), '')
 
     def select(self, ui, identity, status, now):
         ui.stack.append(EngineModes() if identity is None else HostProfiles() if identity is HOST_ROW
@@ -626,9 +642,11 @@ class OutputLevel:
 
     def rows(self, ui, status, now):
         name = next((o['name'] for o in status.get('outputs', []) if o['identity'] == self.identity), 'Output')
-        return [Row(fit(name + ' level'), True), Row(fit('')),
-                Row(fit(f'Level: {self.value}%'), meter=('OUT', round(self.value * 18 / 100), f'{self.value}%', False)),
-                Row(fit(' Turn: change level')), Row(fit(' Press: apply')), Row(fit(' BACK: cancel'))]
+        return [Row(fit('Output level'), True, icon='device'), Row(fit(name), True, label=name, selected=True),
+                Row(fit(f'Level: {self.value}%'), large=f'{self.value}%'), Row(fit('')),
+                Row(fit(''), meter=('OUT', round(self.value * 18 / 100), f'{self.value}%', False)),
+                Row(fit('Turn: adjust')),
+                Row(fit('Press: save BACK:exit'))]
 
 
 def next_host_name(status):
@@ -647,15 +665,20 @@ class HostProfiles(Menu):
     icon = 'settings'
 
     def items(self, ui, status, now):
-        current = status.get('host_profile_selection', status.get('host_profile')) or 'default'
         rows = []
         for name in ['default', *status.get('host_profiles', [])]:
-            kind = host_kind(status, name)
-            mark = 'S' if kind.get('kind') == 'snapshot' else str(kind['preset']) if 'preset' in kind else 'R'
-            state = kind.get('readiness', {}).get('state')
-            availability = '!' if state == 'error' else '~' if state == 'partial' else ''
-            rows.append((f"{'*' if name == current else ' '}{availability}[{mark}] {name}", name))
+            rows.append((name, name))
         return rows + [('Save current as...', SAVE_HOST)]
+
+    def badge(self, ui, status, payload):
+        if payload is SAVE_HOST:
+            return ''
+        current = status.get('host_profile_selection', status.get('host_profile')) or 'default'
+        kind = host_kind(status, payload)
+        mark = 'S' if kind.get('kind') == 'snapshot' else str(kind['preset']) if 'preset' in kind else 'R'
+        state = kind.get('readiness', {}).get('state')
+        availability = '!' if state == 'error' else '~' if state == 'partial' else ''
+        return mark + ('*' if payload == current else '') + availability
 
     def select(self, ui, name, status, now):
         ui.stack.append(HostSaveAs() if name is SAVE_HOST else HostActions(name))
@@ -1241,6 +1264,7 @@ class UI:
         self.overlay = {}     # key -> (value, deadline): a change shown as made until the status shows it
         self.hardware, self.notice = {}, ""
         self.levels, self.notification = {}, ()
+        self.focus, self.focus_at = None, 0.0
 
     @property
     def screen(self):
@@ -1261,11 +1285,33 @@ class UI:
         self.message = ""
         if event not in EVENTS:
             raise ValueError(f"unknown event {event}")
+        self.focus_at = now
         return self.screen.handle(event, self, status, now) or []
 
     def render(self, status, now=0.0):
         """ROWS rows for the display."""
         rows = self.screen.rows(self, status, now)
+        focus = (id(self.screen), tuple(r.label for r in rows if r.selected))
+        if focus != self.focus:
+            self.focus, self.focus_at = focus, now
+        tick = int(max(0, now - self.focus_at) / 0.35)
+        polished = []
+        short = {'Profile readiness': 'Profile state', 'Session counters': 'Session', 'Machine & buffers': 'Machine',
+                 'Recent events': 'Events', 'Inputs status': 'Inputs', 'Outputs status': 'Outputs'}
+        for n, row in enumerate(rows):
+            if n == 0 and row.icon:
+                title = row.label or row.text.rstrip()
+                row = replace(row, label=short.get(title, title))
+            width = 19 if n == 0 else 18 if row.icon else 20
+            if n == 0 and row.scroll:
+                top, total, visible = row.scroll
+                width = (127 - len(f'{min(top + visible, total)}/{total}') * 6 - 13) // 6
+            elif row.badge:
+                width = (127 - len(row.badge) * 6 - 14) // 6
+            if row.label and len(row.label) > width and (n == 0 or row.selected):
+                row = replace(row, tick=tick)
+            polished.append(row)
+        rows = polished
         rows = rows[:ROWS - 1]
         rows += [Row(fit(""))] * (ROWS - 1 - len(rows))
         if self.message or self.notice:

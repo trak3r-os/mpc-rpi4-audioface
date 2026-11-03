@@ -148,3 +148,45 @@ def test_rows_fill_the_display_and_an_inverse_row_is_a_bar():
     assert display.ROWS * font5x7.CELL_H == sh1106.HEIGHT
     # the title is dark text on the bar: the T's first column has only its top pixel set
     assert not c.get(render.MARGIN, 0) and c.get(render.MARGIN, 3)
+
+
+def test_long_names_pause_then_scroll_without_covering_the_state(monkeypatch):
+    name = 'An unusually long output name'
+    assert render.text_window(name, 12, 0) == render.text_window(name, 12, 3)
+    assert render.text_window(name, 12, 8) != render.text_window(name, 12, 0)
+    assert any(render.text_window(name, 12, n).endswith('name') for n in range(80))
+    calls = []
+    original = render.draw_text
+
+    def record(canvas, x, y, text, on=True):
+        calls.append((x, y, text))
+        original(canvas, x, y, text, on)
+
+    monkeypatch.setattr(render, 'draw_text', record)
+    rows = [display.Row('Outputs', True, icon='device'),
+            display.Row('>name', True, True, label=name, badge='off', tick=8)]
+    render.draw_rows(sh1106.Canvas(), rows)
+    state = next(c for c in calls if c[2] == 'off')
+    text = next(c for c in calls if c[0] == 8 and c[1] == 8)
+    assert text[0] + len(text[2]) * 6 < state[0]
+
+
+def test_large_output_percentage_uses_two_rows_and_keeps_footer():
+    ui = display.UI()
+    ui.stack = [display.OutputLevel('local-dac', 75)]
+    rows = ui.render({'outputs': [{'identity': 'local-dac', 'name': 'pHAT DAC'}]})
+    assert rows[2].large == '75%' and rows[-1].footer
+    canvas = render.draw_rows(sh1106.Canvas(), rows)
+    assert any(canvas.get(x, y) for x in range(128) for y in range(24, 30))
+
+
+def test_static_menus_do_not_redraw_and_marquee_restarts_after_input():
+    ui = display.UI()
+    assert ui.render({}, 0) == ui.render({}, 10)
+    ui.stack = [display.Outputs()]
+    status = {'outputs': [{'identity': 'local-dac', 'name': 'A very long output device name', 'state': 'active'}]}
+    first = ui.render(status, 10)
+    assert first[1].badge == 'on' and first[1].tick == 0
+    assert ui.render(status, 13)[1].tick > 0
+    ui.handle('ccw', status, 14)
+    assert ui.render(status, 14)[1].tick == 0

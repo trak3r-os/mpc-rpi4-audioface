@@ -62,6 +62,10 @@ These indicators are hidden while the screensaver runs, so they do not leave fix
 
 A change to a level, a mute or a route shows as made at once and is confirmed when the service's status catches up (within a couple of seconds). A button that runs a command shows `working...` above the connection bar until it is done. Commands run in order in a worker so the encoder and navigation stay responsive. Only changed OLED pages are transferred, and input decoding uses the kernel's edge times so queued button releases are not mistaken for bounce.
 
+Output and endpoint lists put names first and align states on the right. Host-profile type, selection (`*`) and availability marks also sit on the right. Long selected names and titles pause for about 1.4 seconds, then scroll within their own space; state labels and the connection bar stay fixed. Short names remain static. Detail headers use shorter labels such as Session, Machine and Profile state when space is limited.
+
+The main output-level editor uses a double-size percentage above its bar. Turn to adjust, press to save, or BACK to cancel. The destination name remains visible above the value.
+
 The source-first workflow is implemented: Send audio and MIDI choose a sender, then destinations. Outputs controls each adapter and Audio mode. Scenes offers explicit Load and Save here actions; PUSH and CONFIRM do the same thing. See the [illustrated manual](MANUAL.md) and [output implementation](OUTPUTS.md).
 
 ## Wiring (a 9-pin encoder board with an I2C OLED, and a Pimoroni pHAT DAC)

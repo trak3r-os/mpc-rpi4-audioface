@@ -447,8 +447,8 @@ def test_host_row_lists_profiles_and_confirms_a_change():
     u = display.UI()
     press(u, st, 'cw', 'push', 'cw', 'push')
     assert text(u, st)[0].strip() == 'Host profiles'
-    assert [line.lstrip('> ').rstrip() for line in text(u, st)[1:4]] == [
-        '*[R] default', '[R] akai-force', '[R] generic']
+    assert [(r.label, r.badge) for r in u.render(st)[1:4]] == [
+        ('default', 'R*'), ('akai-force', 'R'), ('generic', 'R')]
     press(u, st, 'cw', 'push')
     assert press(u, st, 'push') == []
     assert text(u, st)[0].strip() == 'Use host profile?'

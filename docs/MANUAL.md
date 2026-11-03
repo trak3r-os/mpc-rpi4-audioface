@@ -84,6 +84,8 @@ The service starts on **Overview**. Turn or press the encoder to open the menu. 
 
 If the screen was asleep or showing its screensaver, the **first touch only wakes it**. Use the next touch to navigate. Long lists scroll as you turn; their header shows the visible position. Returning keeps the previous selection.
 
+Output names appear before their right-aligned states. Long selected names and titles start scrolling after a short pause; `..` indicates a shortened name. Main output-level edits show a large percentage above the bar. Some detail headers are shortened to Session, Machine or Profile state to keep the page position readable. Host-profile type/selection marks appear at the right of the name.
+
 Pressing the encoder and CONFIRM always perform the same selection. Scenes offer visible **Load** and **Save here...** actions; saving asks before replacing a slot.
 
 If CONFIRM does not respond, check the button and its wiring. The current default is GPIO 5; older notes using GPIO 23 describe an earlier wiring arrangement.
