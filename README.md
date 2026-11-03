@@ -31,20 +31,7 @@ Host profiles can save reservations only, an independent full setup including na
 
 Profiles now report Ready/Partial/Error with missing-resource details. Outputs offers independent software levels for pHAT, USB-host send, RTP and Link Audio. Status includes session-wide counters and a bounded event history collected while the OLED sleeps, retained across service restarts during the same boot.
 
-```mermaid
-flowchart LR
-    subgraph gear["Your USB gear"]
-        gp["Guitar processor"]
-        mix["Mixer or sound card"]
-        kb["MIDI keyboard"]
-    end
-    pi["Raspberry Pi 4<br/>running rpi-audio"]
-    host["Host<br/>Akai Force, laptop, ..."]
-    gp -- "audio + MIDI" --> pi
-    mix -- "audio" --> pi
-    kb -- "MIDI" --> pi
-    pi <-->|"USB-C: one audio interface<br/>26 in × 26 out + 4 MIDI ports"| host
-```
+![USB audio and MIDI devices connect to a Pi 4, which presents one 26×26 audio interface and four MIDI cables to the host](docs/img/readme-overview.png)
 
 It was built for the Akai Force, which can use only one USB audio interface at a time. Nothing in it is tied to the Force: any host that supports USB Audio Class 2 should work. It has been tested with a Linux laptop and an Akai Force. Anything specific to one host lives in `docs/hosts/` and `tools/hosts/`.
 
@@ -66,25 +53,7 @@ It was built for the Akai Force, which can use only one USB audio interface at a
 
 The diagram and clock description below show the original **USB host clock** mode. In **Hub**, JACK instead runs continuously on the local DAC at 48 kHz; separate USB bridges follow the host's rates, and local, USB and network destinations can run together. **Standalone** uses the local clock without the USB audio bridge. See the [mode comparison](docs/MANUAL.md#1-what-the-box-does).
 
-```mermaid
-flowchart LR
-    host["Host"]
-    subgraph pi["Raspberry Pi 4"]
-        gadget["USB gadget<br/>UAC2 audio + USB MIDI"]
-        jack["JACK<br/>runs on the host's clock"]
-        b1["zita bridge<br/>48 → 44.1 kHz"]
-        b2["zita bridge<br/>48 → 44.1 kHz"]
-        ctl["rpi-audiod<br/>commands, levels, presets"]
-        gadget <-->|"26 × 26 channels"| jack
-        jack <--> b1
-        jack <--> b2
-        gadget <-->|"MIDI cable 1<br/>control"| ctl
-    end
-    host <-->|"USB-C"| gadget
-    b1 <-->|"IN 3-8, OUT 5-8"| gp["Guitar processor"]
-    b2 <-->|"IN 1-2, OUT 3-4"| mix["Mixer"]
-    gadget <-->|"MIDI cable 2"| gp
-```
+![In host-clock mode, the USB gadget feeds JACK and separate resampling bridges for each audio device; MIDI control reaches rpi-audiod separately](docs/img/readme-architecture.png)
 
 1. **The USB gadget.** The Pi 4's USB-C port can act as a USB *device*. `gadget/` sets up a standard USB Audio Class 2 function and a USB MIDI function through configfs, so the host uses its built-in drivers.
 2. **One clock.** JACK runs on the gadget, so the Pi follows the host's sample clock. Each USB device has its own clock, and often its own rate (48 kHz is common). For each device, `rpi-audiod` starts a pair of zita-ajbridge bridges that resample on the fly to keep it in step.
@@ -93,17 +62,7 @@ flowchart LR
 
 The control port is how a host, or the panel shown above, talks to the Pi:
 
-```mermaid
-sequenceDiagram
-    participant H as Host (e.g. rpi-audio Panel in MPC)
-    participant D as rpi-audiod on the Pi
-    H->>D: SysEx "status"
-    D-->>H: devices, channels, levels, presets
-    H->>D: SysEx "mute GP150 in on"
-    D-->>H: "ok"
-    H->>D: CC 32+N on channel 16 (level of the device on IN channel N)
-    H->>D: Program Change 1 on channel 16 (load preset 2)
-```
+![USB MIDI control sequence: request status, receive devices and levels, mute a device, set its level by CC, and load scene 2 with Program Change 1](docs/img/readme-midi-control.png)
 
 The full protocol is in [docs/MIDI.md](docs/MIDI.md).
 
@@ -293,6 +252,8 @@ To remove it: `ssh root@force.local sh /data/mpc-addins/rpi-audio-internal-io/un
 - MPC Remote, a tool for driving MPC from a laptop, is described in `docs/hosts/akai-force-remote.md`. It is test tooling, and you do not need it.
 
 ## Development
+
+README diagrams are checked-in PNG images so they display without Mermaid support. Regenerate them with `python3 tools/build-readme-diagrams.py` (Pillow and DejaVu Sans fonts; no Pi or network access needed).
 
 Rebuild the guide's HTML and example images with `python3 tools/build-manual.py` (development dependencies: Pillow and Markdown, plus DejaVu Sans fonts). It uses the current OLED renderer and needs no Pi or network access. The generated files in `docs/manual/` are included so readers do not need those packages. HTML embeds its images for a single-file offline guide; Markdown uses the checked-in PNGs. To serve this on GitHub Pages, use `docs` as the published directory and open `/manual/`; Pages hosting is not enabled by this repository change.
 
