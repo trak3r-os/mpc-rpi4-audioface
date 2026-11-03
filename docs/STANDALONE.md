@@ -2,7 +2,9 @@
 
 With no host on the Pi's USB-C port, rpi-audio can still be a hub: the USB audio devices on its USB-A ports (a mixer, a guitar processor, a tracker...) are bridged to JACK, and a local card, such as a pHAT DAC, is one more destination. What goes where is the same device-to-device routing as in host mode (`route SRC DST`, `docs/MIDI.md`), set from the command line or the display (`docs/DISPLAY.md`).
 
-Host mode is the default and is unchanged. Standalone is chosen in the settings, not switched while running.
+Host mode is the default and is unchanged. Choose Standalone in Outputs → Audio mode or with `sudo rpi-audiod engine standalone`; changing modes pauses audio.
+
+For simultaneous pHAT+host USB and network output, choose the new [Hub mode](OUTPUTS.md). The original Standalone profile remains available for local operation. Start with the [illustrated English user guide](MANUAL.md).
 
 ## Turning it on
 
@@ -10,7 +12,7 @@ Host mode is the default and is unchanged. Standalone is chosen in the settings,
 tools/deploy.sh --enable --hat --host standalone     # or, on the Pi: sudo ./install.sh --hat --host standalone
 ```
 
-`--hat` sets up the pHAT DAC and the display (`dtoverlay=hifiberry-dac`, I2C; they take effect after a reboot). `--host standalone` installs `/etc/rpi-audio/rpi-audio.d/standalone.toml`, which holds one line, `mode = "standalone"` under `[engine]`. To go back to a host, remove that file and restart `rpi-audiod`. Both modes can use the same Pi: the saved gadget channels (`slots.json`) are never touched in standalone.
+`--hat` sets up the pHAT DAC and the display (`dtoverlay=hifiberry-dac`, I2C; they take effect after a reboot). `--host standalone` installs `/etc/rpi-audio/rpi-audio.d/standalone.toml`, which holds one line, `mode = "standalone"` under `[engine]`. To go back to a host, use `sudo rpi-audiod engine host`. A saved mode overrides configuration files; the OLED offers the same selection. Both modes can use the same Pi: the saved gadget channels (`slots.json`) are never touched in standalone.
 
 The `[standalone]` table of `rpi-audio.toml` names the card and its format (`card`, `channels`, `rate`, `period`, `periods`) and what the card is called in routes (`identity = "local-dac"`, `name = "pHAT DAC"`).
 
@@ -27,4 +29,4 @@ The `[standalone]` table of `rpi-audio.toml` names the card and its format (`car
 
 ## Power
 
-The Pi's USB-C port is then its power input. The USB-A ports share what the supply gives them (1.2 A in total on a Pi 4 unless the supply is rated for more and `usb_max_current_enable` is set): a device that takes power from the Pi counts against that.
+The Pi's USB-C port is then its power input. The Pi 4's USB-A ports have a combined peripheral-current limit of 1.2 A; a larger supply does not remove that limit. `usb_max_current_enable` is a setting for later Pi models, not a Pi 4 upgrade. A device powered from the Pi counts against the shared budget. See the [official Raspberry Pi power documentation](https://www.raspberrypi.com/documentation/computers/raspberry-pi.html#power-supply).

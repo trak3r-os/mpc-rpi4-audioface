@@ -12,6 +12,7 @@ import time
 from dataclasses import dataclass, field
 
 import inputs
+import notices
 import render
 import sh1106
 import ui
@@ -20,7 +21,7 @@ STATUS_S = 0.5       # how often the service's status is read
 STALE_S = 10.0       # a status file older than this is not rpi-audiod's any more (it writes one every 2 s)
 RETRY_S = 5.0        # between tries to reach the display
 NO_SERVICE = "no rpi-audiod status"
-WORKING = "working..."   # on the last row while a command runs (each takes ~0.7 s on a Pi 4)
+WORKING = "working..."   # on the last row while a command runs
 
 
 @dataclass
@@ -41,7 +42,7 @@ KINDS = {"bus": int, "address": int, "contrast": int, "flip": bool, "invert_enco
 RANGES = {"bus": (0, 99), "address": (0x03, 0x77), "contrast": (0, 255), "idle_s": (0, 86400),
           "saver_s": (0, 86400)}
 CHOICES = {"saver_style": ui.SAVER_STYLES}
-# What the Settings screen can change (ui.PREFS), and the part of a display's picture it dims while the screensaver runs.
+# What the Settings screen can change (ui.PREFS), and the contrast used while the screensaver runs.
 PREF_KEYS = tuple(ui.PREFS)
 SAVER_CONTRAST = 0x08
 
@@ -92,21 +93,28 @@ def read_status(path):
 
 class App:
     def __init__(self, reader, make_display, load_status, run_command, settings=None, log=print,
-                 save_prefs=None, clock=time.localtime):
-        """reader: GpioReader-like (read(timeout) -> [(line, level)]); make_display(): a sh1106.Display or raises
+                 save_prefs=None, clock=time.localtime, submit_command=None, load_hardware=None,
+                 load_levels=None, start_overview=False):
+        """reader: read(timeout) -> [(line, level, monotonic_s)] (pairs also accepted for simple readers);
+        make_display(): a sh1106.Display or raises
         OSError; load_status(): dict or None; run_command(text): "" when it worked, else the error text;
-        save_prefs(dict): keeps what the Settings screen changed; clock(): the wall time for the screensaver."""
+        save_prefs(dict): keeps what the Settings screen changed; clock(): the wall time for the screensaver;
+        submit_command(text): optional Future-returning runner, serialised by the caller;
+        load_hardware(now): optional nonblocking reader of the latest hardware snapshot."""
         self.cfg = settings or Settings()
         self.save_prefs, self.clock = save_prefs, clock
         self.reader, self.make_display = reader, make_display
         self.load_status, self.run_command, self.log = load_status, run_command, log
         self.panel = inputs.Panel(invert=self.cfg.invert_encoder)
-        self.ui = ui.UI(self.prefs())
+        self.ui = ui.UI(self.prefs(), overview=start_overview)
         self.canvas = sh1106.Canvas()
         self.status, self.last_rows = {}, None
         self.display, self.retry_at, self.said_down = None, 0.0, False
         self.blank, self.last_input, self.next_status = False, 0.0, 0.0
         self.saving = False   # the screensaver is up
+        self.submit_command, self.pending, self.revision = submit_command, [], 0
+        self.load_hardware = load_hardware
+        self.load_levels, self.notifier = load_levels, notices.Notifier()
 
     def start(self, now):
         """Takes the lines' levels as the starting point; call once before step()."""
@@ -114,12 +122,31 @@ class App:
         self.last_input = now
 
     def step(self, now, timeout=0.05):
-        for name, level in self.reader.read(timeout):
-            for event in self.panel.edge(name, level, now):
+        edges = self.reader.read(timeout)
+        self.poll_commands()
+        for name, level, *stamp in edges:
+            for event in self.panel.edge(name, level, stamp[0] if stamp else now):
                 self.press(event, now)
         if now >= self.next_status:
             self.status = self.load_status() or {}
             self.next_status = now + STATUS_S
+        if self.load_hardware:
+            self.ui.hardware = self.load_hardware(now)
+        self.ui.notification = self.notifier.read(self.status, self.ui.hardware, now)
+        if self.notifier.changed:
+            if not self.pending:
+                self.ui.message = ""
+            if self.blank or self.saving:
+                self.wake(self.blank)
+            self.last_input = now
+        if self.load_levels:
+            monitoring = isinstance(self.ui.screen, (ui.IOStatus, ui.EndpointStatus, ui.MachineInfo))
+            status_saver = self.saving and self.cfg.saver_style == 'status'
+            visible = (isinstance(self.ui.screen, ui.Overview) or monitoring or status_saver) and not self.blank
+            visible = visible and (not self.saving or status_saver)
+            meter_status = {**self.status, '_meter_detail': True} if isinstance(
+                self.ui.screen, (ui.IOStatus, ui.EndpointStatus)) and not self.saving else self.status
+            self.ui.levels = self.load_levels(meter_status, now, visible)
         self.draw(now)
 
     def prefs(self):
@@ -155,26 +182,51 @@ class App:
         return low <= value <= high
 
     def press(self, event, now):
+        self.notifier.dismiss()
+        self.ui.notification = ()
+        self.revision += 1
         self.last_input = now
         if self.blank or self.saving:   # the first touch only wakes the display
             self.wake(self.blank)
             return
         commands = self.ui.handle(event, self.status, now)
         remote = [c for c in commands if not c.startswith("ui ")]
-        if remote:   # the loop is stuck in run_command: show that something is happening before it starts
+        if remote:
             done, self.ui.message = self.ui.message, WORKING
-            self.draw(now)
+            if self.submit_command is None:
+                self.draw(now)
         for command in commands:
             if command.startswith("ui "):
                 _, key, value = command.split()
                 error = self.set_pref(key, value)
+            elif self.submit_command is not None:
+                future = self.submit_command(command)
+                self.pending.append((command, future, done, self.revision))
+                continue
             else:
                 error = self.run_command(command)
             if error:
                 self.log(f"rpi-audio-ui: {command}: {error}")
                 self.ui.message = error[:ui.COLS]
-        if remote and self.ui.message == WORKING:
+        if remote and self.submit_command is None and self.ui.message == WORKING:
             self.ui.message = done
+
+    def poll_commands(self):
+        """Collect results without holding up input; an older result must not overwrite a newer screen."""
+        waiting = []
+        for command, future, message, revision in self.pending:
+            if not future.done():
+                waiting.append((command, future, message, revision))
+                continue
+            try:
+                error = future.result()
+            except Exception as e:
+                error = str(e) or "failed"
+            if error:
+                self.log(f"rpi-audio-ui: {command}: {error}")
+            if revision == self.revision:
+                self.ui.message = error[:ui.COLS] if error else message
+        self.pending = waiting
 
     def wake(self, dark):
         """Back from the screensaver or from dark: the display at its own contrast, and the screen drawn again."""
@@ -210,11 +262,10 @@ class App:
                 self.saving = self.safe(lambda: self.display.contrast(SAVER_CONTRAST))
                 if self.display is None:
                     return
-            rows = ui.saver_rows(self.cfg.saver_style, now, self.clock())
+            rows = ui.saver_rows(self.cfg.saver_style, now, self.clock(), self.status, self.ui.hardware, self.ui.levels)
         else:
+            self.ui.notice = "" if self.status else NO_SERVICE
             rows = self.ui.render(self.status, now)
-            if not self.status:
-                rows[-1] = ui.Row(ui.fit(NO_SERVICE), True)
         if rows != self.last_rows:
             if self.safe(lambda: self.display.show(render.draw_rows(self.canvas, rows))):
                 self.last_rows = rows

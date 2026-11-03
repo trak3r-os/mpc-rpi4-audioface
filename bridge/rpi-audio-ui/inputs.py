@@ -85,14 +85,15 @@ class Panel:
 
 
 class GpioReader:
-    """Edges of the panel's lines from libgpiod 2.x: read() waits up to `timeout` s and gives [(name, level)]."""
+    """Edges from libgpiod 2.x: read() gives [(name, level, monotonic_s)], using the kernel's edge times."""
 
     def __init__(self, pins=None, chip="/dev/gpiochip0"):
         import gpiod
-        from gpiod.line import Bias, Direction, Edge
+        from gpiod.line import Bias, Clock, Direction, Edge
         self.gpiod, self.pins = gpiod, pins or PINS
         self.names = {pin: name for name, pin in self.pins.items()}
-        settings = gpiod.LineSettings(direction=Direction.INPUT, bias=Bias.PULL_UP, edge_detection=Edge.BOTH)
+        settings = gpiod.LineSettings(direction=Direction.INPUT, bias=Bias.PULL_UP, edge_detection=Edge.BOTH,
+                                      event_clock=Clock.MONOTONIC)
         self.request = gpiod.request_lines(chip, consumer="rpi-audio-ui",
                                            config={pin: settings for pin in self.pins.values()})
         self.rising = self.gpiod.EdgeEvent.Type.RISING_EDGE
@@ -105,7 +106,8 @@ class GpioReader:
     def read(self, timeout):
         if not self.request.wait_edge_events(timedelta(seconds=timeout)):
             return []
-        return [(self.names[e.line_offset], int(e.event_type == self.rising)) for e in self.request.read_edge_events()]
+        return [(self.names[e.line_offset], int(e.event_type == self.rising), e.timestamp_ns / 1e9)
+                for e in self.request.read_edge_events()]
 
     def close(self):
         self.request.release()

@@ -11,6 +11,9 @@ User=rpi-audio
 Group=audio
 # /dev/gpiochip0 is root:gpio and /dev/i2c-N root:i2c.
 SupplementaryGroups=gpio i2c
+# The native, passive meter uses a JACK realtime thread; the Python/GPIO loop stays normal priority.
+LimitRTPRIO=95
+LimitMEMLOCK=infinity
 # /var/lib/rpi-audio-ui: what the Settings screen keeps (settings.json).
 StateDirectory=rpi-audio-ui
 

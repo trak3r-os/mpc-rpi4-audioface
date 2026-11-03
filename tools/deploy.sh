@@ -3,7 +3,7 @@
 #
 # Copy rpi-audio to the Pi and install it. Idempotent: run it after every change.
 #
-#   PI_HOST=no3z@192.168.1.106 tools/deploy.sh [--enable] [--host NAME] [--hat]
+#   PI_HOST=no3z@192.168.1.106 tools/deploy.sh [--enable] [--host NAME] [--hat] [--network]
 #
 # --enable also enables rpi-audio-gadget.service and rpi-audiod.service at boot
 # (and disables rpi-audio-keepalive.service, which rpi-audiod replaces). Without
@@ -24,13 +24,14 @@ set -euo pipefail
 host="${PI_HOST:-no3z@192.168.1.106}"
 root="$(cd "$(dirname "$0")/.." && pwd)"
 stage=rpi-audio-stage
-enable=0 hat=0 hostconf=
+enable=0 hat=0 network=0 hostconf=
 while (($#)); do
   case $1 in
     --enable) enable=1 ;;
     --hat) hat=1 ;;
+    --network) network=1 ;;
     --host) hostconf=${2:?--host needs a name}; shift ;;
-    *) echo "usage: $0 [--enable] [--host NAME] [--hat]" >&2; exit 2 ;;
+    *) echo "usage: $0 [--enable] [--host NAME] [--hat] [--network]" >&2; exit 2 ;;
   esac
   shift
 done
@@ -53,6 +54,7 @@ rsync -a --delete "$root/gadget" "$root/systemd" "$root/config" "$root/tools" "$
 args=(--force-config -y)
 ((enable)) || args+=(--no-enable)
 ((hat)) && args+=(--hat)
+((network)) && args+=(--network)
 [[ -z $hostconf ]] || args+=(--host "$hostconf")
 # install.sh does the work on the Pi; RPI_AUDIO_TAG keeps its messages prefixed "deploy:". The copy has no .git, so
 # the commit goes along for the version.

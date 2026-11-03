@@ -108,6 +108,7 @@ class World:
         monkeypatch.setattr(daemon, "run", self.run)
         monkeypatch.setattr(daemon, "read", lambda path: self.files.get(str(path), ""))
         monkeypatch.setattr(daemon, "Child", self.spawn)
+        monkeypatch.setattr(daemon.sdpserver, "Server", lambda *a: types.SimpleNamespace(close=lambda: None))
         monkeypatch.setattr(daemon, "udc_state", lambda: self.udc)
         monkeypatch.setattr(daemon, "scan", self.scan)
         monkeypatch.setattr(daemon, "time", types.SimpleNamespace(
@@ -142,8 +143,10 @@ class World:
     def ports(self):
         ports = {f"system:{kind}_{k}" for kind in ("capture", "playback") for k in range(1, 9)}
         for c in self.live():
-            if c.name.endswith(("_in", "_out")):
-                ports |= {f"{c.name}:{kind}_{k}" for kind in ("capture", "playback") for k in range(1, 9)}
+            name = c.cmd[c.cmd.index("--client") + 1] if "--client" in c.cmd else \
+                c.cmd[c.cmd.index("-j") + 1] if "-j" in c.cmd else c.name
+            if name.endswith(("_in", "_out")):
+                ports |= {f"{name}:{kind}_{k}" for kind in ("capture", "playback") for k in range(1, 27)}
         return ports
 
     def called(self, *prefix):
@@ -825,7 +828,7 @@ def test_standalone_waits_instead_of_playing_silence_when_jackd_keeps_failing(mo
 
 def test_host_mode_is_what_an_unknown_mode_means(monkeypatch, tmp_path):
     w, d = make(monkeypatch, tmp_path, engine={"mode": "stand-alone"})
-    assert not d.standalone and logged(w, "mode 'stand-alone' is not host or standalone; using host")
+    assert not d.standalone and logged(w, "mode 'stand-alone' is not host, standalone or hub; using host")
     assert "standalone" not in d.status_data() and d.card == CARD
 
 
@@ -1460,3 +1463,110 @@ def test_replies_fall_back_to_aplaymidi(monkeypatch, tmp_path):
     m.send("ok")
     m.send_one(*m.replies.get_nowait())
     assert len(ran) == 2 and logged(w, "goes through aplaymidi")
+
+
+def test_hub_keeps_local_clock_running_when_host_leaves(monkeypatch, tmp_path):
+    w, d = make(monkeypatch, tmp_path, channels=26, engine={"mode": "hub"})
+    w.devices = [usb_device(2, 'Keys')]
+    w.seconds(1.2)
+    clock = d.jackd
+    assert d.jack_ready and d.rate == 48000 and d.usb_channels == 26 and d.channels == 2
+    assert not d.output_workers and w.live('keys_in')
+    daemon.cmd_change('route usb-Keys local-dac')
+    w.seconds(1.2)
+    assert frozenset(('keys_in:capture_1', 'system:playback_1')) in w.connections
+    w.rates = (44100, 48000)
+    w.seconds(1.2)
+    assert d.output_workers['usb-send'].cmd[d.output_workers['usb-send'].cmd.index('-r') + 1] == '44100'
+    assert d.output_workers['usb-receive'].cmd[d.output_workers['usb-receive'].cmd.index('-r') + 1] == '48000'
+    w.rates = (0, 0)
+    w.seconds(1.2)
+    assert d.jackd is clock and clock.alive() and not d.output_workers
+    assert frozenset(('keys_in:capture_1', 'system:playback_1')) in w.connections
+
+
+def test_network_output_toggles_and_failures_do_not_restart_other_outputs(monkeypatch, tmp_path):
+    w, d = make(monkeypatch, tmp_path, engine={"mode": "hub"})
+    w.rates = (48000, 48000)
+    w.seconds(1.2)
+    clock, usb = d.jackd, dict(d.output_workers)
+    daemon.cmd_change('output network-rtp on')
+    daemon.cmd_change('output network-link on')
+    w.seconds(1.2)
+    assert set(d.output_workers) == {'usb-send', 'usb-receive', 'network-rtp', 'network-link'}
+    rtp = d.output_workers['network-rtp']
+    rtp.on_line('{"event":"status","state":"sending","packets":100}')
+    assert next(o for o in d.output_status() if o['identity'] == 'network-rtp')['state'] == 'sending'
+    rtp.on_line('{"event":"status","state":"error","error":"test failure"}')
+    rtp.die()
+    w.seconds(1)
+    assert next(o for o in d.output_status() if o['identity'] == 'network-rtp')['state'] == 'error'
+    assert d.jackd is clock and d.output_workers['usb-send'] is usb['usb-send']
+    daemon.cmd_change('output network-link off')
+    w.seconds(1.2)
+    assert 'network-link' not in d.output_workers and d.output_workers['usb-send'].alive()
+    assert next(o for o in d.output_status() if o['identity'] == 'network-link')['state'] == 'disabled'
+
+
+def test_bad_network_config_leaves_hub_and_usb_working(monkeypatch, tmp_path):
+    w, d = make(monkeypatch, tmp_path, engine={"mode": "hub"}, network={'address': 'bad'})
+    daemon.cmd_change('output network-rtp on')
+    w.rates = (48000, 0)
+    w.seconds(1.2)
+    assert d.jack_ready and d.output_workers['usb-send'].alive()
+    assert 'network-rtp' not in d.output_workers
+    assert next(o for o in d.output_status() if o['identity'] == 'network-rtp')['state'] == 'error'
+
+
+def test_mode_change_requests_clean_engine_reconstruction(monkeypatch, tmp_path):
+    w, d = make(monkeypatch, tmp_path)
+    d.take_state({'engine_mode': 'hub'})
+    assert d.restart_requested and d.stopping
+    assert daemon.load_config()['engine'].get('mode', 'host') == 'host'  # no change was saved by take_state
+    daemon.cmd_change('engine hub')
+    assert daemon.load_config()['engine']['mode'] == 'hub'
+
+
+def test_sdp_bind_failure_does_not_delay_usb_or_audio(monkeypatch, tmp_path):
+    def fail(*_):
+        raise OSError('port busy')
+    w, d = make(monkeypatch, tmp_path, engine={'mode': 'hub'})
+    monkeypatch.setattr(daemon.sdpserver, 'Server', fail)
+    w.seconds(1.2)
+    clock = d.jackd
+    assert d.sdp_error == 'port busy' and d.jack_ready
+    w.rates = (44100, 0)
+    w.seconds(0.6)
+    assert d.output_workers['usb-send'].alive() and d.jackd is clock
+
+
+def test_old_scene_mappings_are_migrated_when_loaded_into_a_running_hub(monkeypatch, tmp_path):
+    w, d = make(monkeypatch, tmp_path, engine={'mode': 'hub'})
+    w.seconds(1)
+    # Scene written by the pre-Hub service, with no migration marker or explicit USB routes.
+    daemon.update_slots(lambda state: {'in': {'usb-Keys': 3}, 'in_channels': {'usb-Keys': 2}})
+    w.seconds(1)
+    assert any(r.src == 'usb-Keys' and r.dst == 'usb-host' and r.dst_pair == 2 for r in d.routes)
+    daemon.cmd_change('unroute usb-Keys usb-host')
+    w.seconds(1)
+    assert not d.routes
+
+
+def test_canonical_dac_switch_also_mutes_a_custom_sink_identity(monkeypatch, tmp_path):
+    w, d = make(monkeypatch, tmp_path, engine={'mode': 'hub'}, standalone={'identity': 'my-dac', 'name': 'Custom DAC'})
+    d.take_state({'outputs': {'local-dac': False}})
+    assert 'my-dac' in d.muted[OUT]
+    output = d.output_status()[0]
+    assert output['identity'] == 'local-dac' and output['name'] == 'Custom DAC' and output['state'] == 'disabled'
+
+
+def test_usb_output_switch_also_cuts_legacy_host_sends_but_keeps_return(monkeypatch, tmp_path):
+    w, d = bring_up(monkeypatch, tmp_path, usb_device(2, 'Keys'))
+    w.seconds(1.2)
+    clock = d.jackd
+    sends = {frozenset(pair) for pair in d.bridges[('usb-Keys', IN)].routes()}
+    returns = {frozenset(pair) for pair in d.bridges[('usb-Keys', OUT)].routes()}
+    assert sends <= w.connections and returns <= w.connections
+    daemon.cmd_change('output usb-host off')
+    w.seconds(1.2)
+    assert not sends & w.connections and returns <= w.connections and d.jackd is clock

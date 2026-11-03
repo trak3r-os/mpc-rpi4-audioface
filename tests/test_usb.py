@@ -192,6 +192,9 @@ def bridges(monkeypatch, *specs):
     logs = []
     monkeypatch.setattr(daemon, "log", logs.append)
     d = daemon.Daemon.__new__(daemon.Daemon)
+    d.hub, d.usb_channels, d.sink, d.cfg, d.usb_card = False, 26, {}, {}, "UAC2Gadget"
+    d.output_state, d.output_workers, d.output_metrics = {}, {}, {}
+    d.network, d.network_error, d.sdp_error = daemon.outputs.network({}), "", ""
     d.bridges = {}
     for name, bus, load in specs:
         dev = daemon.Device(1, name, "001/002", "usb-" + name, {IN: (48000, 2), OUT: None}, bus=bus,
@@ -294,6 +297,9 @@ def stateful(monkeypatch, tmp_path):
 def command_daemon(monkeypatch, tmp_path):
     stateful(monkeypatch, tmp_path)
     d = daemon.Daemon.__new__(daemon.Daemon)
+    d.hub, d.usb_channels, d.sink, d.cfg, d.usb_card = False, 26, {}, {}, "UAC2Gadget"
+    d.output_state, d.output_workers, d.output_metrics = {}, {}, {}
+    d.network, d.network_error, d.sdp_error = daemon.outputs.network({}), "", ""
     d.bridges, d.devices, d.rates, d.mode, d.jack_ready, d.channels, d.midi = {}, {}, (0, 0), None, False, 26, None
     d.muted, d.volumes, d.route_state, d.standalone, d.midi_state = {IN: set(), OUT: set()}, {}, {}, False, {}
     return d
@@ -409,8 +415,13 @@ def test_status_names(monkeypatch, tmp_path):
     assert d.status_data()["devices"][0]["name"] == "Dev"
 
 
-def test_status_with_everything_named_fits_one_sysex(monkeypatch, tmp_path):
+@pytest.mark.parametrize("hub", [False, True])
+def test_status_with_everything_named_fits_one_sysex(monkeypatch, tmp_path, hub):
     d = command_daemon(monkeypatch, tmp_path)
+    if hub:
+        d.hub, d.rate = True, 48000
+        d.sink = {**daemon.STANDALONE}
+        d.midi_ports = []
     d.midi = types.SimpleNamespace(status=lambda: {
         "card": "MIDIGadget", "client": 40, "ports": 4, "control_port": 1, "host_connected": True,
         "listening": True,

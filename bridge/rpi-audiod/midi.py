@@ -10,6 +10,7 @@ from dataclasses import dataclass
 
 import midiroute
 import presets
+import outputs
 import routing
 from audiod import IN, OUT, allocate
 
@@ -17,6 +18,8 @@ SYSEX_HEAD = bytes((0xF0, 0x7D, 0x52, 0x41))  # non-commercial id 7D, then "RA":
 REPLY_HEAD = bytes((0xF0, 0x7D, 0x52, 0x42))  # "RB": a reply, never taken for a command when echoed
 SYSEX_END = 0xF7
 USAGE = {
+    "output": "output local-dac|usb-host|network-rtp|network-link on|off",
+    "engine": "engine host|standalone|hub",
     "ping": "ping",
     "status": "status",
     "assign": "assign IDENTITY [in=N] [out=N] [midi=K]",
@@ -31,7 +34,7 @@ USAGE = {
 }
 STATUS_LIMIT = 4000   # bytes the status reply may take (docs/MIDI.md)
 # Dropped from the reply, one stage at a time, until it fits: (device keys, direction keys)
-STATUS_TRIM = (((), ("fs_load",)), (("usbbus",), ()), ((), ("client",)), (("card",), ()))
+STATUS_TRIM = (((), ("fs_load",)), (("usbbus",), ()), ((), ("client",)), (("card",), ()), ((), ("rate", "running")))
 
 
 @dataclass(frozen=True)
@@ -256,6 +259,14 @@ def parse_command(text):
         return parse_name(text, usage)
     if verb == "preset":
         return parse_preset(text, usage)
+    if verb == "engine":
+        if len(rest) != 1 or rest[0] not in ("host", "standalone", "hub"):
+            raise usage
+        return Command(verb, None, (("mode", rest[0]),))
+    if verb == "output":
+        if len(rest) != 2 or rest[0] not in outputs.IDS or rest[1] not in ("on", "off"):
+            raise usage
+        return Command(verb, rest[0], (("on", rest[1] == "on"),))
     if verb in ("midiroute", "midiunroute"):
         if len(rest) != 2:
             raise usage
@@ -301,6 +312,11 @@ def status_reply(data, limit=STATUS_LIMIT):
     if len(text.encode()) <= limit:
         return text
     data = copy.deepcopy(data)
+    data.pop("engine", None)
+    data.pop("bridge_buffer", None)
+    data.pop("outputs", None)  # adapter diagnostics stay in the full local status file
+    data.pop("time", None)
+    data["devices"] = [dev for dev in data.get("devices", []) if not dev.get("virtual")]
     for dev_keys, dir_keys in STATUS_TRIM:
         for dev in data.get("devices", []):
             for key in dev_keys:
@@ -358,7 +374,11 @@ def apply_command(state, cmd):
     modified. Audio settings are keyed by the device identity, MIDI cables by IDENTITY/P."""
     state = copy.deepcopy(state or {})
     device, port = split_endpoint(cmd.identity or "")
-    if cmd.verb == "midiroute":
+    if cmd.verb == "engine":
+        state["engine_mode"] = cmd.arg("mode")
+    elif cmd.verb == "output":
+        state.setdefault("outputs", {})[cmd.identity] = cmd.arg("on")
+    elif cmd.verb == "midiroute":
         midiroute.add(state, midiroute.Link(cmd.identity, cmd.arg("dst")))
     elif cmd.verb == "midiunroute":
         midiroute.remove(state, cmd.identity, cmd.arg("dst"))

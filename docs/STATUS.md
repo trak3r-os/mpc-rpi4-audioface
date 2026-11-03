@@ -1,4 +1,16 @@
-# Estado: 2026-10-30 (21:15)
+# Estado: 2026-11-03
+
+## Actualización del 3 de noviembre
+
+- Pi 4 accesible por Ethernet `192.168.1.106` y wifi `192.168.2.229`, conectado a `bender_5G`. Zona `Europe/Madrid` y reloj sincronizado por NTP.
+- OLED con Overview al arrancar, iconos, indicadores inferiores, listado de conexiones y mapas de canales/MIDI, avisos y medidores nativos de picos. Código instalado y UI activa sin rearranques observados en la última comprobación; el daemon de audio conserva PID 591. Sesión: [2026-11-03-oled-wifi.md](hw/2026-11-03-oled-wifi.md).
+- Verificación de las ampliaciones UI: 353 pruebas locales correctas, tres omitidas; dos de las omitidas son integración JACK nativa, ejecutadas y correctas por separado en la Pi con servidor dummy aislado y 52 taps. Confirmación visual y streaming con host físico pendientes para esta revisión.
+- La Pi permanece en el perfil de host, sin host USB adjunto en la última consulta. El pHAT se detecta, pero su disponibilidad como destino activo sigue dependiendo del modo autónomo.
+- [Manual ilustrado en inglés](MANUAL.md), [HTML](manual/index.html), [salidas y menús implementados](OUTPUTS.md) e [investigación de proyectos de red](NETWORK_RESEARCH.md). Modo Hub con DAC+USB+red, RTP/PCM con SDP por HTTP y Link Audio del SDK oficial. No se añaden módulos de kernel; recepción de red y AES67 completo quedan pendientes. Ver límites de pruebas físicas en OUTPUTS.md.
+
+El resto conserva las notas y resultados históricos, con sus fechas originales. La indicación antigua de wifi sin configurar queda sustituida por esta actualización.
+
+## Resumen histórico del 30 de octubre (21:15)
 
 **Fase:** F1 cumplida con la Force a 26×26 S16, **siempre que la Pi esté reproduciendo**. F2 en marcha:
 

@@ -6,7 +6,7 @@
 #   git clone https://github.com/trak3r-os/mpc-rpi4-audioface.git
 #   cd mpc-rpi4-audioface && sudo ./install.sh
 #
-#   sudo ./install.sh [--host NAME] [--no-enable] [--force-config] [--no-boot-config] [--tune-boot] [--hat] [-y]
+#   sudo ./install.sh [--host NAME] [--no-enable] [--force-config] [--no-boot-config] [--tune-boot] [--hat] [--network] [-y]
 #   sudo ./install.sh --uninstall [--purge]
 #
 #   --host NAME        also install tools/hosts/NAME.toml as /etc/rpi-audio/rpi-audio.d/NAME.toml
@@ -26,6 +26,7 @@
 #                      DAC), with a backup, and enable rpi-audio-ui.service (the OLED and its encoder; its
 #                      files are always installed, it only runs with this option). Never done without it;
 #                      the boot changes take effect after a reboot
+#   --network          build RTP/PCM and Ableton Link Audio output adapters (downloads a pinned Link SDK)
 #   -y                 answer yes to the question about the boot config (the gadget overlay)
 #   --uninstall        remove what this script installed; /etc/rpi-audio and /var/lib/rpi-audio stay
 #   --purge            with --uninstall: remove those two as well
@@ -65,7 +66,7 @@ warn() { echo "$tag: $*" >&2; }
 die() { warn "$*"; exit 1; }
 usage() {
   cat >&2 <<'EOF'
-usage: sudo ./install.sh [--host NAME] [--no-enable] [--force-config] [--no-boot-config] [--tune-boot] [--hat] [-y]
+usage: sudo ./install.sh [--host NAME] [--no-enable] [--force-config] [--no-boot-config] [--tune-boot] [--hat] [--network] [-y]
        sudo ./install.sh --uninstall [--purge]
 EOF
   exit 2
@@ -76,7 +77,7 @@ sysrun() { if ((staging)); then say "(test root) skipped: $*"; else "$@"; fi; }
 # Queries about units: nothing to ask under RPI_AUDIO_ROOT.
 unit_active() { ((! staging)) && systemctl is-active --quiet "$1.service"; }
 
-enable=1 force=0 bootcfg=1 tuneboot=0 hat=0 yes=0 uninstall=0 purge=0 hostconf=
+enable=1 force=0 bootcfg=1 tuneboot=0 hat=0 network=0 yes=0 uninstall=0 purge=0 hostconf=
 while (($#)); do
   case $1 in
     --host) hostconf=${2:?--host needs a name}; shift ;;
@@ -85,6 +86,7 @@ while (($#)); do
     --no-boot-config) bootcfg=0 ;;
     --tune-boot) tuneboot=1 ;;
     --hat) hat=1 ;;
+    --network) network=1 ;;
     -y|--yes) yes=1 ;;
     --uninstall) uninstall=1 ;;
     --purge) purge=1 ;;
@@ -97,7 +99,8 @@ if ((purge && !uninstall)); then warn "--purge only makes sense with --uninstall
 if ((uninstall)) && [[ -n $hostconf ]]; then warn "--host does not go with --uninstall"; usage; fi
 if ((tuneboot && !bootcfg)); then warn "--tune-boot does not go with --no-boot-config"; usage; fi
 if ((hat && !bootcfg)); then warn "--hat does not go with --no-boot-config"; usage; fi
-if ((hat)); then packages="$packages python3-smbus2 python3-libgpiod"; fi   # the OLED's I2C and the encoder's GPIO
+if ((hat)); then packages="$packages python3-smbus2 python3-libgpiod gcc libjack-jackd2-dev"; fi
+if ((network)); then packages="$packages g++ git libjack-jackd2-dev"; fi
 if [[ -n $hostconf ]]; then
   [[ $hostconf =~ ^[A-Za-z0-9._-]+$ ]] || die "invalid host name: $hostconf"
   [[ -f $here/tools/hosts/$hostconf.toml ]] || die "no tools/hosts/$hostconf.toml in this clone"
@@ -176,6 +179,8 @@ install_packages() {
 }
 if ((staging)); then say "(test root) skipped: packages and the rpi-audio user"; else install_packages; fi
 
+if ((network)) && ((!staging)); then bash "$here/tools/build-network.sh"; fi
+
 # --- Files ------------------------------------------------------------------
 
 install -d "$LIB" "$ETC" "$ETC/rpi-audio.d" "$ETC/devices.d" "$BIN" "$UNITDIR" \
@@ -184,12 +189,26 @@ install -m 755 "$here/gadget/rpi-audio-gadget" "$here/gadget/rpi-audio-keepalive
 install -m 755 "$here/tools/tonegen.py" "$here/bridge/rpi-audiod/rpi-audiod" "$LIB/"
 install -m 644 "$here/bridge/rpi-audiod/audiod.py" "$here/bridge/rpi-audiod/midi.py" \
   "$here/bridge/rpi-audiod/presets.py" "$here/bridge/rpi-audiod/routing.py" "$here/bridge/rpi-audiod/midiroute.py" \
-  "$here/bridge/rpi-audiod/usb.py" "$LIB/"
+  "$here/bridge/rpi-audiod/usb.py" "$here/bridge/rpi-audiod/outputs.py" \
+  "$here/bridge/rpi-audiod/sdpserver.py" "$LIB/"
 ln -sf /usr/local/lib/rpi-audio/rpi-audiod "$BIN/rpi-audiod"
 # The display service: its own folder, since its module names (ui, inputs, render...) are generic.
 install -d "$LIB/ui"
 install -m 755 "$here/bridge/rpi-audio-ui/rpi-audio-ui" "$LIB/ui/"
-install -m 644 "$here"/bridge/rpi-audio-ui/{font5x7,inputs,render,sh1106,ui,uiservice}.py "$LIB/ui/"
+install -m 644 "$here"/bridge/rpi-audio-ui/{font5x7,health,inputs,meters,notices,render,sh1106,telemetry,ui,uiservice}.py "$LIB/ui/"
+install -m 644 "$here/bridge/rpi-audio-ui/meter.c" "$LIB/ui/"
+if ((!staging)) && { ((hat)) || [[ -x $LIB/ui/rpi-audio-meter ]]; }; then
+  cc -O2 -std=c11 -Wall -Wextra -Werror "$here/bridge/rpi-audio-ui/meter.c" -ljack -lm -o "$LIB/ui/rpi-audio-meter.new"
+  chmod 755 "$LIB/ui/rpi-audio-meter.new"
+  mv -f "$LIB/ui/rpi-audio-meter.new" "$LIB/ui/rpi-audio-meter"
+fi
+install -d "$LIB/network"
+install -m 644 "$here/bridge/network/network.cpp" "$LIB/network/"
+if ((network)) && ((!staging)); then
+  install -m 755 "$here/out/network/rpi-audio-network" "$LIB/network/rpi-audio-network.new"
+  mv -f "$LIB/network/rpi-audio-network.new" "$LIB/network/rpi-audio-network"
+  install -m 644 "$here/out/network/"{capabilities.json,LICENSE.md,GNU-GPL-v2.0.md} "$LIB/network/"
+fi
 # The version, for `rpi-audiod --version`, `ping` and `status`: the release, then the commit when known
 # (deploy.sh passes it; a clone has its own).
 commit=${RPI_AUDIO_COMMIT:-$(git -c safe.directory="$here" -C "$here" describe --always --dirty 2>/dev/null || true)}

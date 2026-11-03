@@ -2,25 +2,48 @@
 
 A 128×64 OLED, a rotary encoder with a push button, and two more buttons control rpi-audio without a host: pick a preset, choose which device feeds which, mute, set levels. The display is one more client of the service. It sends the same commands as the command line and the MIDI control port (`docs/MIDI.md`), so the audio never depends on it, and everything keeps working with no display attached.
 
-**Status:** built and running on a Pi 4 with the wiring below (`rpi-audio-ui.service`; lab notes in `docs/hw/2026-11-01-hat-oled.md`). The encoder, PUSH and BACK work. CONFIRM does not reach the Pi yet (a wiring problem on one board, not a software one), and PUSH does its job meanwhile. The terminal simulator `tools/ui-sim.py` needs no hardware.
+**Status:** running on a Pi 4 with the wiring below (`rpi-audio-ui.service`). The encoder, PUSH and BACK were checked physically. The earlier GPIO 23 CONFIRM wiring did not deliver a reliable press; the default is now GPIO 5, with physical confirmation still pending. PUSH and CONFIRM now perform the same action throughout, including scene saving and loading. See the [illustrated user guide](MANUAL.md) for step-by-step use and [current session notes](hw/2026-11-03-oled-wifi.md) for validation. The terminal simulator `tools/ui-sim.py` needs no hardware.
 
 ## Controls
+
+The service opens on **Overview**. Press or turn the encoder to open the menu; BACK from that menu returns to Overview.
 
 | Input | Does |
 |---|---|
 | Encoder turn | Moves through a list, or changes a level while editing |
 | CONFIRM | Opens a row, toggles a route or a mute, starts a level edit, sets it, loads a preset |
-| Encoder push | The same as CONFIRM, except in Presets, where it saves the current routing into the slot (it asks first) |
+| Encoder push | The same as CONFIRM throughout the interface |
 | BACK | Goes back, drops an edit, answers "no" |
+
+Brief notices announce device, WiFi and USB-host connections and disconnections. They last three seconds, keep the connection bar visible, and disappear on input. They wake the display, with no phantom notices for devices already present at startup. A device held back by USB bandwidth or channel allocation gets a notice; its Connections details explain the reason.
 
 ## Screens
 
-Eight rows of 21 characters (a 5×7 font in 6×8-pixel cells), the first row a title. The display goes dark after `idle_s` seconds without input, and the first touch only wakes it.
+Eight rows of 21 characters (a 5×7 font in 6×8-pixel cells): an icon and title, six content rows, and a connection bar. The selection is a rounded inverse bar; long lists scroll and show their position in the header. Messages use the row above the connection bar, with the list adjusting to keep the selected item visible. The display goes dark after `idle_s` seconds without input, and the first touch only wakes it.
 
-- **Presets:** the eight slots. CONFIRM loads one; push saves into it.
-- **Routes:** first a destination (every stereo pair of every device with a playback), then the sources that can feed it, as `[ ]` and `[x]`. `[~]` is a route that waits for a device or for USB bandwidth. A device is never offered to itself.
-- **MIDI:** the same two steps for MIDI: first a destination (every port that receives), then the ports that can feed it as `[ ]` and `[x]` (`midiroute` / `midiunroute`). A device with several ports shows the port number after its name. With a host it is empty: the status lists the MIDI ports only in standalone mode.
-- **Devices:** each device's `In` (what it sends) and `Out` (what it receives) mute and level. A `~` marks a device waiting for USB bandwidth.
+The bottom bar updates every two seconds, with three icons:
+
+| Icon | Meaning |
+|---|---|
+| WiFi | Signal percentage when connected; `OFF` when disabled, `--` when disconnected, `N/A` when absent, `?` when unknown |
+| Device | Number of physical audio/MIDI devices, including the local pHAT DAC; multiple MIDI ports count as one device. The Pi's HDMI, headphones and USB gadget are excluded |
+| USB | `OFF`: disconnected; `IDLE`: host connected, no audio stream; `LIVE`: audio bridge running; `WAIT`: connecting or waiting for audio; `SIL`: sending silence; `SUSP`: host suspended; `LOC`: standalone mode; `?`: unknown |
+
+These indicators are hidden while the screensaver runs, so they do not leave fixed pixels lit on an idle OLED. A connected USB cable alone does not produce `LIVE`.
+
+- **Overview:** USB-bridge or standalone mode, sample rate, physical-device count, active audio-route groups and MIDI routes/ports, and two compact peak meters. In host mode, IN measures what goes to the host and OUT what comes from it, taking the highest peak across the gadget channels. In Hub/Standalone, IN measures capture bridges and OUT the local mix plus enabled Hub outputs. `--` means unavailable, `-inf` means digital silence, and `CLIP` means a peak at or above 0 dBFS. The bars cover -60 to 0 dBFS.
+
+  Meters read real JACK samples through passive input taps, without opening ALSA devices or changing existing routes. A native C callback collects peaks; Python reads its output without blocking and draws at most five frames per second. The helper never starts JACK and runs only while Overview is visible and awake. Closing the view, entering the screensaver, or losing JACK stops the helper; stale samples become unavailable. The UI unit permits realtime scheduling and memory locking for the native JACK thread; the Python/GPIO loop keeps normal priority. `install.sh --hat` installs the compiler and JACK headers and builds `rpi-audio-meter`. Later updates rebuild an already installed helper as well.
+
+- **Send audio:** first the source stereo pair, then destinations as `[ ]`, `[x]` or waiting `[~]`. **More output pairs...** offers individual destination pairs. A device is not offered to itself.
+- **Outputs:** pHAT DAC, USB host, Network RTP and Link Audio, each with a state, enable switch and details. Audio mode selects Hub, USB host clock or Standalone DAC and confirms the interruption.
+- **Scenes:** eight slots, each with visible Load and Save here actions; saving asks before replacing the slot.
+- **MIDI:** choose a sender, then select receivers. The local list is available in Hub/Standalone; original host mode continues using gadget MIDI cable mapping.
+- **Levels & mute:** physical devices' In/Out mute and available hardware levels. `~` marks a bridge waiting for USB bandwidth.
+
+- **Connections:** USB-host and WiFi details, then a list of the physical audio/MIDI devices, available even when audio is idle. Select a device to see its mode, bus, bridge state, input/output channels, active rates, MIDI capability, assigned USB channel ranges and MIDI cables. Saved assignments are explicitly marked `saved` while idle; standalone mode uses local routing instead. Scroll to the lower rows for mappings and failure reasons. Prefixes: `A+M` audio and MIDI, `I/O` full-duplex audio, `IN` capture only, `OUT` playback only, `MID` MIDI only, `LOC` local DAC. In Hub, To USB and From USB show explicit selected routes instead of claiming the old reservations are connected. USB details show the engine mode (USB bridge, Hub or Standalone), connection state, sample rate and gadget channels. WiFi details show the connection, network name, IP and signal. These screens are read-only; use Levels & mute, Send audio or MIDI to change routing and levels.
+
+- **Status:** Machine & buffers shows CPU/RAM bars, temperature, rate, buffers and DSP data. All inputs and All outputs show separate real peak bars and endpoint details. Tap XRuns is scoped to the running meter helper.
 
 - **Settings:** the display's own settings. CONFIRM steps a row to its next value and wraps round. A change applies at once and is kept across restarts.
 
@@ -35,7 +58,9 @@ Eight rows of 21 characters (a 5×7 font in 6×8-pixel cells), the first row a t
 
   The screensaver dims the display and moves its picture one cell every 3 s, so no pixel stays lit. The first touch only ends it, like waking a dark display. If Sleep is shorter than Saver, the display goes dark first. The clock is the Pi's own (set the time zone with `timedatectl`).
 
-A change to a level, a mute or a route shows as made at once and is confirmed when the service's status catches up (within a couple of seconds). A button that runs a command shows `working...` on the last row until it is done (each command takes about 0.7 s).
+A change to a level, a mute or a route shows as made at once and is confirmed when the service's status catches up (within a couple of seconds). A button that runs a command shows `working...` above the connection bar until it is done. Commands run in order in a worker so the encoder and navigation stay responsive. Only changed OLED pages are transferred, and input decoding uses the kernel's edge times so queued button releases are not mistaken for bounce.
+
+The source-first workflow is implemented: Send audio and MIDI choose a sender, then destinations. Outputs controls each adapter and Audio mode. Scenes offers explicit Load and Save here actions; PUSH and CONFIRM do the same thing. See the [illustrated manual](MANUAL.md) and [output implementation](OUTPUTS.md).
 
 ## Wiring (a 9-pin encoder board with an I2C OLED, and a Pimoroni pHAT DAC)
 
@@ -57,7 +82,7 @@ The OLED is an **SH1106**, 128×64, at I2C address **0x3C** (`SH1106LCDI2CAddres
 
 ## The service
 
-`rpi-audio-ui.service` reads `/run/rpi-audio/status.json` twice a second (a file older than ten seconds counts as no service: the last row then says so) and runs each command through `rpi-audiod cmd TEXT`. With no display or no GPIO it waits and tries again every five seconds, and the audio is untouched. `install.sh --hat` (or `tools/deploy.sh --enable --hat`) enables it and installs `python3-smbus2` and `python3-libgpiod`; without `--hat` its files are installed but it does not run.
+`rpi-audio-ui.service` reads `/run/rpi-audio/status.json` twice a second (a file older than ten seconds counts as no service: the row above the connection bar then says so) and runs each command through `rpi-audiod cmd TEXT`. A separate background worker reads NetworkManager's connection information (`nmcli`, without rescanning), the USB controller state in sysfs and physical audio/MIDI cards in `/proc/asound` every two seconds. These reads do not block the encoder or depend on commands finishing. With no display or no GPIO it waits and tries again every five seconds, and the audio is untouched. `install.sh --hat` (or `tools/deploy.sh --enable --hat`) enables it and installs `python3-smbus2` and `python3-libgpiod`; without `--hat` its files are installed but it does not run.
 
 Settings go in the `[ui]` table of `/etc/rpi-audio/rpi-audio.toml` or a file in `rpi-audio.d/` (all optional):
 
@@ -74,3 +99,5 @@ Settings go in the `[ui]` table of `/etc/rpi-audio/rpi-audio.toml` or a file in 
 | `pins` | the table above | BCM numbers, only the ones that differ: `pins = { confirm = 23 }` |
 
 What the Settings screen keeps goes in `/var/lib/rpi-audio-ui/settings.json` and wins over the file; delete it to go back to the file's values. A key that is unknown or has a wrong value is logged and ignored. Clockwise is the encoder's A line (TRA) changing before B, as on a KY-040; swap with `invert_encoder` if yours is wired the other way.
+
+The `status` screensaver rotates machine, buffer and audio-summary panels every six seconds and moves them on both axes, without a fixed footer. Metrics come from the background `/proc`/sysfs snapshot and passive JACK helper. Active Status views also report JACK rate, period, DSP load and xrun notifications since the helper started. Separate endpoint meters are bounded to 64 groups and 128 taps; unavailable measurements show `--`. The first touch wakes the display; Sleep still applies.

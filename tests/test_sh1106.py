@@ -4,6 +4,8 @@
 import sys
 from pathlib import Path
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "bridge" / "rpi-audio-ui"))
 import font5x7  # noqa: E402
 import render  # noqa: E402
@@ -66,6 +68,43 @@ def test_flip_turns_the_picture():
     flipped = sh1106.init_commands(flip=True)
     assert 0xA0 in flipped and 0xC0 in flipped and 0xA1 not in flipped and 0xC8 not in flipped
     assert sh1106.init_commands(contrast=0x20)[sh1106.init_commands().index(0x81) + 1] == 0x20
+
+
+def test_show_only_transfers_changed_pages_and_keeps_a_copy():
+    link, canvas = Link(), sh1106.Canvas()
+    screen = sh1106.Display(link)
+    screen.show(canvas)
+    link.sent.clear()
+    screen.show(canvas)
+    assert link.sent == []
+    canvas.pixel(0, 8)
+    screen.show(canvas)
+    assert link.sent == [[sh1106.COMMAND, 0xB1, 0x02, 0x10], [sh1106.DATA, 1, *([0] * 127)]]
+    link.sent.clear()
+    canvas.pixel(0, 8, False)
+    screen.show(canvas)
+    assert link.sent == [[sh1106.COMMAND, 0xB1, 0x02, 0x10], [sh1106.DATA, *([0] * 128)]]
+
+
+def test_failed_page_is_retried():
+    link, canvas = Link(), sh1106.Canvas()
+    screen = sh1106.Display(link)
+    screen.show(canvas)
+    canvas.pixel(5, 19)
+    write = link.write
+
+    def fail(data):
+        if data[0] == sh1106.DATA:
+            raise OSError("bus error")
+        write(data)
+
+    link.write = fail
+    with pytest.raises(OSError):
+        screen.show(canvas)
+    link.write = write
+    link.sent.clear()
+    screen.show(canvas)
+    assert len(link.sent) == 2 and link.sent[0][1] == 0xB2 and link.sent[1][6] == 8
 
 
 def test_all_on_and_power():

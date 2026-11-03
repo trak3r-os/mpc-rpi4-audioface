@@ -18,16 +18,20 @@ import subprocess
 import sys
 import time
 import tomllib
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import inputs
+import meters
 import sh1106
+import telemetry
 import uiservice
 
 CONFIG = Path(os.environ.get("RPI_AUDIO_CONFIG", "/etc/rpi-audio/rpi-audio.toml"))
 STATUS = Path(os.environ.get("RUNTIME_DIRECTORY", "/run/rpi-audio")) / "status.json"
 AUDIOD = os.environ.get("RPI_AUDIOD", "/usr/local/lib/rpi-audio/rpi-audiod")
-SAVED = Path(os.environ["STATE_DIRECTORY"].split(":")[0]) / "settings.json" if os.environ.get("STATE_DIRECTORY") else None
+SAVED = (Path(os.environ["STATE_DIRECTORY"].split(":")[0]) / "settings.json"
+         if os.environ.get("STATE_DIRECTORY") else None)
 COMMAND_TIMEOUT_S = 10
 
 
@@ -102,19 +106,25 @@ def main():
     signal.signal(signal.SIGTERM, lambda *_: stopping.append(1))
     signal.signal(signal.SIGINT, lambda *_: stopping.append(1))
     reader = open_reader(cfg)
+    level_meter = meters.Reader()
 
     def make_display():
         return sh1106.Display(sh1106.I2C(cfg.bus, cfg.address), cfg.flip, cfg.contrast)
 
-    app = uiservice.App(reader, make_display, lambda: uiservice.read_status(STATUS), run_command, cfg, log, save_prefs)
-    app.start(time.monotonic())
-    log(f"rpi-audio-ui: running (I2C bus {cfg.bus}, address {cfg.address:#04x})")
-    try:
-        while not stopping:
-            app.step(time.monotonic())
-    finally:
-        app.close()
-        reader.close()
+    with ThreadPoolExecutor(max_workers=1) as worker, ThreadPoolExecutor(max_workers=1) as sensors:
+        monitor = telemetry.Monitor(sensors.submit)
+        app = uiservice.App(reader, make_display, lambda: uiservice.read_status(STATUS), run_command, cfg, log,
+                            save_prefs, submit_command=lambda text: worker.submit(run_command, text),
+                            load_hardware=monitor.read, load_levels=level_meter.read, start_overview=True)
+        app.start(time.monotonic())
+        log(f"rpi-audio-ui: running (I2C bus {cfg.bus}, address {cfg.address:#04x})")
+        try:
+            while not stopping:
+                app.step(time.monotonic())
+        finally:
+            app.close()
+            reader.close()
+            level_meter.close()
     return 0
 
 

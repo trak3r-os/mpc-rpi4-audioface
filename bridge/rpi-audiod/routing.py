@@ -128,7 +128,10 @@ def wanted(routes, bridges, muted, ports):
         if route.src_pair > pair_count(src[1]) or route.dst_pair > pair_count(dst[1]):
             pending.append((route, "the device has no such pair"))
             continue
-        pairs = [(f"{src[0]}:capture_{s}", f"{dst[0]}:playback_{d}")
+        # An optional third member gives the port prefix for a virtual endpoint.
+        src_prefix = src[2] if len(src) > 2 else "capture"
+        dst_prefix = dst[2] if len(dst) > 2 else "playback"
+        pairs = [(f"{src[0]}:{src_prefix}_{s}", f"{dst[0]}:{dst_prefix}_{d}")
                  for s, d in links(pair_channels(route.src_pair, src[1]), pair_channels(route.dst_pair, dst[1]))]
         if all(a in ports and b in ports for a, b in pairs):
             connections.update(pairs)

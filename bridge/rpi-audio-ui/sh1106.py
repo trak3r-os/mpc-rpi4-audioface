@@ -85,12 +85,17 @@ class I2C:
 class Display:
     def __init__(self, link, flip=False, contrast=0x7F):
         self.link = link
+        self.pages = [None] * PAGES
         self.link.write([COMMAND, *init_commands(flip, contrast)])
 
     def show(self, canvas):
         for number, page in enumerate(canvas.pages):
+            data = bytes(page)
+            if data == self.pages[number]:
+                continue
             self.link.write([COMMAND, 0xB0 + number, COLUMN_OFFSET & 0x0F, 0x10 | COLUMN_OFFSET >> 4])
             self.link.write([DATA, *page])
+            self.pages[number] = data
 
     def contrast(self, value):
         self.link.write([COMMAND, 0x81, value])

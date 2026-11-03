@@ -87,7 +87,9 @@ def read_key(fd):
 
 
 def main():
-    service, interface, due, log = Service(), display.UI(), [], ""
+    service, interface, due, log = Service(), display.UI(overview=True), [], ""
+    interface.hardware = {"wifi": {"state": "up", "signal": 88, "name": "Demo WiFi", "ip": "192.0.2.10"},
+                          "usb_state": "configured"}
     fd = sys.stdin.fileno()
     saved = termios.tcgetattr(fd)
     try:

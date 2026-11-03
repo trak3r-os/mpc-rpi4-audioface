@@ -25,11 +25,11 @@ def main():
     end = time.monotonic() + args.seconds
     counts = {}
     while (left := end - time.monotonic()) > 0:
-        for name, level in reader.read(min(left, 0.5)):
-            events = panel.edge(name, level, time.monotonic())
+        for name, level, at in reader.read(min(left, 0.5)):
+            events = panel.edge(name, level, at)
             for event in events:
                 counts[event] = counts.get(event, 0) + 1
-            stamp = time.monotonic() - end + args.seconds
+            stamp = at - end + args.seconds
             print(f"{stamp:6.2f}s  {name:7} -> {level}" + (f"   EVENT {events}" if events else ""), flush=True)
     reader.close()
     print("events:", counts or "none")

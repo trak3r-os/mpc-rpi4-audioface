@@ -9,6 +9,8 @@ card = "UAC2Gadget"          # ALSA card id of the gadget on the Pi
 [engine]
 # "host" (the default): jackd on the gadget while the host streams both ways (mode A, docs/PLAN.md §2).
 # "standalone": no host; jackd drives a local card from the start ([standalone] below, docs/STANDALONE.md).
+# "hub": local DAC clock + independent USB host and network outputs; USB host removal leaves local audio running.
+# The OLED Outputs > Audio mode selection persists and overrides this setting.
 # mode = "host"
 # 26 ch S16 at 44.1 kHz run at a period of 64 (docs/hw/2026-10-29-f2-jack-bench.md).
 period = 64
@@ -25,6 +27,14 @@ priority = 70
 # periods = 3
 # identity = "local-dac"     how routes, mutes and the display name it
 # name = "pHAT DAC"
+
+[network]
+# Output-only RTP/PCM (RFC 3550 + L16) and Ableton Link Audio; install with --network.
+# Enable each output separately in the OLED Outputs menu. Link uses automatic peer discovery.
+address = "239.69.1.1"       # RTP multicast group or receiver IPv4 address
+port = 5004                 # RTP UDP; RTCP uses port + 1 (5005)
+ttl = 1                     # multicast stays on the local network
+http_port = 8080            # SDP download: http://PI-IP:8080/network-rtp.sdp; 0 disables HTTP
 
 [bridge]
 # zita-a2j / zita-j2a per device direction: period and number of periods.

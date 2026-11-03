@@ -49,8 +49,10 @@ def test_fresh_install_lays_out_files(root):
     lib = root / "usr/local/lib/rpi-audio"
     for name in ("rpi-audio-gadget", "rpi-audio-keepalive", "tonegen.py", "rpi-audiod"):
         assert os.access(lib / name, os.X_OK), name
-    for name in ("audiod.py", "midi.py", "midiroute.py", "presets.py", "routing.py", "usb.py"):
+    for name in ("audiod.py", "midi.py", "midiroute.py", "presets.py", "routing.py", "usb.py",
+                 "outputs.py", "sdpserver.py"):
         assert (lib / name).is_file(), name
+    assert (lib / "network/network.cpp").is_file()
     assert os.readlink(root / "usr/local/bin/rpi-audiod") == "/usr/local/lib/rpi-audio/rpi-audiod"
     etc = root / "etc/rpi-audio"
     assert (etc / "gadget.env").read_bytes() == (REPO / "config/gadget.env").read_bytes()
@@ -61,7 +63,8 @@ def test_fresh_install_lays_out_files(root):
         assert (root / f"etc/systemd/system/{u}.service").is_file()
     ui = lib / "ui"
     assert os.access(ui / "rpi-audio-ui", os.X_OK)
-    for name in ("font5x7.py", "inputs.py", "render.py", "sh1106.py", "ui.py", "uiservice.py"):
+    for name in ("font5x7.py", "health.py", "inputs.py", "meters.py", "notices.py", "render.py", "sh1106.py", "telemetry.py",
+                 "ui.py", "uiservice.py", "meter.c"):
         assert (ui / name).is_file(), name
     assert "(test root) skipped: systemctl enable rpi-audio-ui" not in r.stdout   # only with --hat
     assert (lib / "VERSION").read_text().startswith((REPO / "VERSION").read_text().strip())
