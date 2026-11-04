@@ -229,7 +229,8 @@ class App:
                 error = str(e) or "failed"
             if error:
                 self.log(f"rpi-audio-ui: {command}: {error}")
-            if revision == self.revision:
+            power_screen = isinstance(self.ui.screen, ui.PowerWait) and command == f'system {self.ui.screen.action}'
+            if revision == self.revision or power_screen:
                 self.ui.message = error[:ui.COLS] if error else message or 'Saved'
                 self.ui.message_kind = 'error' if error else 'success'
                 self.ui.message_until = float('inf') if error or now is None else now + 2

@@ -108,6 +108,10 @@ def main():
                 break
             if key in KEYS:
                 for line in interface.handle(KEYS[key], service.status(), time.monotonic()):
+                    if line.startswith('system '):
+                        interface.message, interface.message_kind = 'Simulation only', 'error'
+                        log = f'{line}: simulated; BACK returns to the menu'
+                        continue
                     if line.startswith("ui "):   # a Settings choice: the display service's own, applied at once
                         _, name, value = line.split()
                         interface.prefs[name] = {"true": True, "false": False}.get(value, value)

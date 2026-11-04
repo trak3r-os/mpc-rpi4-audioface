@@ -267,7 +267,7 @@ class Home(Menu):
     def items(self, ui, status, now):
         return [("Send audio", SendAudio), ("Outputs", Outputs), ("Levels & mute", Devices),
                 ("MIDI", MidiSources), ("Scenes", Presets), ("Connections", Connections), ("Status", Status),
-                ("Settings", Settings)]
+                ("Settings", Settings), ("Power", Power)]
 
     def select(self, ui, payload, status, now):
         ui.stack.append(payload())
@@ -400,6 +400,61 @@ class Settings(Menu):
     def select(self, ui, payload, status, now):
         _, key, value = payload
         return [f"ui {key} {str(value).lower()}"]
+
+
+class Power(Menu):
+    title = "Power"
+    icon = "power"
+
+    def items(self, ui, status, now):
+        return [("Shut down", "poweroff"), ("Restart", "reboot")]
+
+    def select(self, ui, action, status, now):
+        ui.stack.append(PowerConfirm(action))
+        return []
+
+
+class PowerConfirm(Menu):
+    icon = "power"
+
+    def __init__(self, action):
+        super().__init__()
+        self.action = action
+        self.title = "Shut down?" if action == "poweroff" else "Restart?"
+
+    def items(self, ui, status, now):
+        return [("Cancel", False), ("Shut down" if self.action == "poweroff" else "Restart", True)]
+
+    def rows(self, ui, status, now):
+        return super().rows(ui, status, now) + [Row(fit('')), Row(fit('Audio will stop.'))]
+
+    def select(self, ui, confirmed, status, now):
+        if not confirmed:
+            ui.stack.pop()
+            return []
+        ui.stack.append(PowerWait(self.action))
+        ui.message = 'Shutting down...' if self.action == 'poweroff' else 'Restarting...'
+        return [f'system {self.action}']
+
+
+class PowerWait:
+    def __init__(self, action):
+        self.action = action
+        self.title = 'Shutting down...' if action == 'poweroff' else 'Restarting...'
+
+    def handle(self, event, ui, status, now):
+        # Once submitted, repeated turns/presses must not queue another system action.
+        if event == 'back' and ui.message_kind == 'error':
+            ui.stack.pop()
+            ui.message = ''
+        return []
+
+    def rows(self, ui, status, now):
+        lines = ('Wait for shutdown.', 'Before unplugging:', 'wait for Pi activity', 'LED to stop.') if \
+                self.action == 'poweroff' else ('Please wait.', 'Keep power connected.', 'Audio will reconnect.')
+        if ui.message_kind == 'error':
+            lines = ('Request failed.', 'BACK to return.')
+        return [Row(fit(self.title), icon='power'), Row(fit(''))] + [Row(fit(line)) for line in lines]
 
 
 def tri(n, size):
@@ -1300,10 +1355,12 @@ class UI:
 
     def handle(self, event, status, now=0.0):
         """Takes one event; returns the commands to run, in order."""
-        self.message = ""
-        self.message_kind, self.message_until = 'info', float('inf')
         if event not in EVENTS:
             raise ValueError(f"unknown event {event}")
+        if isinstance(self.screen, PowerWait):
+            return self.screen.handle(event, self, status, now)
+        self.message = ""
+        self.message_kind, self.message_until = 'info', float('inf')
         self.focus_at = now
         return self.screen.handle(event, self, status, now) or []
 

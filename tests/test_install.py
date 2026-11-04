@@ -77,6 +77,18 @@ def test_fresh_install_lays_out_files(root):
     assert "next: connect the Pi's USB-C" in r.stdout
 
 
+def test_power_policy_is_exact_restricted_and_removed_on_uninstall(root):
+    result = run(root, '--no-boot-config')
+    assert result.returncode == 0, result.stderr
+    policy = root / 'etc/sudoers.d/rpi-audio-power'
+    assert policy.read_bytes() == (REPO / 'config/rpi-audio-power.sudoers').read_bytes()
+    assert policy.stat().st_mode & 0o777 == 0o440
+    rule = next(line for line in policy.read_text().splitlines() if line.startswith('rpi-audio '))
+    assert rule == 'rpi-audio ALL=(root) NOPASSWD: /usr/bin/systemctl poweroff, /usr/bin/systemctl reboot'
+    assert run(root, '--uninstall').returncode == 0
+    assert not policy.exists()
+
+
 def test_config_kept_and_new_written(root):
     assert run(root, "--no-boot-config").returncode == 0
     env = root / "etc/rpi-audio/gadget.env"

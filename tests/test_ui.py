@@ -78,6 +78,39 @@ def test_home_and_navigation():
         u.handle("long", st)
 
 
+@pytest.mark.parametrize('action', ['poweroff', 'reboot'])
+@pytest.mark.parametrize('button', ['push', 'confirm'])
+def test_power_actions_default_to_cancel_and_need_explicit_selection(action, button):
+    interface, st = display.UI(), status()
+    press(interface, st, *(['cw'] * 8), button)
+    assert isinstance(interface.screen, display.Power)
+    if action == 'reboot':
+        press(interface, st, 'cw')
+    assert press(interface, st, button) == []
+    assert isinstance(interface.screen, display.PowerConfirm) and interface.screen.cursor == 0
+    # A second immediate press chooses Cancel; neither action runs on a double click.
+    assert press(interface, st, button) == [] and isinstance(interface.screen, display.Power)
+    press(interface, st, button)
+    assert press(interface, st, 'back') == [] and isinstance(interface.screen, display.Power)
+    press(interface, st, button, 'cw')
+    assert press(interface, st, button) == [f'system {action}']
+    assert isinstance(interface.screen, display.PowerWait)
+    assert 'Keep power connected.' in text(interface, st)[3] if action == 'reboot' else \
+        'Before unplugging:' in text(interface, st)[3]
+    for event in display.EVENTS:
+        assert interface.handle(event, st) == []
+    assert isinstance(interface.screen, display.PowerWait)
+
+
+def test_failed_power_request_can_return_without_losing_the_error_on_other_input():
+    interface = display.UI()
+    interface.stack += [display.Power(), display.PowerConfirm('poweroff'), display.PowerWait('poweroff')]
+    interface.message, interface.message_kind = 'permission denied', 'error'
+    for event in ('cw', 'push', 'confirm'):
+        assert interface.handle(event, {}) == [] and interface.message == 'permission denied'
+    assert interface.handle('back', {}) == [] and isinstance(interface.screen, display.PowerConfirm)
+
+
 def test_push_and_confirm_follow_the_same_navigation():
     for button in ("push", "confirm"):
         u, st = display.UI(), status()

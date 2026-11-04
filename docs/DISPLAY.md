@@ -19,6 +19,10 @@ The service opens on **Overview**. Press or turn the encoder to open the menu; B
 
 Brief notices announce device, WiFi and USB-host connections and disconnections. They last three seconds, keep the connection bar visible, and disappear on input. They wake the display, with no phantom notices for devices already present at startup. A device held back by USB bandwidth or channel allocation gets a notice; its Connections details explain the reason.
 
+The last main-menu item, **Power**, offers **Shut down** and **Restart**. Each opens a confirmation with **Cancel** selected: turn to the requested action and press PUSH or CONFIRM. BACK cancels. Once accepted, repeated input cannot queue another action. If the request fails, the error remains visible and BACK returns to the confirmation. These are local panel actions, separate from the USB/MIDI daemon commands; the terminal simulator does not execute them.
+
+Shut down stops the system cleanly; wait for the Pi to finish halting before unplugging. The OLED going dark alone is not proof of completion: the UI stops before all shutdown work ends, and normal sleep also blanks it. Restart reboots Linux with the saved configuration intact; keep the supply connected.
+
 ## Screens
 
 Eight rows of 21 characters (a 5×7 font in 6×8-pixel cells): a title, six content rows, and connection indicators. The home menu leaves the top row black; other screens use white titles on black. A small arrow marks the selection without flashing a whole white row, and long lists show their position beside the title. Messages use the row above the connection indicators, with the list adjusting to keep the selected item visible. The display goes dark after `idle_s` seconds without input, and the first touch only wakes it.

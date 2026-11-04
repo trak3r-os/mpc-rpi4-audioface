@@ -16,6 +16,7 @@ import inputs  # noqa: E402
 import uiservice  # noqa: E402
 import sh1106  # noqa: E402
 import render  # noqa: E402
+import ui  # noqa: E402
 
 STATUS = {"devices": [{"identity": "usb-mixer", "card": "CODEC", "name": "Mixer", "in": {"channels": 2}},
                       {"identity": "usb-trk", "card": "Tracker", "name": "Tracker", "in": {"channels": 2},
@@ -247,6 +248,29 @@ def test_sleep_and_settings_during_blocked_startup_then_wake_with_latest_frame()
     finally:
         release.set()
         display.close()
+
+
+def test_power_action_is_submitted_once_and_can_recover_from_a_permission_error():
+    rig = Rig()
+    rig.app.ui.stack = [ui.Home(), ui.Power(), ui.PowerConfirm('reboot')]
+    future, commands = Future(), []
+
+    def submit(command):
+        commands.append(command)
+        return future
+
+    rig.app.submit_command = submit
+    rig.turn(1)
+    rig.press('push')
+    for event in ('cw', 'push', 'confirm', 'back'):
+        rig.app.press(event, rig.now)
+    assert commands == ['system reboot'] and not rig.commands and not rig.kept
+    assert isinstance(rig.app.ui.screen, ui.PowerWait)
+    future.set_result('permission denied')
+    rig.step()
+    assert rig.app.ui.message_kind == 'error' and rig.app.ui.message == 'permission denied'
+    rig.press('back')
+    assert isinstance(rig.app.ui.screen, ui.PowerConfirm)
 
 
 def test_settings_defaults_and_overrides():

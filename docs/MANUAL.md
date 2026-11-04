@@ -94,6 +94,20 @@ Pressing the encoder and CONFIRM always perform the same selection. Scenes offer
 
 If CONFIRM does not respond, check the button and its wiring. The current default is GPIO 5; older notes using GPIO 23 describe an earlier wiring arrangement.
 
+### Shut down or restart
+
+![Power menu and confirmation with Cancel selected](manual/img/23-power.png)
+
+1. Open the main menu and scroll to **Power**, after Settings.
+2. Choose **Shut down** or **Restart**.
+3. The confirmation starts on **Cancel**. Turn to the requested action and press PUSH or CONFIRM; BACK cancels.
+
+Both actions stop audio. Shut down lets Linux stop services and finish filesystem writes. Wait for the Pi to finish halting before unplugging; watch the Pi's activity LED rather than treating the OLED going dark as confirmation. The display service stops before all shutdown work ends. Restart boots the Pi again and keeps saved settings; leave power connected. Restart is not a factory reset.
+
+The [official Raspberry Pi Beginner's Guide](https://magazines-static.raspberrypi.org/books/full_pdfs/000/000/026/original/000_RPi_BeginnersGuide_DIGITAL.pdf) describes waiting for the flashing green activity light to go off before disconnecting the supply after shutdown. A dark OLED by itself is not that signal.
+
+After confirmation, extra turns and presses do not repeat the request. If it fails, the screen shows an error and BACK returns to the confirmation. Avoid unplugging a running Pi, since interrupting SD-card writes can corrupt its filesystem.
+
 ## 4. Read Overview
 
 ![Overview without a host and with example signal](manual/img/04-overview.png)

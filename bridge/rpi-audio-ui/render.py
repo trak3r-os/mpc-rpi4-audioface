@@ -9,6 +9,7 @@ MARGIN = 1   # the 21 cells are 126 pixels wide: one blank column each side
 
 # Seven-pixel symbols designed for this monochrome panel, one row of pixels per string.
 ICONS = {
+    'power': ('...#...', '...#...', '.#.#.#.', '#..#..#', '#.....#', '.#...#.', '..###..'),
     'edit': ('.....##', '....###', '...###.', '..###..', '.###...', '###....', '##.....'),
     'check': ('.......', '......#', '.....#.', '#...#..', '.#.#...', '..#....', '.......'),
     'error': ('#.....#', '.#...#.', '..#.#..', '...#...', '..#.#..', '.#...#.', '#.....#'),

@@ -57,10 +57,11 @@ UNITDIR=$R/etc/systemd/system
 MODULES=$R/etc/modules-load.d/rpi-audio.conf
 JOURNALD=$R/etc/systemd/journald.conf.d/rpi-audio.conf
 STATE=$R/var/lib/rpi-audio
+POWER_POLICY=$R/etc/sudoers.d/rpi-audio-power
 UDCDIR=$R/sys/class/udc
 OVERLAY='dtoverlay=dwc2,dr_mode=peripheral'
 units="rpi-audio-gadget rpi-audiod rpi-audio-keepalive rpi-audio-cpu rpi-audio-ui"
-packages="jackd2 jack-example-tools zita-ajbridge gcc libjack-jackd2-dev"
+packages="jackd2 jack-example-tools zita-ajbridge gcc libjack-jackd2-dev sudo"
 
 say() { echo "$tag: $*"; }
 warn() { echo "$tag: $*" >&2; }
@@ -142,7 +143,7 @@ if ((uninstall)); then
   sysrun systemctl daemon-reload
   rm -rf "$LIB"
   if [[ -L $BIN/rpi-audiod ]]; then rm -f "$BIN/rpi-audiod"; fi
-  rm -f "$MODULES" "$JOURNALD"
+  rm -f "$MODULES" "$JOURNALD" "$POWER_POLICY"
   say "removed the units, $LIB, the rpi-audiod link and the modules-load and journald drop-ins"
   if ((purge)); then
     rm -rf "$ETC" "$STATE"
@@ -230,6 +231,9 @@ install -m 644 "$here/bridge/rpi-audiod/audiod.py" "$here/bridge/rpi-audiod/midi
   "$here/bridge/rpi-audiod/readiness.py" "$LIB/"
 ln -sf /usr/local/lib/rpi-audio/rpi-audiod "$BIN/rpi-audiod"
 # The display service: its own folder, since its module names (ui, inputs, render...) are generic.
+sysrun /usr/sbin/visudo -cf "$here/config/rpi-audio-power.sudoers"
+install -d "$(dirname "$POWER_POLICY")"
+install -m 440 "$here/config/rpi-audio-power.sudoers" "$POWER_POLICY"
 install -d "$LIB/ui"
 install -m 755 "$here/bridge/rpi-audio-ui/rpi-audio-ui" "$LIB/ui/"
 install -m 644 "$here"/bridge/rpi-audio-ui/{font5x7,health,inputs,meters,notices,render,sh1106,telemetry,ui,uiservice}.py "$LIB/ui/"

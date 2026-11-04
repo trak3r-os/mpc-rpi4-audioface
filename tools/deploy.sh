@@ -13,7 +13,7 @@
 # --hat also turns on the I2C bus and the hifiberry-dac overlay (a display and a DAC on the 40-pin header; install.sh --hat,
 # with a backup of config.txt; takes effect after a reboot, which this script never does) and, with --enable,
 # starts rpi-audio-ui.service (the OLED and its encoder).
-# --ui-only updates only the Python display service, with a backup and UI restart;
+# --ui-only updates the Python display service and its restricted power policy, with a backup and UI restart;
 # it preserves audio, configuration, the native meter helper and boot settings.
 # A running rpi-audiod is restarted so it runs the new code: the host hears a gap.
 # Needs passwordless sudo for the SSH user on the Pi (see docs/STATUS.md).
@@ -58,15 +58,23 @@ ssh -o BatchMode=yes "$host" 'sudo -n true' 2>/dev/null || {
 }
 
 if ((ui_only)); then
-  ssh "$host" "mkdir -p $stage/bridge/rpi-audio-ui"
+  ssh "$host" "mkdir -p $stage/bridge/rpi-audio-ui $stage/config"
   rsync -a "$root/bridge/rpi-audio-ui/" "$host:$stage/bridge/rpi-audio-ui/"
+  rsync -a "$root/config/rpi-audio-power.sudoers" "$host:$stage/config/"
   ssh "$host" "sudo -n bash -s -- $stage" <<'UI_INSTALL'
 set -euo pipefail
 source_dir="$PWD/$1/bridge/rpi-audio-ui"
 lib=/usr/local/lib/rpi-audio/ui
 [[ -d $lib ]] || { echo "deploy: install the display service first" >&2; exit 1; }
+policy="$PWD/$1/config/rpi-audio-power.sudoers"
+/usr/sbin/visudo -cf "$policy"
 backup=$(mktemp -d /var/backups/rpi-audio-ui.XXXXXX)
 cp -a "$lib" "$backup/ui"
+if [[ -f /etc/sudoers.d/rpi-audio-power ]]; then
+  cp -a /etc/sudoers.d/rpi-audio-power "$backup/power.sudoers"
+fi
+install -d /etc/sudoers.d
+install -m 440 "$policy" /etc/sudoers.d/rpi-audio-power
 install -m 644 "$source_dir/"*.py "$lib/"
 install -m 755 "$source_dir/rpi-audio-ui" "$lib/"
 if systemctl is-active --quiet rpi-audio-ui; then

@@ -358,6 +358,8 @@ def screenshots():
          ('Open an event for details', screen(ui.RecentEvents(), ready, hw)))
     pair("11-settings.png", ("Display preferences", screen(ui.Settings(), idle, hw)),
          ("WiFi details (example)", screen(ui.WifiInfo(), idle, hw)))
+    pair('23-power.png', ('Shut down or restart', screen(ui.Power(), idle, hw)),
+         ('Cancel is selected by default', screen(ui.PowerConfirm('poweroff'), idle, hw)))
 
 
 CSS = """

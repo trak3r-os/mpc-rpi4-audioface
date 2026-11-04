@@ -73,10 +73,14 @@ def save_prefs(prefs):
 
 
 def run_command(text):
-    """Runs one command through rpi-audiod; "" when it was saved, else why not."""
+    """Runs a confirmed local system action or an rpi-audiod command; empty string on success."""
+    system = {'system poweroff': 'poweroff', 'system reboot': 'reboot'}
+    if text.startswith('system ') and text not in system:
+        return 'unknown system action'
+    command = (['/usr/bin/sudo', '-n', '/usr/bin/systemctl', system[text]] if text in system else
+               [AUDIOD, 'cmd', *text.split()])
     try:
-        done = subprocess.run([AUDIOD, "cmd", *text.split()], capture_output=True, text=True,
-                              timeout=COMMAND_TIMEOUT_S)
+        done = subprocess.run(command, capture_output=True, text=True, timeout=COMMAND_TIMEOUT_S)
     except (OSError, subprocess.TimeoutExpired) as e:
         return str(e)
     if done.returncode == 0:
