@@ -62,16 +62,16 @@ def test_every_screen_is_the_size_of_the_display():
         press(u, st, *events)
         rows = u.render(st)
         assert len(rows) == display.ROWS and all(len(r.text) == display.COLS for r in rows)
-        assert rows[0].inverse
+        assert not rows[0].inverse
 
 
 def test_home_and_navigation():
     u, st = display.UI(), status()
-    assert [r.rstrip() for r in text(u, st)[:4]] == ["rpi-audio", ">Send audio", " Outputs", " Levels & mute"]
+    assert [r.rstrip() for r in text(u, st)[:4]] == ["", ">Send audio", " Outputs", " Levels & mute"]
     press(u, st, "cw", "cw", "confirm")
     assert text(u, st)[0].strip() == "Levels & mute"
     press(u, st, "back")
-    assert text(u, st)[0].strip() == "rpi-audio"
+    assert text(u, st)[0].strip() == ""
     press(u, st, "ccw", "ccw", "ccw")
     assert text(u, st)[1].startswith(">Send audio")
     with pytest.raises(ValueError):
@@ -378,7 +378,8 @@ def test_overview_startup_menu_navigation_and_real_meter_values():
     interface.levels = {"in": 0.25, "out": None}
     rows = interface.render(st)
     assert rows[0].text.strip() == "Overview"
-    assert "USB bridge [LIVE]" in rows[1].text and "44.1k" in rows[2].text
+    assert rows[1].text.strip() == "USB bridge" and "44.1k" in rows[2].text
+    assert rows[-1].footer[-1] == 'LIVE'
     assert "Routes 1" in rows[3].text and rows[4].meter[2] == "-12" and rows[5].meter[2] == "--"
     assert rows[7].footer
     press(interface, st, "push")

@@ -5,6 +5,8 @@ import json
 import os
 import sys
 import time
+import threading
+import errno
 from pathlib import Path
 from concurrent.futures import Future
 
@@ -12,6 +14,8 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "bridge" / "rpi-audio-ui"))
 import inputs  # noqa: E402
 import uiservice  # noqa: E402
+import sh1106  # noqa: E402
+import render  # noqa: E402
 
 STATUS = {"devices": [{"identity": "usb-mixer", "card": "CODEC", "name": "Mixer", "in": {"channels": 2}},
                       {"identity": "usb-trk", "card": "Tracker", "name": "Tracker", "in": {"channels": 2},
@@ -38,6 +42,7 @@ class Reader:
 class Screen:
     def __init__(self):
         self.shown, self.powered, self.contrasts, self.configured = [], [], [], []
+        self.closed = False
 
     def show(self, canvas):
         self.shown.append(bytes(b for page in canvas.pages for b in page))
@@ -50,6 +55,9 @@ class Screen:
 
     def configure(self, flip, contrast):
         self.configured.append((flip, contrast))
+
+    def close(self):
+        self.closed = True
 
 
 class Rig:
@@ -91,6 +99,154 @@ class Rig:
                 self.reader.feed(edge)
                 self.step(0.01)
             self.step(0.05)
+
+
+def test_blocked_oled_does_not_block_encoder_and_only_latest_frame_is_sent():
+    entered, release, updated = threading.Event(), threading.Event(), threading.Event()
+    screen = Screen()
+
+    def show(canvas):
+        if not screen.shown:
+            entered.set()
+            assert release.wait(3)
+        Screen.show(screen, canvas)
+        if len(screen.shown) == 2:
+            updated.set()
+
+    screen.show = show
+    display = sh1106.AsyncDisplay(lambda *_: screen, log=lambda _: None)
+    rig = Rig()
+    rig.app.make_display = lambda: display
+    try:
+        rig.step()
+        assert entered.wait(1)
+        rig.turn(5)
+        assert rig.app.ui.screen.cursor == 5
+        rig.app.set_pref('flip', 'true')
+        rig.app.set_pref('contrast', '64')
+        expected = render.draw_rows(sh1106.Canvas(), rig.app.last_rows)
+        expected = b''.join(expected.pages)
+        release.set()
+        assert updated.wait(1)
+        assert screen.shown == [screen.shown[0], expected]
+        assert screen.configured[-1] == (True, 64)
+    finally:
+        release.set()
+        display.close()
+    assert screen.powered[-1] is False
+
+
+def test_persistent_oled_error_reconnects_and_resends_the_latest_frame():
+    failed, recovered = threading.Event(), threading.Event()
+    screens, logs = [], []
+
+    def factory(*_):
+        screen = Screen()
+        screens.append(screen)
+
+        def show(canvas):
+            if len(screens) == 1:
+                failed.set()
+                raise OSError(errno.ENODEV, 'adapter removed')
+            Screen.show(screen, canvas)
+            recovered.set()
+
+        screen.show = show
+        return screen
+
+    display = sh1106.AsyncDisplay(factory, log=logs.append, retry_s=0.05)
+    canvas = sh1106.Canvas()
+    try:
+        display.show(canvas)
+        assert failed.wait(1)
+        canvas.pixel(20, 20)
+        display.show(canvas)
+        canvas.clear()  # published frames must own their bytes
+        assert recovered.wait(1)
+        expected = sh1106.Canvas()
+        expected.pixel(20, 20)
+        assert screens[-1].shown[-1] == b''.join(expected.pages)
+        assert screens[0].closed
+        assert any('I2C error' in line for line in logs)
+    finally:
+        display.close()
+
+
+def test_burst_of_oled_errors_retries_without_reinitialising_or_flashing_the_display():
+    recovered = threading.Event()
+    screen, calls, logs = Screen(), [], []
+
+    def show(canvas):
+        calls.append(b''.join(canvas.pages))
+        if len(calls) <= 7:
+            raise OSError('brief glitch')
+        recovered.set()
+
+    screen.show = show
+    created = []
+
+    def factory(*_):
+        created.append(screen)
+        return screen
+
+    display = sh1106.AsyncDisplay(factory, log=logs.append)
+    try:
+        display.show(sh1106.Canvas())
+        assert recovered.wait(1)
+        assert len(calls) == 8 and created == [screen] and not screen.closed
+        assert not screen.powered and not screen.configured
+    finally:
+        display.close()
+    assert any('after 7 failed transfers' in line for line in logs)
+
+
+def test_oled_close_interrupts_reconnect_wait():
+    failed = threading.Event()
+
+    def factory(*_):
+        failed.set()
+        raise OSError('unplugged')
+
+    display = sh1106.AsyncDisplay(factory, retry_s=30, log=lambda _: None)
+    assert failed.wait(1)
+    display.close()
+    assert not display.thread.is_alive()
+
+
+def test_sleep_and_settings_during_blocked_startup_then_wake_with_latest_frame():
+    entered, release, dark, awake = [threading.Event() for _ in range(4)]
+    screen, calls = Screen(), []
+
+    def factory(*_):
+        entered.set()
+        assert release.wait(3)
+        return screen
+
+    def power(on):
+        calls.append(('power', on))
+        (awake if on else dark).set()
+
+    def show(canvas):
+        calls.append(('show', b''.join(canvas.pages)))
+
+    screen.power, screen.show = power, show
+    display = sh1106.AsyncDisplay(factory, log=lambda _: None)
+    try:
+        assert entered.wait(1)
+        display.power(False)
+        display.configure(True, 64)
+        release.set()
+        assert dark.wait(1)
+        assert screen.configured == [(True, 64)]
+        canvas = sh1106.Canvas()
+        canvas.pixel(40, 40)
+        display.show(canvas)
+        display.power(True)
+        assert awake.wait(1)
+        assert calls == [('power', False), ('show', b''.join(canvas.pages)), ('power', True)]
+    finally:
+        release.set()
+        display.close()
 
 
 def test_settings_defaults_and_overrides():

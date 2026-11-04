@@ -3,6 +3,10 @@
 installed there). Canvas is the 1-bit frame in the controller's own page layout and Display sends it; the
 only thing that touches the bus is I2C.write. tests/test_sh1106.py checks the rest."""
 
+import threading
+import time
+import errno
+
 WIDTH, HEIGHT = 128, 64
 PAGES = HEIGHT // 8
 COLUMN_OFFSET = 2   # the SH1106 has a 132-column RAM and a 128-pixel panel centred in it
@@ -81,20 +85,40 @@ class I2C:
     def write(self, data):
         self.bus.i2c_rdwr(self.smbus2.i2c_msg.write(self.address, list(data)))
 
+    def close(self):
+        self.bus.close()
+
 
 class Display:
     def __init__(self, link, flip=False, contrast=0x7F):
         self.link = link
         self.pages = [None] * PAGES
-        self.link.write([COMMAND, *init_commands(flip, contrast)])
+        try:
+            self.link.write([COMMAND, *init_commands(flip, contrast)])
+        except OSError:
+            self.close()
+            raise
+
+    def close(self):
+        if hasattr(self.link, 'close'):
+            self.link.close()
 
     def show(self, canvas):
         for number, page in enumerate(canvas.pages):
             data = bytes(page)
             if data == self.pages[number]:
                 continue
-            self.link.write([COMMAND, 0xB0 + number, COLUMN_OFFSET & 0x0F, 0x10 | COLUMN_OFFSET >> 4])
-            self.link.write([DATA, *page])
+            # A failed transfer can leave part of this page changed. Even if the next frame returns
+            # to the old pixels, it must rewrite the page rather than trust the previous cache.
+            previous = self.pages[number]
+            start, end = 0, WIDTH
+            if previous is not None:
+                changed = [x for x in range(WIDTH) if previous[x] != data[x]]
+                start, end = changed[0], changed[-1] + 1
+            self.pages[number] = None
+            column = COLUMN_OFFSET + start
+            self.link.write([COMMAND, 0xB0 + number, column & 0x0F, 0x10 | column >> 4])
+            self.link.write([DATA, *page[start:end]])
             self.pages[number] = data
 
     def contrast(self, value):
@@ -110,3 +134,104 @@ class Display:
 
     def power(self, on):
         self.link.write([COMMAND, 0xAF if on else 0xAE])
+
+
+class AsyncDisplay:
+    """Own all I2C work on one thread. A single replaceable frame prevents an input/render backlog.
+
+    Even a stuck kernel transfer must not hold up GPIO, commands or sleep/wake. The worker reconnects
+    after bus errors and applies the latest settings/frame, rather than replaying stale screens.
+    """
+
+    def __init__(self, factory, flip=False, contrast=0x7F, log=print, retry_s=0.01, max_retry_s=0.05):
+        self.factory, self.log, self.retry_s = factory, log, retry_s
+        self.max_retry_s = max(retry_s, max_retry_s)
+        self.condition = threading.Condition()
+        self.flip, self.value, self.on, self.frame = flip, contrast, True, None
+        self.revision, self.stopping = 0, False
+        self.thread = threading.Thread(target=self.run, name='oled-i2c', daemon=True)
+        self.thread.start()
+
+    def update(self, **values):
+        with self.condition:
+            for key, value in values.items():
+                setattr(self, key, value)
+            self.revision += 1
+            self.condition.notify()
+
+    def show(self, canvas):
+        frame = Canvas()
+        frame.pages = [bytes(page) for page in canvas.pages]
+        self.update(frame=frame)
+
+    def contrast(self, value):
+        self.update(value=value)
+
+    def configure(self, flip, contrast):
+        self.update(flip=flip, value=contrast)
+
+    def power(self, on):
+        self.update(on=on)
+
+    def close(self):
+        with self.condition:
+            self.stopping = True
+            self.condition.notify()
+        # A stalled bus must not prevent the service from stopping either.
+        self.thread.join(timeout=0.5)
+
+    def run(self):
+        display, applied, sent = None, None, -1
+        failures, failed_at, next_slow_log = 0, 0.0, 0.0
+        try:
+            while True:
+                with self.condition:
+                    self.condition.wait_for(lambda: self.stopping or self.revision != sent)
+                    if self.stopping:
+                        return
+                    revision = self.revision
+                    flip, value, on, frame = self.flip, self.value, self.on, self.frame
+                started = time.monotonic()
+                try:
+                    if display is None:
+                        display = self.factory(flip, value)
+                        applied = (flip, value, True)
+                    if flip != applied[0]:
+                        display.configure(flip, value)
+                        applied = (flip, value, True)
+                    elif value != applied[1]:
+                        display.contrast(value)
+                    if on and frame is not None:
+                        display.show(frame)
+                    if on != applied[2]:
+                        display.power(on)
+                    applied, sent = (flip, value, on), revision
+                    if failures:
+                        self.log(f'rpi-audio-ui: OLED recovered in {time.monotonic() - failed_at:.3f}s '
+                                 f'after {failures} failed transfers')
+                        failures = 0
+                    elapsed = time.monotonic() - started
+                    if elapsed >= 0.25 and started >= next_slow_log:
+                        self.log(f'rpi-audio-ui: slow OLED transfer: {elapsed:.3f}s (input continues)')
+                        next_slow_log = started + 10
+                except OSError as error:
+                    if not failures:
+                        failed_at = time.monotonic()
+                        self.log(f'rpi-audio-ui: OLED I2C error: {error}; retrying in background')
+                    failures += 1
+                    # An I2C transfer error does not invalidate the open adapter. Reinitialising
+                    # the OLED switches it off/on and causes flashing during noisy bursts.
+                    # Only reopen a removed adapter or invalid descriptor; retry page data otherwise.
+                    if display is not None and error.errno in (errno.EBADF, errno.ENODEV):
+                        display.close()
+                        display, applied = None, None
+                    delay = min(self.max_retry_s, self.retry_s * 2 ** min(failures - 1, 16))
+                    with self.condition:
+                        self.condition.wait_for(lambda: self.stopping, timeout=delay)
+        finally:
+            if display is not None:
+                try:
+                    display.power(False)
+                except OSError:
+                    pass
+                display.close()

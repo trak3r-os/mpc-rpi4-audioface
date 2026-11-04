@@ -108,21 +108,29 @@ def main():
     reader = open_reader(cfg)
     level_meter = meters.Reader()
 
-    def make_display():
-        return sh1106.Display(sh1106.I2C(cfg.bus, cfg.address), cfg.flip, cfg.contrast)
+    display = sh1106.AsyncDisplay(
+        lambda flip, contrast: sh1106.Display(sh1106.I2C(cfg.bus, cfg.address), flip, contrast),
+        cfg.flip, cfg.contrast, log)
 
     with ThreadPoolExecutor(max_workers=1) as worker, ThreadPoolExecutor(max_workers=1) as sensors:
         monitor = telemetry.Monitor(sensors.submit)
-        app = uiservice.App(reader, make_display, lambda: uiservice.read_status(STATUS), run_command, cfg, log,
+        app = uiservice.App(reader, lambda: display, lambda: uiservice.read_status(STATUS), run_command, cfg, log,
                             save_prefs, submit_command=lambda text: worker.submit(run_command, text),
                             load_hardware=monitor.read, load_levels=level_meter.read, start_overview=True)
         app.start(time.monotonic())
         log(f"rpi-audio-ui: running (I2C bus {cfg.bus}, address {cfg.address:#04x})")
+        next_slow_log = 0.0
         try:
             while not stopping:
-                app.step(time.monotonic())
+                started = time.monotonic()
+                app.step(started)
+                elapsed = time.monotonic() - started
+                if elapsed >= 0.25 and started >= next_slow_log:
+                    log(f"rpi-audio-ui: slow input loop: {elapsed:.3f}s")
+                    next_slow_log = started + 10
         finally:
             app.close()
+            display.close()
             reader.close()
             level_meter.close()
     return 0

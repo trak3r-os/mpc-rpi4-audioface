@@ -79,11 +79,11 @@ def test_show_only_transfers_changed_pages_and_keeps_a_copy():
     assert link.sent == []
     canvas.pixel(0, 8)
     screen.show(canvas)
-    assert link.sent == [[sh1106.COMMAND, 0xB1, 0x02, 0x10], [sh1106.DATA, 1, *([0] * 127)]]
+    assert link.sent == [[sh1106.COMMAND, 0xB1, 0x02, 0x10], [sh1106.DATA, 1]]
     link.sent.clear()
     canvas.pixel(0, 8, False)
     screen.show(canvas)
-    assert link.sent == [[sh1106.COMMAND, 0xB1, 0x02, 0x10], [sh1106.DATA, *([0] * 128)]]
+    assert link.sent == [[sh1106.COMMAND, 0xB1, 0x02, 0x10], [sh1106.DATA, 0]]
 
 
 def test_failed_page_is_retried():
@@ -107,6 +107,51 @@ def test_failed_page_is_retried():
     assert len(link.sent) == 2 and link.sent[0][1] == 0xB2 and link.sent[1][6] == 8
 
 
+def test_changed_span_uses_correct_column_and_keeps_unchanged_bytes_between_changes():
+    link, canvas = Link(), sh1106.Canvas()
+    screen = sh1106.Display(link)
+    screen.show(canvas)
+    link.sent.clear()
+    canvas.pixel(31, 9)
+    canvas.pixel(34, 10)
+    screen.show(canvas)
+    assert link.sent == [[sh1106.COMMAND, 0xB1, 1, 0x12], [sh1106.DATA, 2, 0, 0, 4]]
+
+
+def test_moving_menu_focus_only_transfers_the_arrow_pixels():
+    link, canvas = Link(), sh1106.Canvas()
+    screen, interface = sh1106.Display(link), display.UI()
+    screen.show(render.draw_rows(canvas, interface.render({})))
+    link.sent.clear()
+    interface.handle('cw', {})
+    screen.show(render.draw_rows(canvas, interface.render({})))
+    payloads = [packet for packet in link.sent if packet[0] == sh1106.DATA]
+    assert len(payloads) == 2 and all(len(packet) == 5 for packet in payloads)
+    assert not any(canvas.pages[0])
+
+
+def test_partial_failed_page_is_rewritten_when_latest_frame_returns_to_old_pixels():
+    link, canvas = Link(), sh1106.Canvas()
+    screen = sh1106.Display(link)
+    screen.show(canvas)
+    canvas.pixel(5, 19)
+    write = link.write
+
+    def partial(data):
+        write(data)  # the panel may have accepted some or all bytes before the reported error
+        if data[0] == sh1106.DATA:
+            raise OSError('partial transfer')
+
+    link.write = partial
+    with pytest.raises(OSError):
+        screen.show(canvas)
+    canvas.clear()
+    link.write = write
+    link.sent.clear()
+    screen.show(canvas)
+    assert link.sent == [[sh1106.COMMAND, 0xB2, 2, 0x10], [sh1106.DATA, *([0] * 128)]]
+
+
 def test_all_on_and_power():
     link = Link()
     screen = sh1106.Display(link)
@@ -116,6 +161,29 @@ def test_all_on_and_power():
     screen.power(False)
     screen.power(True)
     assert link.sent == [[0, 0xA5], [0, 0xA4], [0, 0xAE], [0, 0xAF]]
+
+
+def test_failed_initialisation_closes_the_bus():
+    link = Link()
+    closed = []
+    link.close = lambda: closed.append(True)
+
+    def fail(data):
+        raise OSError('disconnected')
+
+    link.write = fail
+    with pytest.raises(OSError):
+        sh1106.Display(link)
+    assert closed == [True]
+
+
+def test_home_top_line_is_black_and_submenu_heading_has_no_lit_background():
+    interface = display.UI()
+    canvas = render.draw_rows(sh1106.Canvas(), interface.render({}))
+    assert not any(canvas.pages[0])
+    interface.handle('push', {})
+    canvas = render.draw_rows(canvas, interface.render({}))
+    assert any(canvas.pages[0]) and canvas.pages[0][0] == canvas.pages[0][127] == 0
 
 
 def lit(canvas, x, y, w=6, h=8):

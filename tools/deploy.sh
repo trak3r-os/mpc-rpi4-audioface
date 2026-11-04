@@ -13,6 +13,8 @@
 # --hat also turns on the I2C bus and the hifiberry-dac overlay (a display and a DAC on the 40-pin header; install.sh --hat,
 # with a backup of config.txt; takes effect after a reboot, which this script never does) and, with --enable,
 # starts rpi-audio-ui.service (the OLED and its encoder).
+# --ui-only updates only the Python display service, with a backup and UI restart;
+# it preserves audio, configuration, the native meter helper and boot settings.
 # A running rpi-audiod is restarted so it runs the new code: the host hears a gap.
 # Needs passwordless sudo for the SSH user on the Pi (see docs/STATUS.md).
 # This is a thin wrapper: it copies the repo to the Pi and runs install.sh there as root with
@@ -24,29 +26,56 @@ set -euo pipefail
 host="${PI_HOST:-no3z@192.168.1.106}"
 root="$(cd "$(dirname "$0")/.." && pwd)"
 stage=rpi-audio-stage
-enable=0 hat=0 network=0 hostconf=
+enable=0 hat=0 network=0 ui_only=0 hostconf=
 while (($#)); do
   case $1 in
     --enable) enable=1 ;;
     --hat) hat=1 ;;
     --network) network=1 ;;
+    --ui-only) ui_only=1 ;;
     --host) hostconf=${2:?--host needs a name}; shift ;;
-    *) echo "usage: $0 [--enable] [--host NAME] [--hat] [--network]" >&2; exit 2 ;;
+    *) echo "usage: $0 [--enable] [--host NAME] [--hat] [--network] [--ui-only]" >&2; exit 2 ;;
   esac
   shift
 done
+if ((ui_only && (enable || hat || network))) || { ((ui_only)) && [[ -n $hostconf ]]; }; then
+  echo "deploy: --ui-only cannot be combined with audio/boot installation options" >&2
+  exit 2
+fi
 if [[ -n $hostconf && ! -f $root/tools/hosts/$hostconf.toml && ! -f $root/config/hosts.d/$hostconf.toml ]]; then
   echo "deploy: no config/hosts.d/$hostconf.toml or tools/hosts/$hostconf.toml" >&2
   exit 2
 fi
 
 # Refuse a gadget configuration the kernel would reject, before touching the Pi.
-(set -a; . "$root/config/gadget.env"; "$root/gadget/rpi-audio-gadget" check)
+if ((!ui_only)); then
+  (set -a; . "$root/config/gadget.env"; "$root/gadget/rpi-audio-gadget" check)
+fi
 
 ssh -o BatchMode=yes "$host" 'sudo -n true' 2>/dev/null || {
   echo "deploy: $host has no passwordless sudo; see docs/STATUS.md" >&2
   exit 1
 }
+
+if ((ui_only)); then
+  ssh "$host" "mkdir -p $stage/bridge/rpi-audio-ui"
+  rsync -a "$root/bridge/rpi-audio-ui/" "$host:$stage/bridge/rpi-audio-ui/"
+  ssh "$host" "sudo -n bash -s -- $stage" <<'UI_INSTALL'
+set -euo pipefail
+source_dir="$PWD/$1/bridge/rpi-audio-ui"
+lib=/usr/local/lib/rpi-audio/ui
+[[ -d $lib ]] || { echo "deploy: install the display service first" >&2; exit 1; }
+backup=$(mktemp -d /var/backups/rpi-audio-ui.XXXXXX)
+cp -a "$lib" "$backup/ui"
+install -m 644 "$source_dir/"*.py "$lib/"
+install -m 755 "$source_dir/rpi-audio-ui" "$lib/"
+if systemctl is-active --quiet rpi-audio-ui; then
+  systemctl restart rpi-audio-ui
+fi
+echo "deploy: UI updated; backup: $backup/ui"
+UI_INSTALL
+  exit 0
+fi
 
 rsync -a --delete "$root/gadget" "$root/systemd" "$root/config" "$root/tools" "$root/bridge" "$root/install.sh" \
   "$root/VERSION" "$host:$stage/"

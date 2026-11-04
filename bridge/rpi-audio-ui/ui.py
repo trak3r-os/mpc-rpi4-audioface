@@ -356,7 +356,7 @@ class Overview:
         context = ('Scene: ' + ('*' if scene.get('modified') else '') + scene['name']) if scene else \
                   ('Profile: ' + (status.get('host_profile_selection') or status.get('host_profile') or 'default'))
         return [Row(fit(self.title), True, icon=self.icon),
-                Row(fit(f"{mode} [{bridge_state(status, ui.hardware)}]")),
+                Row(fit(mode)),
                 Row(fit(f"{rate_text} / {device_text}")),
                 Row(fit(f"Routes {audio}   MIDI {midi}")),
                 meter_row("IN", ui.levels.get("in")), meter_row("OUT", ui.levels.get("out")),
@@ -1320,6 +1320,9 @@ class UI:
         short = {'Profile readiness': 'Profile state', 'Session counters': 'Session', 'Machine & buffers': 'Machine',
                  'Recent events': 'Events', 'Inputs status': 'Inputs', 'Outputs status': 'Outputs'}
         for n, row in enumerate(rows):
+            if n == 0:
+                # Quiet headings; the home menu needs no product name or decoration.
+                row = Row(fit('')) if isinstance(self.screen, Home) else replace(row, inverse=False)
             if n == 0 and row.icon:
                 title = row.label or row.text.rstrip()
                 row = replace(row, label=short.get(title, title))
