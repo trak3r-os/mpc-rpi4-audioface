@@ -383,3 +383,19 @@ Tracker a 4 canales, reproduciendo, ~20 s por caso:
   - Prueba larga (≥ 10 min) a 8 canales con el ajuste, e integridad del audio con una señal conocida.
   - Decidir entre la opción 1 y la 2.
   - Probar un dispositivo HS multicanal en el VL805.
+
+## Dúplex del Tracker junto a otro dispositivo FS dúplex (madrugada del 5)
+
+- [Pi] Tracker en 2 canales. La ruta GP-150 (HS) → Tracker abre su retorno (EP 0x04 OUT con realimentación 0x85). Con el mezclador (CODEC, FS, entrada 196 B y salida 192 B) en el mismo hub interno, usbmon da **22 de 22 completados IN con `-18` y 0 bytes**: JACK recibe ceros exactos. Con el retorno cerrado, la captura vuelve (`0:0:176`/`180`).
+- [Pi] Sin `fs_isoc_pad` sale igual, 22 de 22 con `-18`: no lo causa el módulo.
+- [repo] track3r-os no mezcla el retorno en los stems (ADR 0012, enmienda 6; `audio/src/graph.cpp:1251-1262`), y SET_INTERFACE del retorno no toca el flujo IN.
+- [Pi] **Con el mezclador desconectado, la misma ruta funciona:** 2951 completados IN, todos con estado 0, y 2033 OUT. Las muestras IN no son cero: el ruido de fondo está a −92 dBFS, con el Tracker parado.
+- [est] **Causa probable:** dos dispositivos FS en dúplex por el mismo TT (VIA, Single-TT) del VL805. La carga suma 751 B, por debajo del `fs_budget` de 1099, así que la comprobación de rpi-audiod no lo detecta. El dúplex a 2 canales sin el mezclador ya había funcionado ([tracker-matrix](2026-11-04-tracker-matrix.md)).
+- [Pi] **Efecto secundario:** `rmmod`/`modprobe fs_isoc_pad` vuelve a crear las interfaces. Tras el `modprobe`, rpi-audiod no lo detectó y dejó zita-a2j sobre un flujo muerto. Se arregló reiniciando rpi-audiod.
+  - [est] `install.sh` solo recarga el módulo si cambia, y al arrancar se carga antes que rpi-audiod.
+- [Pi] **Aparte:** la pantalla OLED guardaba las rutas en `/var/lib/rpi-audio-ui/` (el `STATE_DIRECTORY` de su servicio), que rpi-audiod no lee. Arreglado en `ec7eb38`.
+- [?] Pendiente:
+  - Averiguar qué combinación falla exactamente (el mezclador en dúplex o solo su captura) y si el límite es el TT o el VL805.
+  - Que rpi-audiod detecte la reconfiguración.
+  - Pi 5 (F2b).
+- Evidencia en `out/2026-11-04-pi-usb-host/duplex/`.
