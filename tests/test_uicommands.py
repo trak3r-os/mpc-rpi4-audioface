@@ -28,8 +28,9 @@ def test_confirmed_power_action_uses_only_the_exact_privileged_command(program, 
 
     monkeypatch.setattr(program.subprocess, 'run', run)
     assert program.run_command(f'system {action}') == ''
-    assert calls == [(['/usr/bin/sudo', '-n', '/usr/bin/systemctl', action],
-                      {'capture_output': True, 'text': True, 'timeout': program.COMMAND_TIMEOUT_S})]
+    assert len(calls) == 1 and calls[0][0] == ['/usr/bin/sudo', '-n', '/usr/bin/systemctl', action]
+    assert {k: v for k, v in calls[0][1].items() if k != 'env'} == {
+        'capture_output': True, 'text': True, 'timeout': program.COMMAND_TIMEOUT_S}
 
 
 def test_unknown_system_action_never_runs_a_subprocess(program, monkeypatch):
@@ -64,3 +65,18 @@ def test_audio_commands_still_use_the_daemon(program, monkeypatch):
     monkeypatch.setattr(program.subprocess, 'run', run)
     assert program.run_command('volume local-dac out 80') == ''
     assert calls == [[program.AUDIOD, 'cmd', 'volume', 'local-dac', 'out', '80']]
+
+
+def test_audio_commands_save_where_the_audio_service_reads(program, monkeypatch):
+    # systemd gives this service its own STATE_DIRECTORY; rpi-audiod must not inherit it, or routes
+    # chosen on the display are saved to a file the audio service never reads.
+    envs = []
+
+    def run(command, **kwargs):
+        envs.append(kwargs.get('env'))
+        return SimpleNamespace(returncode=0)
+
+    monkeypatch.setenv('STATE_DIRECTORY', '/var/lib/rpi-audio-ui')
+    monkeypatch.setattr(program.subprocess, 'run', run)
+    assert program.run_command('route a local-dac src=4') == ''
+    assert envs and envs[0] is not None and 'STATE_DIRECTORY' not in envs[0] and 'PATH' in envs[0]
