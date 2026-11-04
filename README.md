@@ -87,6 +87,13 @@ The Pi 4's USB-A ports share one controller with a limited budget for periodic (
 
 `rpi-audiod` works out each full-speed device's load before opening it. If it does not fit, the device waits and `rpi-audiod status` says why. Details are in `docs/PLAN.md`.
 
+The same controller (a VIA VL805) also **drops packets from full-speed multichannel inputs**. It happens whenever a packet exactly fills the buffer the controller was given for it: a Tracker sending 8 channels lost about one packet in 150. On a Pi 4, `install.sh` therefore installs a small kernel module, `fs_isoc_pad` (`tools/kernel/fs-isoc-pad/`). It adds one byte to the maximum packet size the host uses for those inputs.
+- **What changes:** each card behind the VL805 disappears and comes back once when it is plugged in.
+- **Install:** the module is built with DKMS, which installs `dkms` and the kernel headers when they are missing and rebuilds it after kernel updates.
+- **Measured** [Pi]: 0 lost packets in 10 minutes at 8 and at 10 channels.
+
+Details are in `docs/hw/2026-11-04-pi-usb-host.md`.
+
 ## Install on the Pi
 
 Use Raspberry Pi OS, 64-bit. The tested system is Debian 13 (trixie) with kernel 6.18. The Pi does not need PipeWire: rpi-audio uses JACK.

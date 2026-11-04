@@ -38,6 +38,8 @@
 # --tune-boot, always with a backup; the Pi is never rebooted by this script.
 # rpi-audio-cpu.service keeps the CPU governor at "performance" (disable it to go back to "ondemand").
 # PipeWire must not be installed alongside: it would grab the gadget and steer its pitch.
+# On a Pi 4 (VIA VL805 USB host) it also installs dkms and the kernel headers, and builds and loads
+# fs_isoc_pad (tools/kernel/fs-isoc-pad/), so full-speed multichannel capture does not drop packets.
 #
 # For tests only: RPI_AUDIO_ROOT=/some/dir puts every path under that prefix and skips
 # everything that is not a file operation (root and Pi checks, apt, useradd, systemctl, ...).
@@ -132,6 +134,59 @@ boot_config() {
 
 udc_exists() { compgen -G "$UDCDIR/*" >/dev/null; }
 
+# The VIA VL805 xHCI of the Pi 4 (PCI 1106:3483).
+has_vl805() {
+  local d
+  for d in /sys/bus/pci/devices/*; do
+    [[ $(cat "$d/vendor" 2>/dev/null) == 0x1106 && $(cat "$d/device" 2>/dev/null) == 0x3483 ]] && return 0
+  done
+  return 1
+}
+
+# The fs_isoc_pad module through DKMS: its source in /usr/src/fs-isoc-pad-VERSION, built for the running kernel
+# (DKMS rebuilds it for the next ones). Reloaded when the source changed: the cards behind the VL805 come back once.
+FSIP=fs-isoc-pad
+install_fs_isoc_pad() {
+  local src=$here/tools/kernel/$FSIP v dst f changed=0
+  v=$(sed -n 's/^PACKAGE_VERSION="\(.*\)"/\1/p' "$src/dkms.conf")
+  dst=/usr/src/$FSIP-$v
+  local headers=linux-headers-$(uname -r) missing=""
+  dpkg -s dkms >/dev/null 2>&1 || missing="dkms"
+  [[ -e /lib/modules/$(uname -r)/build ]] || missing="$missing $headers"
+  if [[ -n $missing ]]; then
+    say "installing $missing (for $FSIP)"
+    # shellcheck disable=SC2086
+    DEBIAN_FRONTEND=noninteractive apt-get install -y -q --no-install-recommends $missing
+  fi
+  for f in dkms.conf Kbuild Makefile fs_isoc_pad.c; do
+    cmp -s "$src/$f" "$dst/$f" || changed=1
+  done
+  if ((changed)); then
+    dkms remove -m "$FSIP" -v "$v" --all >/dev/null 2>&1 || true
+    rm -rf "$dst"
+    install -d "$dst"
+    install -m 644 "$src"/{dkms.conf,Kbuild,Makefile,fs_isoc_pad.c} "$dst/"
+    dkms add -m "$FSIP" -v "$v"
+  fi
+  if ! dkms status -m "$FSIP" -v "$v" -k "$(uname -r)" | grep -q installed; then
+    dkms install -m "$FSIP" -v "$v" -k "$(uname -r)"
+    changed=1
+  fi
+  if ((changed)) && grep -q '^fs_isoc_pad ' /proc/modules; then modprobe -r fs_isoc_pad; fi
+  modprobe fs_isoc_pad
+  say "$FSIP $v loaded"
+}
+uninstall_fs_isoc_pad() {
+  local d
+  command -v dkms >/dev/null || return 0
+  modprobe -r fs_isoc_pad 2>/dev/null || true
+  for d in /usr/src/$FSIP-*; do
+    [[ -d $d ]] || continue
+    dkms remove -m "$FSIP" -v "${d##*/$FSIP-}" --all >/dev/null 2>&1 || true
+    rm -rf "$d"
+  done
+}
+
 # --- Uninstall --------------------------------------------------------------
 
 if ((uninstall)); then
@@ -144,7 +199,8 @@ if ((uninstall)); then
   rm -rf "$LIB"
   if [[ -L $BIN/rpi-audiod ]]; then rm -f "$BIN/rpi-audiod"; fi
   rm -f "$MODULES" "$JOURNALD" "$POWER_POLICY"
-  say "removed the units, $LIB, the rpi-audiod link and the modules-load and journald drop-ins"
+  if ((! staging)); then uninstall_fs_isoc_pad; fi
+  say "removed the units, $LIB, the rpi-audiod link, the modules-load and journald drop-ins and the $FSIP module"
   if ((purge)); then
     rm -rf "$ETC" "$STATE"
     say "purged $ETC and $STATE"
@@ -266,10 +322,14 @@ printf '%s%s\n' "$(tr -d '[:space:]' < "$here/VERSION")" "${commit:+ ($commit)}"
 modules='snd-seq\nsnd-seq-midi\n'
 # i2c-dev gives /dev/i2c-N to a display on the header's I2C bus (--hat); once asked for, it stays.
 if ((hat)) || grep -qx i2c-dev "$MODULES" 2>/dev/null; then modules+='i2c-dev\n'; fi
+# fs_isoc_pad keeps the Pi 4's VL805 from dropping full-speed isochronous IN packets
+# (tools/kernel/fs-isoc-pad/), built by DKMS so a kernel update rebuilds it. Only where there is a VL805.
+if ((! staging)) && has_vl805; then modules+='fs_isoc_pad\n'; fi
 printf "$modules" > "$MODULES"
 sysrun modprobe snd-seq
 sysrun modprobe snd-seq-midi
 if [[ $modules == *i2c-dev* ]]; then sysrun modprobe i2c-dev; fi
+if [[ $modules == *fs_isoc_pad* ]]; then install_fs_isoc_pad; fi
 
 # A persistent journal (capped), so a shutdown can be read after the next boot: journalctl -b -1.
 printf '[Journal]\nStorage=persistent\nSystemMaxUse=64M\n' > "$JOURNALD"

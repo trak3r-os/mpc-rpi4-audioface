@@ -21,6 +21,11 @@ Reused code keeps its own licence. Everything else in the repository is GPL-3.0-
   raspberrypi/linux at a fixed commit, checks their SHA-256 and builds the module on the Pi; none of the kernel's
   files are kept in this repository.
 
+## Linux kernel module (`tools/kernel/fs-isoc-pad/`)
+
+- `fs_isoc_pad.c` is original code, but a kernel module has to be GPLv2-compatible to load and to use the kernel's
+  GPL-only symbols. So that directory is under GPL-2.0-or-later instead of this repository's GPL-3.0-or-later.
+
 ## rpi-audio Panel (`tools/hosts/akai-force-panel/`)
 
 - Adapted from `barsiren-mcp` (MIT): the shape of the native skin generator (`skin.py`: TUI.json components,
