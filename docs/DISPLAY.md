@@ -25,7 +25,7 @@ Shut down stops the system cleanly; wait for the Pi to finish halting before unp
 
 ## Screens
 
-Eight rows of 21 characters (a 5×7 font in 6×8-pixel cells): a title, six content rows, and connection indicators. The home menu leaves the top row black; other screens use white titles on black. A small arrow marks the selection without flashing a whole white row, and long lists show their position beside the title. Messages use the row above the connection indicators, with the list adjusting to keep the selected item visible. The display goes dark after `idle_s` seconds without input, and the first touch only wakes it.
+Eight rows of 21 characters (a 5×7 font in 6×8-pixel cells): a title, six content rows, and connection indicators. The home menu has no title, so its list starts on the top row and shows seven items; other screens use white titles on black. A small arrow marks the selection without flashing a whole white row, and long lists show their position beside the title. Messages use the row above the connection indicators, with the list adjusting to keep the selected item visible. The display goes dark after `idle_s` seconds without input, and the first touch only wakes it.
 
 The bottom bar updates every two seconds, with three icons:
 

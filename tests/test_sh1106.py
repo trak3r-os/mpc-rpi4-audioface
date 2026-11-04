@@ -127,7 +127,8 @@ def test_moving_menu_focus_only_transfers_the_arrow_pixels():
     screen.show(render.draw_rows(canvas, interface.render({})))
     payloads = [packet for packet in link.sent if packet[0] == sh1106.DATA]
     assert len(payloads) == 2 and all(len(packet) == 5 for packet in payloads)
-    assert not any(canvas.pages[0])
+    # Home starts its list on the top row: the arrow left it, the first item's icon and text stay.
+    assert not any(canvas.pages[0][2:6]) and any(canvas.pages[0][9:])
 
 
 def test_partial_failed_page_is_rewritten_when_latest_frame_returns_to_old_pixels():
@@ -177,10 +178,11 @@ def test_failed_initialisation_closes_the_bus():
     assert closed == [True]
 
 
-def test_home_top_line_is_black_and_submenu_heading_has_no_lit_background():
+def test_home_list_starts_on_top_line_and_submenu_heading_has_no_lit_background():
     interface = display.UI()
     canvas = render.draw_rows(sh1106.Canvas(), interface.render({}))
-    assert not any(canvas.pages[0])
+    # No title: the top row is the first item, with the selection arrow and no lit background.
+    assert any(canvas.pages[0][2:6]) and canvas.pages[0][0] == canvas.pages[0][127] == 0
     interface.handle('push', {})
     canvas = render.draw_rows(canvas, interface.render({}))
     assert any(canvas.pages[0]) and canvas.pages[0][0] == canvas.pages[0][127] == 0

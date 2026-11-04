@@ -62,18 +62,18 @@ def test_every_screen_is_the_size_of_the_display():
         press(u, st, *events)
         rows = u.render(st)
         assert len(rows) == display.ROWS and all(len(r.text) == display.COLS for r in rows)
-        assert not rows[0].inverse
+        assert not rows[0].inverse or rows[0].selected   # home has no title: its top row may be the cursor
 
 
 def test_home_and_navigation():
     u, st = display.UI(), status()
-    assert [r.rstrip() for r in text(u, st)[:4]] == ["", ">Send audio", " Outputs", " Levels & mute"]
+    assert [r.rstrip() for r in text(u, st)[:4]] == [">Send audio", " Outputs", " Levels & mute", " MIDI"]
     press(u, st, "cw", "cw", "confirm")
     assert text(u, st)[0].strip() == "Levels & mute"
     press(u, st, "back")
-    assert text(u, st)[0].strip() == ""
+    assert text(u, st)[2].startswith(">Levels & mute")
     press(u, st, "ccw", "ccw", "ccw")
-    assert text(u, st)[1].startswith(">Send audio")
+    assert text(u, st)[0].startswith(">Send audio")
     with pytest.raises(ValueError):
         u.handle("long", st)
 

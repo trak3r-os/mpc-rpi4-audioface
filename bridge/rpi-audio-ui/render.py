@@ -97,11 +97,12 @@ def draw_rows(canvas, rows):
         elif inverse:
             canvas.rect(0, y, sh1106.WIDTH - 1, y + font5x7.CELL_H - 1, fill=True)
         if row.icon:
-            # The header and home menu get icons, with room for the selection arrow.
-            x = 9 if number else 2
+            # The header and home menu get icons; list rows (home starts on the top row) leave room for the arrow.
+            item = bool(number) or row.text[:1] in (">", " ")
+            x = 9 if item else 2
             icon(canvas, row.icon, x, y, on=not inverse)
-            text = row.label or (row.text[1:] if number and row.text[:1] in (">", " ") else row.text).rstrip()
-            limit = 18 if number else 19
+            text = row.label or (row.text[1:] if item and row.text[:1] in (">", " ") else row.text).rstrip()
+            limit = 18 if item else 19
             if row.scroll:
                 top, total, visible = row.scroll
                 position = f"{min(top + visible, total)}/{total}"

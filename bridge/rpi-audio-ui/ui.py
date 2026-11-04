@@ -203,6 +203,7 @@ class Menu:
     """A list the encoder moves through; CONFIRM acts on the row, PUSH does too unless the screen says otherwise."""
     title = ""
     icon = "list"
+    headless = False    # True: no title row, the list uses the top row too
 
     def __init__(self):
         self.cursor = self.top = 0
@@ -241,12 +242,12 @@ class Menu:
 
     def rows(self, ui, status, now):
         items = self.items(ui, status, now)
-        visible = BODY - (1 if ui.message or ui.notice else 2 if ui.notification else 0)
+        visible = BODY + self.headless - (1 if ui.message or ui.notice else 2 if ui.notification else 0)
         self.cursor = min(self.cursor, max(len(items) - 1, 0))
         self.top = min(max(self.top, self.cursor - visible + 1), self.cursor)
         scroll = (self.top, len(items), visible) if len(items) > visible else ()
         title = self.heading(ui, status)
-        out = [Row(fit(title), True, icon=self.icon, scroll=scroll, label=title)]
+        out = [] if self.headless else [Row(fit(title), True, icon=self.icon, scroll=scroll, label=title)]
         if not items:
             out.append(Row(fit(" (nothing here)")))
         for n, (text, payload) in list(enumerate(items))[self.top:self.top + visible]:
@@ -263,6 +264,7 @@ class Menu:
 class Home(Menu):
     title = "rpi-audio"
     icon = "home"
+    headless = True     # no title row: the list starts on the top row, one more item in view
 
     def items(self, ui, status, now):
         return [("Send audio", SendAudio), ("Outputs", Outputs), ("Levels & mute", Devices),
@@ -1376,20 +1378,22 @@ class UI:
         polished = []
         short = {'Profile readiness': 'Profile state', 'Session counters': 'Session', 'Machine & buffers': 'Machine',
                  'Recent events': 'Events', 'Inputs status': 'Inputs', 'Outputs status': 'Outputs'}
+        headless = getattr(self.screen, 'headless', False)
         for n, row in enumerate(rows):
-            if n == 0:
-                # Quiet headings; the home menu needs no product name or decoration.
-                row = Row(fit('')) if isinstance(self.screen, Home) else replace(row, inverse=False)
-            if n == 0 and row.icon:
+            heading = n == 0 and not headless
+            if heading:
+                # Quiet headings: white text on black.
+                row = replace(row, inverse=False)
+            if heading and row.icon:
                 title = row.label or row.text.rstrip()
                 row = replace(row, label=short.get(title, title))
-            width = 19 if n == 0 else 18 if row.icon else 20
-            if n == 0 and row.scroll:
+            width = 19 if heading else 18 if row.icon else 20
+            if heading and row.scroll:
                 top, total, visible = row.scroll
                 width = (127 - len(f'{min(top + visible, total)}/{total}') * 6 - 13) // 6
             elif row.badge:
                 width = (127 - len(row.badge) * 6 - 14) // 6
-            if row.label and len(row.label) > width and (n == 0 or row.selected):
+            if row.label and len(row.label) > width and (heading or row.selected):
                 row = replace(row, tick=tick)
             polished.append(row)
         rows = polished
