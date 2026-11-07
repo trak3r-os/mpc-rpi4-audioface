@@ -7,7 +7,9 @@ El usuario cambió la Pi 4 por una Pi 5 y arrancó con la misma tarjeta SD. Sesi
 - [Pi] Raspberry Pi 5 Model B Rev 1.1, **1 GB**, 4 × Cortex-A76 (CPU part 0xd0b). Kernel `6.18.50+rpt-rpi-2712`, **páginas de 16 KiB**. Debian 13 trixie. EEPROM al día (25-09-2026).
 - [Pi] Red: `raspberrypi.local`, Ethernet 192.168.1.109 y Wi-Fi 192.168.2.34 (`bender_5G`). Misma clave de host que la Pi 4 (misma SD). Las IP anteriores (.106, .229) ya no responden.
 - [Pi] USB: dos xHCI del RP1, `xhci-hcd.0` (buses 1 USB2 de 2 puertos y 2 USB3) y `xhci-hcd.1` (buses 3 y 4). No hay VL805 ni hub interno. Los dispositivos FS caen en el bus 1 o el 3, así que el presupuesto «por bus» de `rpi-audiod` queda por controlador.
-- [Pi] Alimentación: `max_current` del firmware 3000 mA (fuente sin USB-PD de 5 A, por el splitter), `usb_max_current_enable=0`, EXT5V 5,07 V, `throttled=0x0`. Con esto **la Pi 5 limita los USB-A a 600 mA en total** [ext, documentación de Raspberry Pi]. No se ha cambiado.
+- [Pi] Alimentación: `max_current` del firmware 3000 mA, `usbpd_power_data_objects` todo a cero (no hay negociación USB-PD), `usb_max_current_enable=0`, EXT5V 5,01-5,14 V, `throttled=0x0`. Con esto **la Pi 5 limita los USB-A a 600 mA en total** [ext, documentación de Raspberry Pi]. No se ha cambiado.
+  - La fuente es la oficial de 45 W, que sí ofrece 5,1 V/5 A por PD [ext, fichas de distribuidores]. La culpa es del splitter 8086 [ext, tabla del fabricante]: en POWER solo presenta 5,1 kΩ en CC y no habla PD, y en DATA POWER presenta a la Pi una resistencia fija en CC (10 kΩ a 5 V), que equivale a «3 A por defecto». Con este splitter, la Pi verá 3 A con cualquier fuente.
+  - Enchufar la fuente directa no es opción: el USB-C de la Pi es a la vez la entrada de alimentación y el puerto del gadget. Para los dispositivos que consuman, un hub alimentado. `usb_max_current_enable=1` solo tras medir bajo carga (`get_throttled`, EXT5V): sin contrato PD no se sabe si la fuente o el splitter dan más de 3 A a 5 V [?].
 
 ## Qué fallaba al arrancar
 
