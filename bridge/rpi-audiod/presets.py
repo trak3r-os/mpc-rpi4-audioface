@@ -210,6 +210,12 @@ def follow_moves(state, present):
     moved = []
     for vidpid, new in fresh.items():
         old = [i for i in sorted(used) if i not in present and (audiod.by_port(i) or ("", ""))[1] == vidpid]
+        if len(old) > 1:
+            # Leftover mutes or levels of a long-gone port must not block the move: prefer the one
+            # old identity that still holds gadget slots.
+            slotted = [i for i in old if i in state.get("in", {}) or i in state.get("out", {})]
+            if len(slotted) == 1:
+                old = slotted
         if len(new) == 1 and len(old) == 1:
             rename_identity(state, old[0], new[0])
             moved.append((old[0], new[0]))

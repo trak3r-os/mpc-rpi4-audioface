@@ -152,6 +152,16 @@ def test_two_stored_namesakes_are_a_guess_so_nothing_moves():
     assert presets.follow_moves(state, {NEW, GP}) == [] and repr(state) == before
 
 
+def test_a_namesake_left_only_in_mutes_or_levels_does_not_block_the_move():
+    # Seen on the Pi 5: a mute and a level of a Pi 4 hub port outlived its slots.
+    stale = "usb-1-1.3-08bb:2902"
+    state = mixer_state()
+    state["mute"]["in"].append(stale)
+    state["volume"]["out"][stale] = 100
+    assert presets.follow_moves(state, {NEW, GP}) == [(OLD, NEW)]
+    assert state["in"][NEW] == 3 and state["routes"][0]["src"] == NEW and stale in state["mute"]["in"]
+
+
 def test_two_new_namesakes_at_once_are_a_guess_so_nothing_moves():
     state = mixer_state()
     before = repr(state)
