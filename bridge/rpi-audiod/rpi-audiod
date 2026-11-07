@@ -1050,9 +1050,10 @@ class Daemon:
             self.place_without_gadget()
             return
         hosts = load_hosts()
-        assigned = {}
+        assigned, moves = {}, []
 
         def allocate(slots):
+            moves[:] = presets.follow_moves(slots, set(self.devices))
             reserved = self.reserved(slots, hosts)
             if self.hub:
                 outputs.migrate_host_routes(slots)
@@ -1073,6 +1074,7 @@ class Daemon:
         except OSError as e:
             log(f"rpi-audiod: cannot save {STATE}: {e}")
             slots, self.slots_stamp = allocate(load_slots()), slots_stamp()
+        self.say_moves(moves)
         for direction in (IN, OUT):
             for i in self.devices:
                 b = self.bridges.get((i, direction))
@@ -1083,6 +1085,14 @@ class Daemon:
                     log(f"rpi-audiod: {b.client} -> gadget {direction.upper()} "
                         + (f"{b.start}-{b.start + b.size - 1}" if b.start else "parked: no free channels"))
         self.take_state(slots)
+
+    def say_moves(self, moves):
+        """Logs and records the devices whose saved state followed them to another USB port (presets.follow_moves)."""
+        for old, new in moves:
+            where = " from {} to {}".format(*(audiod.by_port(i)[0] for i in (old, new)))
+            text = f"{self.devices[new].id} moved{where}: routes follow"
+            log(f"rpi-audiod: {text}")
+            self.note("device_moves", text)
 
     def host_name(self, slots):
         """The selected host profile: the saved choice (`host NAME`), else [host] profile, else None."""
@@ -1099,12 +1109,23 @@ class Daemon:
     def place_without_gadget(self):
         """Standalone: no gadget channels to give out (and the saved ones, the host mode's, stay as they are).
         A bridge only needs a mark that it may run."""
-        self.slots_stamp = slots_stamp()
+        moves = []
+
+        def follow(slots):
+            moves[:] = presets.follow_moves(slots, set(self.devices))
+            return slots
+
+        try:
+            slots, self.slots_stamp = update_slots(follow)
+        except OSError as e:
+            log(f"rpi-audiod: cannot save {STATE}: {e}")
+            slots, self.slots_stamp = load_slots(), slots_stamp()
+        self.say_moves(moves)
         for b in self.bridges.values():
             if not b.placed:
                 b.start, b.placed = 1, True
                 log(f"rpi-audiod: {b.client} ready (standalone: routes only)")
-        self.take_state(load_slots())
+        self.take_state(slots)
 
     def take_state(self, slots):
         """The saved mutes, device-to-device routes and levels."""

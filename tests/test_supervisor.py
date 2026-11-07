@@ -1936,3 +1936,73 @@ def test_saved_output_gain_is_used_at_process_start_not_after_the_first_scan(mon
     w.run_loop(1)
     child = d.output_workers['level-local-dac']
     assert child.cmd[-2:] == ['--level', '25'] and not child.levels
+
+
+# --- a device with no serial number plugged into another USB port ---------------------------------------------
+
+def on_port(card, port, name="CODEC", usbbus="001/002"):
+    ident = f"usb-{port}-08bb:2902"
+    return daemon.Device(card, name, usbbus, ident, {IN: (48000, 2), OUT: (48000, 2)}, None,
+                         speed="12", bus=port[0], loads={IN: 196, OUT: 192}, port=port)
+
+
+def test_a_serial_less_device_on_another_port_takes_its_routes_with_it(monkeypatch, tmp_path):
+    w, d = make(monkeypatch, tmp_path)
+    w.devices = [on_port(1, "3-2"), usb_device(2, "synth")]
+    d.scan_devices()
+    daemon.cmd_change("route usb-3-2-08bb:2902 usb-synth")
+    daemon.cmd_change("mute usb-3-2-08bb:2902 out on")
+    d.scan_devices()
+    w.devices = [usb_device(2, "synth")]
+    d.scan_devices()   # unplugged
+    w.devices = [on_port(3, "1-2", usbbus="001/004"), usb_device(2, "synth")]
+    d.scan_devices()
+    assert logged(w, "CODEC moved from 3-2 to 1-2: routes follow")
+    slots = daemon.load_slots()
+    assert slots["routes"] == [{"src": "usb-1-2-08bb:2902", "dst": "usb-synth"}]
+    assert slots["in"]["usb-1-2-08bb:2902"] == 1 and "usb-3-2-08bb:2902" not in slots["in"]
+    assert slots["mute"]["out"] == ["usb-1-2-08bb:2902"]
+    assert d.routes == daemon.routing.from_state(slots) and d.bridges[("usb-1-2-08bb:2902", IN)].start == 1
+    events = d.session.snapshot()["events"]
+    moved = [e["detail"] for e in events if e["kind"] == "device_moves"]
+    assert moved == ["CODEC moved from 3-2 to 1-2: routes follow"]
+    d.scan_devices()
+    assert len(logged(w, "routes follow")) == 1   # said once
+
+
+def test_two_candidates_and_serial_devices_are_left_alone(monkeypatch, tmp_path):
+    w, d = make(monkeypatch, tmp_path)
+    w.devices = [on_port(1, "3-2"), on_port(2, "1-1", name="CODEC2", usbbus="001/003")]
+    d.scan_devices()
+    daemon.cmd_change("route usb-3-2-08bb:2902 usb-1-1-08bb:2902")
+    w.devices = []
+    d.scan_devices()
+    w.devices = [on_port(3, "1-2", usbbus="001/004")]
+    d.scan_devices()
+    slots = daemon.load_slots()
+    assert not logged(w, "routes follow")
+    assert slots["routes"] == [{"src": "usb-3-2-08bb:2902", "dst": "usb-1-1-08bb:2902"}]
+    assert "usb-1-2-08bb:2902" in slots["in"] and slots["in"]["usb-3-2-08bb:2902"] == 1   # new one got its own slot
+
+
+def test_a_present_namesake_does_not_lose_its_state_to_a_new_device(monkeypatch, tmp_path):
+    w, d = make(monkeypatch, tmp_path)
+    w.devices = [on_port(1, "3-2")]
+    d.scan_devices()
+    daemon.cmd_change("route usb-3-2-08bb:2902 local-dac")
+    w.devices = [on_port(1, "3-2"), on_port(3, "1-2", usbbus="001/004")]
+    d.scan_devices()
+    assert not logged(w, "routes follow")
+    assert daemon.load_slots()["routes"] == [{"src": "usb-3-2-08bb:2902", "dst": "local-dac"}]
+
+
+def test_standalone_mode_follows_a_moved_device_too(monkeypatch, tmp_path):
+    w, d = alone(monkeypatch, tmp_path, on_port(1, "3-2"))
+    d.scan_devices()
+    daemon.cmd_change("route usb-3-2-08bb:2902 local-dac")
+    w.devices = []
+    d.scan_devices()
+    w.devices = [on_port(3, "1-2", usbbus="001/004")]
+    d.scan_devices()
+    assert logged(w, "CODEC moved from 3-2 to 1-2")
+    assert daemon.load_slots()["routes"] == [{"src": "usb-1-2-08bb:2902", "dst": "local-dac"}]

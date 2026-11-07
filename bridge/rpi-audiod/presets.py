@@ -8,6 +8,9 @@ import re
 import hashlib
 import json
 
+import audiod
+import midiroute
+
 NAME_MAX = 24          # a device name or a preset name
 CHANNEL_NAME_MAX = 16  # the name of one device channel
 SLOTS = 8              # presets 1..8
@@ -152,3 +155,62 @@ def summary(store):
     """[{"slot", "name", "saved"}] for the saved presets, in slot order, for the status."""
     return [{"slot": n, "name": store[str(n)].get("name", ""), "saved": store[str(n)].get("saved", "")}
             for n in range(1, SLOTS + 1) if isinstance(store.get(str(n)), dict)]
+
+
+def identities(state):
+    """Every device identity that slots.json mentions: slots, names, mutes, levels, MIDI cables and routes."""
+    used = set()
+    for key in ("in", "out", "in_channels", "out_channels", "names"):
+        used |= set(state.get(key, {}))
+    used |= {midiroute.split(endpoint)[0] for endpoint in state.get("midi", {})}
+    for key in ("mute", "volume"):
+        for side in state.get(key, {}).values():
+            used |= set(side)
+    for item in state.get("routes", []) + state.get("midi_routes", []):
+        if isinstance(item, dict):
+            used |= {midiroute.split(item[k])[0] for k in ("src", "dst") if isinstance(item.get(k), str)}
+    return used
+
+
+def rename_identity(state, old, new):
+    """Moves everything stored under identity `old` to `new`, in place: gadget slots and sizes, MIDI cables,
+    names, mutes, levels, and the device ends of audio and MIDI routes."""
+    for key in ("in", "out", "in_channels", "out_channels", "names"):
+        if old in state.get(key, {}):
+            state[key][new] = state[key].pop(old)
+    if "midi" in state:
+        state["midi"] = {(new + endpoint[len(old):] if midiroute.split(endpoint)[0] == old else endpoint): cable
+                         for endpoint, cable in state["midi"].items()}
+    for side, names in state.get("mute", {}).items():
+        state["mute"][side] = [new if name == old else name for name in names]
+    for levels in state.get("volume", {}).values():
+        if old in levels:
+            levels[new] = levels.pop(old)
+    for key in ("routes", "midi_routes"):
+        for item in state.get(key, []):
+            for end in ("src", "dst"):
+                if isinstance(item.get(end), str) and midiroute.split(item[end])[0] == old:
+                    item[end] = new + item[end][len(old):]
+    return state
+
+
+def follow_moves(state, present):
+    """Lets a device with no serial number keep its state when it is plugged into another USB port.
+
+    Its identity is made from the port (usb-3-2-08bb:2902), so on another port it looks like a new device. One
+    that is present, has nothing stored, and has exactly one stored namesake (same vid:pid, an identity from a
+    port, not present now) takes that namesake's state; with two or more candidates, or two such devices at
+    once, nothing is guessed. Edits the state in place; returns [(old identity, new identity)]."""
+    used = identities(state)
+    fresh = {}
+    for identity in present:
+        parts = audiod.by_port(identity)
+        if parts and identity not in used:
+            fresh.setdefault(parts[1], []).append(identity)
+    moved = []
+    for vidpid, new in fresh.items():
+        old = [i for i in sorted(used) if i not in present and (audiod.by_port(i) or ("", ""))[1] == vidpid]
+        if len(new) == 1 and len(old) == 1:
+            rename_identity(state, old[0], new[0])
+            moved.append((old[0], new[0]))
+    return moved

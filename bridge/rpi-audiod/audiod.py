@@ -81,6 +81,13 @@ def identity(vendor, product, serial, port):
     return f"usb-{port}-{vendor}:{product}"
 
 
+def by_port(identity):
+    """(sysfs port path, "vid:pid") of an identity made from the port (a device with no usable serial),
+    else None: serial identities, local outputs, and deduplicated ones (#2) are not."""
+    m = re.fullmatch(r"usb-(\d+(?:[.-]\d+)*)-([0-9a-f]{4}:[0-9a-f]{4})", identity)
+    return (m[1], m[2]) if m else None
+
+
 def dedupe(identities):
     """Appends #2, #3... to repeated identities, in order."""
     seen, out = {}, []
