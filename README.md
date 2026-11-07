@@ -8,7 +8,7 @@
 [![GitHub issues](https://img.shields.io/github/issues/trak3r-os/mpc-rpi4-audioface?style=flat-square&logo=github)](https://github.com/trak3r-os/mpc-rpi4-audioface/issues)
 [![GitHub stars](https://img.shields.io/github/stars/trak3r-os/mpc-rpi4-audioface?style=flat-square&logo=github)](https://github.com/trak3r-os/mpc-rpi4-audioface/stargazers)
 
-[![Raspberry Pi 4](https://img.shields.io/badge/Raspberry_Pi-4-C51A4A?style=flat-square&logo=raspberrypi&logoColor=white)](docs/MANUAL.md#16-build-your-own-device)
+[![Raspberry Pi 5](https://img.shields.io/badge/Raspberry_Pi-5-C51A4A?style=flat-square&logo=raspberrypi&logoColor=white)](docs/MANUAL.md#16-build-your-own-device)
 [![USB Audio Class 2](https://img.shields.io/badge/USB_Audio_Class_2-26_in_%C3%97_26_out-267d9c?style=flat-square)](docs/MANUAL.md#6-record-over-usb)
 [![USB MIDI](https://img.shields.io/badge/USB_MIDI-4_virtual_cables-7660ac?style=flat-square)](docs/MIDI.md)
 [![RTP / PCM](https://img.shields.io/badge/Network-RTP%2FPCM-087d76?style=flat-square)](docs/MANUAL.md#12-network-audio)
