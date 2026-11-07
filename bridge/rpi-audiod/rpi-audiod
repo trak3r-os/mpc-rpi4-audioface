@@ -1324,8 +1324,10 @@ class Daemon:
                 for key, rate, client, tool in (("usb-send", self.rates[0], "usb_host_out", "zita-j2a"),
                                                 ("usb-receive", self.rates[1], "usb_host_in", "zita-a2j")):
                     if rate:
+                        # u_audio refuses fewer than 4 periods of 256 frames (PERIODS [4 16] on
+                        # 6.18 rpi-2712), and zita then fails to open the gadget card.
                         desired[key] = [tool, "-j", client, "-d", f"hw:CARD={self.usb_card}", "-r", str(rate),
-                                        "-c", str(self.usb_channels), "-p", "256", "-n", "3"]
+                                        "-c", str(self.usb_channels), "-p", "256", "-n", "4"]
             helper = str(Path(__file__).resolve().parent / "network/rpi-audio-network")
             for identity, transport, client in ((outputs.RTP, "rtp", "network_rtp_out"),
                                                 (outputs.LINK, "link", "network_link_out")):

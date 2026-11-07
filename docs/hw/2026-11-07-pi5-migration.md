@@ -33,6 +33,19 @@ El usuario cambió la Pi 4 por una Pi 5 y arrancó con la misma tarjeta SD. Sesi
 - `rpi-audiod doctor`: todo `ok` salvo el aviso del UDC sin host. jackd en modo Hub sobre `sndrpihifiberry`, 48 kHz, 256 × 3.
 - Pruebas locales: `tests/test_install.py` 33 correctas.
 
+## Primera sesión con la Force (21:02–21:15)
+
+Pi 5 en el USB host de la Force; mezclador (PCM2902), GP-150 y luego el Tracker en los USB-A.
+
+- [Pi] La Force enumera el gadget (UDC `configured`, MIDI conectado a los 20 s del arranque). MPC abre el audio a **44,1 kHz** en los dos sentidos al elegir rpi-audio.
+- [Pi, código] **Fallo:** en modo Hub los puentes del gadget (`zita-j2a`/`zita-a2j` sobre `hw:CARD=UAC2Gadget`) no abrían: `Can't open ALSA … device`, reintento cada 6 s. `u_audio` en 6.18.50-rpi-2712 exige `PERIODS [4 16]` (`arecord --dump-hw-params`) y el daemon pedía `-n 3`. A mano, `zita-a2j … -p 256 -n 3` falla y `-n 4` abre. Arreglado a `-n 4` y desplegado: los dos puentes corren y el host aparece `running` a 44,1 kHz.
+- [Pi] **Rutas:** en Hub, al host solo llega lo que tiene ruta. Las del mezclador seguían con su clave de la Pi 4 (`usb-1-1.3-08bb:2902`); ahora es `usb-3-2-08bb:2902`. Añadidas: mezclador → IN 1–2, OUT 3–4 → mezclador, Tracker 1–8 → IN 15–22, OUT 11–12 → Tracker. GP-150 sigue en IN 3–8 / OUT 5–8. Las rutas viejas quedan esperando.
+- [Pi] **Presupuesto FS:** OUT 3–4 → mezclador no se abre: el bus 3 lleva Tracker (720 + 183 B) y la entrada del mezclador (196 B) = 1099 B, el límite medido en la Pi 4. No se ha medido el del RP1.
+- [Pi] **GP-150** enumera a 480 Mbit/s en el bus 1: no consume presupuesto FS.
+- [Pi] **Tracker a 8 canales en el RP1, reproduciendo (datos distintos de cero):** usbmon, 60 s: 59 997 paquetes de captura de 704/720 B, **0 errores ni vacíos**; mezclador 59 997 sin errores; 0 xruns nuevos. En la Pi 4 (VL805) este caso perdía 40–195 paquetes en 20 s. Falta un soak largo y la integridad con señal conocida.
+- [Pi] Desde las 21:11:57 el I²C de la pantalla (`1f00074000.i2c`) da `controller timed out` ~1/s, y `eth0` queda sin portadora; coincide con conectar el Tracker. La Pi no se reinició (mismo arranque, `throttled=0x0`). Se sigue por Wi-Fi.
+- [?] No comprobado en la Force: si MPC oye cada entrada. No había `FORCE_PASS` para MPC Remote.
+
 ## Falta
 
 - **Enumerar y transmitir con un host** (portátil y Force): 26×26, MIDI, soak. Las pruebas de la Pi 4 no valen aquí.

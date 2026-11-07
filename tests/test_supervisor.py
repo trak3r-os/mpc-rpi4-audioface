@@ -1519,6 +1519,7 @@ def test_hub_keeps_local_clock_running_when_host_leaves(monkeypatch, tmp_path):
     w.rates = (44100, 48000)
     w.seconds(1.2)
     assert d.output_workers['usb-send'].cmd[d.output_workers['usb-send'].cmd.index('-r') + 1] == '44100'
+    assert d.output_workers['usb-send'].cmd[-4:] == ['-p', '256', '-n', '4']
     assert d.output_workers['usb-receive'].cmd[d.output_workers['usb-receive'].cmd.index('-r') + 1] == '48000'
     w.rates = (0, 0)
     w.seconds(1.2)
