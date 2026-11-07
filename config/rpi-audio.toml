@@ -70,6 +70,11 @@ reserve_out = [1, 2]
 # (docs/hw/2026-10-29-f2-usb-devices.md); a Pi 5 has two buses, each with its own budget,
 # not measured yet. 0 turns the check off.
 fs_budget = 1099
+# Optional short names for the USB ports, shown on the display's "USB ports" screen in place
+# of "p2". The key is the sysfs port path: the USB port of the device under /sys/bus/usb/devices
+# ("1-2" is port 2 of bus 1; "3-1.4" is port 4 of a hub on port 1 of bus 3). The screen
+# shows each device's path in its detail. Empty by default.
+# port_labels = { "1-1" = "top blue", "1-2" = "bottom blue", "3-1" = "top black" }
 
 [ui]
 # rpi-audio-ui, the OLED and rotary encoder (docs/DISPLAY.md); it only runs when installed with --hat.

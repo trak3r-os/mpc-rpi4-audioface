@@ -7,6 +7,7 @@ from typing import NamedTuple
 
 FS_BUDGET = 1099   # B per frame the Pi 4's VL805 accepted (docs/hw/2026-10-29-f2-usb-devices.md); not measured on a Pi 5
 ISOCHRONOUS = 1
+LABEL_MAX = 20   # longest port label kept, in characters: one line of the display
 
 
 class Endpoint(NamedTuple):
@@ -45,6 +46,28 @@ def full_speed(speed):
         return float(speed) <= 12
     except ValueError:
         return None
+
+
+def speed_mbit(speed):
+    """sysfs `speed` as a number of Mbit/s (12, 480, 1.5), None when it is missing or not a number."""
+    try:
+        value = float(speed)
+    except (TypeError, ValueError):
+        return None
+    return int(value) if value == int(value) else value
+
+
+def bus_number(bus):
+    """sysfs `busnum` as an int, None when it is missing or not a number."""
+    return int(bus) if isinstance(bus, str) and bus.isdigit() else None
+
+
+def port_labels(table):
+    """The `[usb] port_labels` table ({sysfs port path: short label}) with only its usable entries."""
+    if not isinstance(table, dict):
+        return {}
+    return {str(port).strip(): str(label).strip()[:LABEL_MAX] for port, label in table.items()
+            if str(port).strip() and str(label).strip()}
 
 
 def direction_load(speed, altsets, plan, interfaces):

@@ -287,7 +287,9 @@ def test_smf_sysex():
 def test_status_reply():
     small = {"devices": [{"identity": GP, "usbbus": "001/002", "in": {"client": "a_in", "fs_load": 196}}], "time": "t"}
     assert midi.status_reply(small) == json.dumps(small, separators=(",", ":"), sort_keys=True)
-    big = {"devices": [{"identity": f"{GP}{k}", "card": "c", "usbbus": "001/00%d" % k,
+    big = {"usb_buses": [{"bus": 1, "fs_load": 388, "fs_demand": 388, "fs_budget": 1099}],
+           "devices": [{"identity": f"{GP}{k}", "card": "c", "usbbus": "001/00%d" % k,
+                        "usb": {"bus": 1, "port": "1-%d" % k, "speed": 12, "by_port": True},
                         "in": {"client": "a_in", "fs_load": 196, "level": 50, "names": ["n" * 16] * 6},
                         "out": {"client": "a_out", "fs_load": 192, "names": ["n" * 16] * 6}} for k in range(6)],
            "presets": [{"slot": 1, "name": "p", "saved": "t"}]}
@@ -301,6 +303,10 @@ def test_status_reply():
     assert stages[0] != stages[-1] and "fs_load" not in stages[-1] and "usbbus" not in stages[-1]
     assert "card" not in stages[-1] and "identity" in stages[-1]
     assert "usbbus" in midi.status_reply(big, full - 1) and "fs_load" not in midi.status_reply(big, full - 1)
+    # where a device is plugged in is diagnostic too: it goes first, with the per-bus summary
+    first = json.loads(midi.status_reply(big, full - 1))
+    assert "usb" not in first["devices"][0] and "usb_buses" not in first
+    assert "usb" in json.loads(midi.status_reply(big, limit=10**6))["devices"][0]
 
 
 def test_cc_percent():

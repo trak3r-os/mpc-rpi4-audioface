@@ -434,10 +434,11 @@ class Child:
 
 class Device:
     """A USB audio card as found in /proc/asound, with what is read once when it is found:
-    its profile, USB speed and bus, and the full-speed load of each direction."""
+    its profile, USB speed, bus and port, and the full-speed load of each direction."""
 
-    def __init__(self, card, card_id, usbbus, ident, plans, profile=None, speed="", bus="", loads=None):
+    def __init__(self, card, card_id, usbbus, ident, plans, profile=None, speed="", bus="", loads=None, port=""):
         self.card, self.id, self.usbbus, self.identity = card, card_id, usbbus, ident
+        self.port = port   # sysfs path of the USB port it is plugged into ("1-2"), "" when unknown
         self.plans = plans  # {IN: (rate, channels) or None, OUT: ...}
         self.profile, self.speed, self.bus = profile, speed, bus
         self.loads = loads or {IN: None, OUT: None}   # B per frame; None when unknown
@@ -488,13 +489,14 @@ def new_device(card, card_id, usbbus, ident, stream, cfg, profiles):
         rates = [profile.rate, *rates]
     plans = {IN: audiod.plan_direction(stream["capture"], rates),
              OUT: audiod.plan_direction(stream["playback"], rates)}
-    speed, bus = usb_attr(card, "speed")[0], usb_attr(card, "busnum")[0]
+    speed, port = usb_attr(card, "speed")
+    bus = usb_attr(card, "busnum")[0]
     active = usb_attr(card, "bConfigurationValue")[0]
     interfaces = usb.parse_descriptors(read_bytes(f"{usb_dir(card)}/descriptors"),
                                        int(active) if active.isdigit() else None)
     loads = {d: usb.direction_load(speed, stream[kind], plans[d], interfaces) if plans[d] else None
              for d, kind in ((IN, "capture"), (OUT, "playback"))}
-    return Device(card, card_id, usbbus, ident, plans, profile, speed, bus, loads)
+    return Device(card, card_id, usbbus, ident, plans, profile, speed, bus, loads, port)
 
 
 def scan(cfg, profiles, cache):
@@ -1193,6 +1195,30 @@ class Daemon:
         return sum(b.load for b in self.bridges.values()
                    if b is not bridge and b.dev.bus == bridge.dev.bus and b.holding)
 
+    def usb_buses(self):
+        """[{bus, fs_load, fs_demand, fs_budget}] for each USB bus with an audio device: fs_load is what
+        bus_used() counts there (bridges holding their share), fs_demand what every bridge of that bus
+        would take, so a bridge held back for the budget shows as demand above the load."""
+        found = {}
+        for dev in self.devices.values():
+            bus = usb.bus_number(dev.bus)
+            if bus is not None:
+                found.setdefault(bus, {"bus": bus, "fs_load": 0, "fs_demand": 0, "fs_budget": self.fs_budget})
+        for b in self.bridges.values():
+            entry = found.get(usb.bus_number(b.dev.bus))
+            if entry:
+                entry["fs_demand"] += b.load
+                entry["fs_load"] += b.load if b.holding else 0
+        return [found[bus] for bus in sorted(found)]
+
+    def usb_entry(self, dev, labels):
+        """What status.json says of where a device is plugged in; fields that are not known are left out."""
+        info = {"bus": usb.bus_number(dev.bus), "port": dev.port or None, "speed": usb.speed_mbit(dev.speed),
+                "label": labels.get(dev.port),
+                # a serial-less identity is made of the port, so the device loses its routes when moved
+                "by_port": dev.identity.startswith(f"usb-{dev.port}-") if dev.port else None}
+        return {k: v for k, v in info.items() if v is not None}
+
     def connect_routes(self):
         ports, pairs = audiod.parse_connections(run("jack_lsp", "-c").stdout)
         for (i, direction), b in self.bridges.items():
@@ -1511,10 +1537,13 @@ class Daemon:
     def status_data(self):
         playback_rate, capture_rate = self.rates
         custom = load_slots().get("names", {})
+        labels = usb.port_labels(self.cfg.get("usb", {}).get("port_labels"))
         devices = []
         for i, dev in self.devices.items():
             mine = custom.get(i, {})
             entry = {"identity": i, "card": dev.id, "usbbus": dev.usbbus}
+            if dev.port or dev.bus or dev.speed:
+                entry["usb"] = self.usb_entry(dev, labels)
             name = presets.device_name(dev.profile.name if dev.profile else "", mine)
             if name:
                 entry["name"] = name
@@ -1564,7 +1593,8 @@ class Daemon:
                 "host_profile": self.host_name(load_slots()), "host_profiles": sorted(hosts),
                 "host_profile_details": host_summary(self.cfg, hosts),
                 "host_profile_selection": load_slots().get("host_profile"),
-                "outputs": self.output_status(), "devices": devices, "presets": presets.summary(load_presets()),
+                "outputs": self.output_status(), "devices": devices, "usb_buses": self.usb_buses(),
+                "presets": presets.summary(load_presets()),
                 "midi": self.midi.status() if self.midi else None,
                 **({"routes": [{**routing.entry(r), "waiting": why or None} for r, why in self.route_state.items()]}
                    if self.route_state else {}),

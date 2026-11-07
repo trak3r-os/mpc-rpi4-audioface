@@ -26,6 +26,9 @@ import ui as display  # noqa: E402
 DELAY = 1.0   # seconds before a command shows in the status (the service looks within 0.5 s, writes every 2 s)
 DEMO = [("usb-mixer", "CODEC", "Mixer", 2, 0), ("usb-gp150", "GP150", "GP-150", 2, 2),
         ("usb-tracker", "Tracker", "Tracker", 2, 2), ("usb-keys", "Keys", "Keys", 8, 0)]   # id, card, name, in, out
+# id -> (USB bus, sysfs port path, speed in Mbit/s, full-speed B per frame in, out), for the "USB ports" screen
+USB = {"usb-mixer": (1, "1-2", 12, 196, 192), "usb-gp150": (1, "1-1", 480, 0, 0),
+       "usb-tracker": (3, "3-1", 12, 720, 183), "usb-keys": (3, "3-2", 12, 0, 0)}
 # id, name, port, sends, receives
 MIDI_PORTS = [("usb-keys", "Keys", 0, True, False), ("usb-tracker", "Tracker", 0, True, True),
               ("usb-synth", "Synth", 0, True, True), ("usb-synth", "Synth", 1, True, True)]
@@ -56,17 +59,28 @@ class Service:
         devices = []
         for identity, card, name, channels_in, channels_out in self.devices:
             entry = {"identity": identity, "card": card, "name": name}
+            if identity in USB:
+                bus, path, speed, load_in, load_out = USB[identity]
+                entry["usb"] = {"bus": bus, "port": path, "speed": speed}
             for side, channels in (("in", channels_in), ("out", channels_out)):
                 if channels:
                     entry[side] = {"channels": channels, "muted": identity in self.state.get("mute", {}).get(side, []),
                                    "level": self.state.get("volume", {}).get(side, {}).get(identity)}
             devices.append(entry)
+        buses = {}
+        for identity, *_ in self.devices:
+            if identity in USB:
+                bus, _, _, load_in, load_out = USB[identity]
+                found = buses.setdefault(bus, {"bus": bus, "fs_load": 0, "fs_demand": 0, "fs_budget": 1099})
+                found["fs_load"] += load_in + load_out
+                found["fs_demand"] += load_in + load_out
         routes = [{**routing.entry(r), "waiting": None if {r.src, r.dst} <= present else "not here"}
                   for r in routing.from_state(self.state)]
         ports = [{"identity": i, "port": port, "name": name, "in": sends, "out": gets}
                  for i, name, port, sends, gets in MIDI_PORTS]
         links = [{**midiroute.entry(k), "waiting": None} for k in midiroute.from_state(self.state)]
-        return {"devices": devices, "presets": presets.summary(self.store), "midi_ports": ports,
+        return {"devices": devices, "usb_buses": [buses[b] for b in sorted(buses)],
+                "presets": presets.summary(self.store), "midi_ports": ports,
                 **({"routes": routes} if routes else {}), **({"midi_routes": links} if links else {})}
 
 

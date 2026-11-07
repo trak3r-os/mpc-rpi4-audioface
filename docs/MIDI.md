@@ -154,7 +154,7 @@ No other CC is a command. That leaves out the channel mode messages (120–127, 
 
 A SysEx command must fit in about 200 bytes. The sequencer splits long SysEx messages into chunks, and a split command is not recognised. A reply longer than about 4 KB might arrive truncated [?]: the kernel's output buffer for the port is 4 KB. With two devices, `status` takes less than 1 KB, and each audio device adds about 340 bytes, plus any names it has.
 
-**If `status` is over 4000 bytes**, the SysEx reply (not `status.json`, which stays complete) drops diagnostic keys first, one at a time until it fits: `fs_load` of each direction, `usbbus`, `client` of each direction and `card`. It never drops names, levels, mutes, routes or presets. With 6 devices of 6 channels per direction, all with 16-character names, device names and 8 preset names of 16 characters, and 6 MIDI endpoints, the full state is 4616 bytes and the reply is 3962 (`tests/test_usb.py`).
+**If `status` is over 4000 bytes**, the SysEx reply (not `status.json`, which stays complete) drops diagnostic keys first, one at a time until it fits: the `usb` object of each device (port, bus, speed) with `fs_load` of each direction, `usbbus`, `client` of each direction and `card`. The top-level `usb_buses` summary goes with the first stage. It never drops names, levels, mutes, routes or presets. With 6 devices of 6 channels per direction, all with 16-character names, device names and 8 preset names of 16 characters, and 6 MIDI endpoints, the full state is 4616 bytes and the reply is 3962 (`tests/test_usb.py`).
 
 ## `status` keys for names and presets
 

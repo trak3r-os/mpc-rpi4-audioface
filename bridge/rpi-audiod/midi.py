@@ -36,7 +36,8 @@ USAGE = {
 }
 STATUS_LIMIT = 4000   # bytes the status reply may take (docs/MIDI.md)
 # Dropped from the reply, one stage at a time, until it fits: (device keys, direction keys)
-STATUS_TRIM = (((), ("fs_load",)), (("usbbus",), ()), ((), ("client",)), (("card",), ()), ((), ("rate", "running")))
+STATUS_TRIM = ((("usb",), ("fs_load",)), (("usbbus",), ()), ((), ("client",)), (("card",), ()),
+               ((), ("rate", "running")))
 
 
 @dataclass(frozen=True)
@@ -366,6 +367,7 @@ def status_reply(data, limit=STATUS_LIMIT):
     data.pop("host_profiles", None)
     data.pop("host_profile_details", None)
     data.pop('active_scene', None)
+    data.pop("usb_buses", None)
     data.pop("outputs", None)  # adapter diagnostics stay in the full local status file
     data.pop("time", None)
     data["devices"] = [dev for dev in data.get("devices", []) if not dev.get("virtual")]

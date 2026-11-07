@@ -335,6 +335,7 @@ Open **Status** in the main menu:
 - **Machine & buffers:** CPU and memory bars, temperature, engine state, sample rate, period, buffer frames and duration, DSP processing load, uptime and MIDI counts. Turn to read lower rows and network error counters.
 - **All inputs / All outputs:** each endpoint has a state and a measured peak bar. Turn to scroll; press a device to see channels, sample rate, ALSA state, actual period/buffer sizes, delay and available frames when reported. Network endpoints show their available packet, queue, xrun and dropped-frame counters.
 - **WiFi:** current connection state, network name, IP address and signal strength. The same details are available in **Connections → WiFi**.
+- **USB ports:** the USB audio devices grouped by controller (bus), each line showing the port, the device and its speed (`p2 Mixer 12M`). The bus header reads `Bus 1  FS 388/1099`: the full-speed bandwidth in use against the budget of that controller, in bytes per USB frame. High-speed devices (480M or 5G) cost nothing against it. A `!` after a bus header means the bus is at or over budget; a `!` after a port marks a device whose playback or capture was refused for lack of bandwidth. Press a device for its detail: the reason for any refusal, bus and port, the sysfs path, speed, its own full-speed load, its identity, and whether that identity depends on the port. A device without a serial number is identified by its port, so its routes are lost if you plug it into another port (`Moved = routes lost`); a device with a serial number keeps its identity on any port. To free bandwidth, move a full-speed device to a port of another bus, or connect it through a high-speed hub. Optionally, `[usb] port_labels` in `/etc/rpi-audio/rpi-audio.toml` gives ports short names (such as `top blue`) in place of `p2`; the detail shows each port's path to use as the key. Only audio devices are listed.
 
 `--` means unavailable. An unrouted output may have no measurable source. ALSA buffer fill is a sampled reading, refreshed about every two seconds. Buffer duration is capacity in milliseconds, not the complete input-to-output delay. **Session XRuns** counts notifications from the independent observer over the retained monitoring session. DSP load refers to audio processing; CPU refers to the whole Pi. A configured buffer is labelled **Config buf** when an actual ALSA read is unavailable.
 
@@ -457,6 +458,7 @@ Menu
   Connections      USB host / WiFi / physical devices and their details
   Status           Machine & buffers / All inputs / All outputs / WiFi
                    Profile readiness / Session counters / Recent events
+                   USB ports
   Settings         display sleep, saver, brightness, rotation, encoder
 ```
 

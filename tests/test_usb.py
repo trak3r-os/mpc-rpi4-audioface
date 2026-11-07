@@ -192,7 +192,7 @@ def bridges(monkeypatch, *specs):
     logs = []
     monkeypatch.setattr(daemon, "log", logs.append)
     d = daemon.Daemon.__new__(daemon.Daemon)
-    d.hub, d.usb_channels, d.sink, d.cfg, d.usb_card = False, 26, {}, {}, "UAC2Gadget"
+    d.hub, d.usb_channels, d.sink, d.cfg, d.usb_card, d.fs_budget = False, 26, {}, {}, "UAC2Gadget", 1099
     d.output_state, d.output_workers, d.output_metrics = {}, {}, {}
     d.network, d.network_error, d.sdp_error = daemon.outputs.network({}), "", ""
     d.bridges = {}
@@ -297,7 +297,7 @@ def stateful(monkeypatch, tmp_path):
 def command_daemon(monkeypatch, tmp_path):
     stateful(monkeypatch, tmp_path)
     d = daemon.Daemon.__new__(daemon.Daemon)
-    d.hub, d.usb_channels, d.sink, d.cfg, d.usb_card = False, 26, {}, {}, "UAC2Gadget"
+    d.hub, d.usb_channels, d.sink, d.cfg, d.usb_card, d.fs_budget = False, 26, {}, {}, "UAC2Gadget", 1099
     d.output_state, d.output_workers, d.output_metrics = {}, {}, {}
     d.network, d.network_error, d.sdp_error = daemon.outputs.network({}), "", ""
     d.bridges, d.devices, d.rates, d.mode, d.jack_ready, d.channels, d.midi = {}, {}, (0, 0), None, False, 26, None
@@ -453,3 +453,53 @@ def test_status_with_everything_named_fits_one_sysex(monkeypatch, tmp_path, hub)
     assert len(status["presets"]) == 8 and status["devices"][5][OUT]["names"] == ["c" * 16] * 6
     assert status["devices"][0]["name"] == "N" * 16 and status["devices"][0][IN]["level"] == 100
     assert status["midi"]["endpoints"][5]["port"] == 4
+
+
+def test_speed_bus_and_port_labels_from_sysfs_text():
+    assert [usb.speed_mbit(v) for v in ("12", "480", "1.5", "5000", "", None, "x")] == \
+        [12, 480, 1.5, 5000, None, None, None]
+    assert [usb.bus_number(v) for v in ("3", "003", "", None, "x")] == [3, 3, None, None, None]
+    assert usb.port_labels({"1-1": " top blue ", "1-2": "", " ": "x", 3: "y", "1-3": "z" * 40}) == {
+        "1-1": "top blue", "3": "y", "1-3": "z" * usb.LABEL_MAX}
+    assert usb.port_labels(None) == usb.port_labels("1-1") == usb.port_labels(["a"]) == {}
+
+
+def plugged(d, **where):
+    """Gives the daemon's bridges' devices a port and speed ({name: (port, speed)}) and what status_data() needs."""
+    for b in d.bridges.values():
+        b.dev.port, b.dev.speed = where.get(b.dev.id, ("", ""))
+    d.rates, d.mode, d.jack_ready, d.channels, d.midi = (0, 0), None, False, 26, None
+    d.devices = {b.dev.identity: b.dev for b in d.bridges.values()}
+    d.muted, d.volumes, d.route_state, d.standalone, d.midi_state = {IN: set(), OUT: set()}, {}, {}, False, {}
+    return {e["identity"]: e for e in d.status_data()["devices"]}, d.status_data()["usb_buses"]
+
+
+def test_status_says_which_port_and_bus_each_device_is_on(monkeypatch):
+    # the mixer and the tracker on the same bus: the second mixer direction does not fit
+    d, _ = bridges(monkeypatch, ("tracker", "3", 903), ("3-2-08bb:2902", "3", 196), ("3-3-08bb:2903", "3", 192),
+                   ("gp", "1", 0))
+    tick(d, 1099)
+    d.cfg = {"usb": {"port_labels": {"3-2": "top black"}}}
+    where = {"tracker": ("3-1", "12"), "3-2-08bb:2902": ("3-2", "12"), "3-3-08bb:2903": ("3-3", "12"),
+             "gp": ("1-1", "480")}
+    devices, buses = plugged(d, **where)
+    assert devices["usb-tracker"]["usb"] == {"bus": 3, "port": "3-1", "speed": 12, "by_port": False}
+    assert devices["usb-3-2-08bb:2902"]["usb"] == {"bus": 3, "port": "3-2", "speed": 12, "label": "top black",
+                                                   "by_port": True}
+    assert devices["usb-gp"]["usb"] == {"bus": 1, "port": "1-1", "speed": 480, "by_port": False}
+    assert devices["usb-3-3-08bb:2903"][IN]["blocked"].startswith("USB full-speed budget")
+    # the load is what the budget check counts as held, the demand also what waits for it
+    assert buses == [{"bus": 1, "fs_load": 0, "fs_demand": 0, "fs_budget": 1099},
+                     {"bus": 3, "fs_load": 1099, "fs_demand": 1291, "fs_budget": 1099}]
+    d.bridges[("usb-tracker", IN)].stop()   # it stops holding its share; what everyone wants stays the same
+    assert d.usb_buses()[1]["fs_load"] == 196 and d.usb_buses()[1]["fs_demand"] == 1291
+
+
+def test_status_leaves_out_what_sysfs_did_not_say(monkeypatch):
+    d, _ = bridges(monkeypatch, ("a", "", 196))
+    tick(d, 1099)
+    devices, buses = plugged(d)
+    assert "usb" not in devices["usb-a"] and buses == []
+    # a device only known by its port (no bus, no speed) still says that much
+    d.bridges[("usb-a", IN)].dev.port = "1-2"
+    assert d.status_data()["devices"][0]["usb"] == {"port": "1-2", "by_port": False}

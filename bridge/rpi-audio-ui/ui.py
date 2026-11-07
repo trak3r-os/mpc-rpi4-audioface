@@ -12,6 +12,8 @@ Display: ROWS rows of COLS characters, the first one a title."""
 
 import time
 import math
+import re
+import textwrap
 import health
 from dataclasses import dataclass, replace
 
@@ -284,7 +286,7 @@ class Status(Menu):
         return [('Machine & buffers', MachineInfo), ('All inputs', lambda: IOStatus('in')),
                 ('All outputs', lambda: IOStatus('out')), ('Profile readiness', ProfileReadiness),
                 ('Session counters', SessionInfo), ('Recent events', RecentEvents),
-                (f'WiFi [{wifi_label(ui.hardware)}]', WifiInfo)]
+                (f'WiFi [{wifi_label(ui.hardware)}]', WifiInfo), ('USB ports', USBPorts)]
 
     def select(self, ui, payload, status, now):
         ui.stack.append(payload())
@@ -1244,6 +1246,154 @@ class WifiInfo(Info):
         wifi = ui.hardware.get("wifi", {})
         return [f"State: {wifi.get('state', 'unknown')}", wifi.get("name") or "No network",
                 wifi.get("ip") or "No IP address", f"Signal: {wifi_label(ui.hardware)}"]
+
+
+def usb_speed(info):
+    """A device's USB speed for a narrow column: 12M, 480M, 5G; ? when the status does not say."""
+    speed = (info or {}).get("speed")
+    if not isinstance(speed, (int, float)):
+        return "?"
+    return f"{speed / 1000:g}G" if speed >= 1000 else f"{speed:g}M"
+
+
+def usb_port_tag(info):
+    """Where a device is plugged in, short: its port label when it has one, else p2 (port 2 of its bus,
+    from the sysfs path "1-2"), p1.4 behind a hub."""
+    info = info or {}
+    if info.get("label"):
+        return info["label"]
+    port = info.get("port") or ""
+    return "p" + port.split("-", 1)[1] if "-" in port else "p?"
+
+
+def usb_blocked(dev):
+    """{"in": reason, "out": reason} for the directions of a device that wait for USB budget."""
+    return {side: dev[side]["blocked"] for side, _ in SIDES if isinstance(dev.get(side), dict) and
+            dev[side].get("blocked")}
+
+
+def usb_groups(status):
+    """[(bus number or None, summary, [device, ...])] of the USB audio devices by bus, buses and ports in
+    order. summary is the status's usb_buses entry for the bus ({} when it has none)."""
+    summaries = {b.get("bus"): b for b in status.get("usb_buses", []) if isinstance(b, dict)}
+    groups = {}
+    for dev in status.get("devices", []):
+        info = dev.get("usb")
+        if isinstance(info, dict) and not dev.get("virtual") and not dev.get("local"):
+            groups.setdefault(info.get("bus"), []).append(dev)
+    order = sorted(groups, key=lambda b: (b is None, b if isinstance(b, int) else 0))
+    return [(bus, summaries.get(bus, {}),
+             sorted(groups[bus], key=lambda d: [int(n) for n in re.findall(r"\d+", d["usb"].get("port") or "")]))
+            for bus in order]
+
+
+def usb_bus_over(summary):
+    """True when a bus has no full-speed budget left, or a bridge waits for it."""
+    budget = summary.get("fs_budget") or 0
+    return bool(budget) and max(summary.get("fs_load", 0), summary.get("fs_demand", 0)) >= budget
+
+
+def usb_bus_load(summary):
+    """388/1099: the full-speed bytes per frame held on a bus against its budget (/off when the check is off)."""
+    if "fs_load" not in summary:
+        return "?"
+    return f"{summary['fs_load']}/{summary.get('fs_budget') or 'off'}"
+
+
+def usb_bus_header(bus, summary):
+    """Bus 1  FS 388/1099, with ! after it when the bus is out of budget."""
+    return f"Bus {'?' if bus is None else bus}  FS {usb_bus_load(summary)}" + ("!" if usb_bus_over(summary) else "")
+
+
+class USBPorts(Menu):
+    """Every USB audio device under the bus (controller) and port it is plugged into, with each bus's
+    full-speed load against its budget: why a device was refused, and which port to move it to."""
+    title = "USB ports"
+    icon = "usb"
+
+    def items(self, ui, status, now):
+        return [(self.line(dev), dev["identity"]) for _, _, devices in usb_groups(status) for dev in devices]
+
+    @staticmethod
+    def line(dev):
+        return f"{usb_port_tag(dev['usb'])[:8]}{'!' if usb_blocked(dev) else ' '}{device_label(dev)}"
+
+    def select(self, ui, payload, status, now):
+        ui.stack.append(USBPortInfo(payload))
+        return []
+
+    def rows(self, ui, status, now):
+        visible = BODY - (1 if ui.message or ui.notice else 2 if ui.notification else 0)
+        lines, cursor_line, header, n = [], 0, 0, 0
+        for bus, summary, devices in usb_groups(status):
+            head = len(lines)
+            lines.append(Row(fit(usb_bus_header(bus, summary))))
+            for dev in devices:
+                if n == self.cursor:
+                    cursor_line, header = len(lines), head
+                badge = usb_speed(dev["usb"])
+                text = self.line(dev)
+                width = COLS - 2 - len(badge)
+                lines.append(Row(fit((">" if n == self.cursor else " ") + text[:width].ljust(width) + " " + badge),
+                                 inverse=n == self.cursor, selected=n == self.cursor, label=text, badge=badge))
+                n += 1
+        self.cursor = min(self.cursor, max(n - 1, 0))
+        self.top = min(max(self.top, cursor_line - visible + 1), cursor_line)
+        if self.top > header and cursor_line - header < visible:
+            self.top = header   # show the cursor's bus header with it when both fit
+        scroll = (self.top, len(lines), visible) if len(lines) > visible else ()
+        out = [Row(fit(self.title), True, icon=self.icon, scroll=scroll, label=self.title)]
+        out += lines[self.top:self.top + visible] or [Row(fit(" No USB audio devices"))]
+        return out
+
+
+class USBPortInfo(Info):
+    """One device's port, speed, full-speed load and whether its identity follows the port."""
+    icon = "usb"
+
+    def __init__(self, identity):
+        super().__init__()
+        self.identity = identity
+
+    def device(self, status):
+        return next((d for d in status.get("devices", []) if d.get("identity") == self.identity and d.get("usb")), {})
+
+    def heading(self, ui, status):
+        dev = self.device(status)
+        return device_label(dev) if dev else "(disconnected)"
+
+    def details(self, ui, status):
+        dev = self.device(status)
+        if not dev:
+            return ["Device disconnected"]
+        info = dev["usb"]
+        bus = info.get("bus")
+        rows = []
+        for side, label in SIDES:   # a refusal comes first: it is why the screen was opened
+            if side in usb_blocked(dev):
+                rows += [f"{label.upper()} refused:", *textwrap.wrap(usb_blocked(dev)[side], 20)]
+        rows.append(f"Bus {'?' if bus is None else bus} port {usb_port_tag({'port': info.get('port')})[1:]}")
+        if info.get("label"):
+            rows.append(f"Label: {info['label']}")
+        speed = info.get("speed")
+        rows += [f"Path: {info.get('port') or 'unknown'}",
+                 f"Speed: {speed:g} Mbit/s" if isinstance(speed, (int, float)) else "Speed: unknown"]
+        summary = next((b for b in status.get("usb_buses", []) if b.get("bus") == bus), {})
+        fast = isinstance(info.get("speed"), (int, float)) and info["speed"] > 12
+        loads = [(label, dev[side].get("fs_load")) for side, label in SIDES if isinstance(dev.get(side), dict)]
+        if fast:
+            rows.append("FS load: none (fast)")
+        else:
+            rows += [f"FS {label}: {f'{load} B' if load else 'none'}" for label, load in loads]
+        if summary:
+            rows.append(f"Bus FS: {usb_bus_load(summary)} B")
+        identity = dev["identity"]
+        rows += ["ID:", *[identity[n:n + 20] for n in range(0, len(identity), 20)]]
+        if info.get("by_port") is True:
+            rows += ["No serial: ID is port", "Moved = routes lost"]
+        elif info.get("by_port") is False:
+            rows += ["Has a serial number:", "keeps ID on any port"]
+        return rows
 
 
 class DeviceInfo(Info):
