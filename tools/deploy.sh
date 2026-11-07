@@ -3,7 +3,7 @@
 #
 # Copy rpi-audio to the Pi and install it. Idempotent: run it after every change.
 #
-#   PI_HOST=no3z@192.168.1.106 tools/deploy.sh [--enable] [--host NAME] [--hat] [--network]
+#   PI_HOST=no3z@raspberrypi.local tools/deploy.sh [--enable] [--host NAME] [--hat] [--network]
 #
 # --enable also enables rpi-audio-gadget.service and rpi-audiod.service at boot
 # (and disables rpi-audio-keepalive.service, which rpi-audiod replaces). Without
@@ -23,7 +23,7 @@
 
 set -euo pipefail
 
-host="${PI_HOST:-no3z@192.168.1.106}"
+host="${PI_HOST:-no3z@raspberrypi.local}"
 root="$(cd "$(dirname "$0")/.." && pwd)"
 stage=rpi-audio-stage
 enable=0 hat=0 network=0 ui_only=0 hostconf=

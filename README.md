@@ -70,7 +70,8 @@ The full protocol is in [docs/MIDI.md](docs/MIDI.md).
 
 For the complete DAC/OLED/encoder build, use the [parts list with quantities and assembly instructions](docs/MANUAL.md#16-build-your-own-device). The short list below covers the USB hub itself.
 
-- A **Raspberry Pi 4** with its official power supply.
+- A **Raspberry Pi 4** with its official power supply. A **Raspberry Pi 5** takes the same SD card and install: the gadget, the pHAT DAC and the OLED come up on it [Pi], but audio with a host and with USB devices has not been measured on a Pi 5 yet.
+  - On a Pi 5 whose supply does not negotiate 5 A over USB-PD (a 3 A supply, or any supply behind the splitter), the firmware limits the USB-A ports to 600 mA in total. Power hungry devices then need their own supply or a powered hub.
 - A **USB-C data/power splitter**. We use the "USB-C/PWR Splitter" from 8086 (8086.net/p/usbcs). The Pi 4 has only one USB-C port, and it is both its power input and its gadget (device-mode) port. The splitter lets you feed power from the supply and send data to the host over separate connectors. Wiring we used: supply to POWER, DATA POWER to the Pi, USB2 DATA to the host.
 - The USB audio and MIDI devices, on the Pi's **USB-A** ports.
 - A host with a USB port. Connect the Pi directly, not through a hub.
@@ -93,6 +94,8 @@ The same controller (a VIA VL805) also **drops packets from full-speed multichan
 - **Measured** [Pi]: 0 lost packets in 10 minutes at 8 and at 10 channels.
 
 Details are in `docs/hw/2026-11-04-pi-usb-host.md`.
+
+The **Pi 5** has no VL805: its USB-A ports hang off two USB host controllers in its RP1 chip, and `rpi-audiod` counts the budget separately for each. The 1099-byte figure was measured on the Pi 4 and has not been checked on a Pi 5. `install.sh` does not install `fs_isoc_pad` there.
 
 ## Install on the Pi
 

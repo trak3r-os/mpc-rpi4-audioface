@@ -11,11 +11,11 @@
 # state back as it found it. Needs passwordless sudo on the Pi. Start the
 # stream you want to observe first; this script does not touch audio.
 #
-#   PI_HOST=no3z@192.168.1.106 tools/xhci-error-trace.sh 20 > out/xhci-errors-$(date +%F-%H%M%S).txt
+#   PI_HOST=no3z@raspberrypi.local tools/xhci-error-trace.sh 20 > out/xhci-errors-$(date +%F-%H%M%S).txt
 
 set -euo pipefail
 
-host="${PI_HOST:-no3z@192.168.1.106}"
+host="${PI_HOST:-no3z@raspberrypi.local}"
 seconds="${1:-20}"
 [[ "$seconds" =~ ^[0-9]+$ ]] || { echo "usage: $0 [seconds]" >&2; exit 2; }
 ssh_opts=(-o BatchMode=yes -o ConnectTimeout=8)

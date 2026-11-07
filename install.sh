@@ -397,8 +397,41 @@ sysrun systemctl daemon-reload
 overlay_added=0
 overlay_pending=0   # in the file but not active yet (needs a reboot), or not added
 backup=
+# The config.txt model filters that match this board ([pi4], [pi5], ...), from the device tree.
+# Unknown boards and staging roots without a device tree match none: only [all] then counts.
+board_filters() {
+  local model
+  model=$(tr -d '\0' < "$R/proc/device-tree/model" 2>/dev/null) || return 0
+  case $model in
+    *"Compute Module 5"*) echo "pi5 cm5" ;;
+    *"Pi 500"*) echo "pi5 pi500" ;;
+    *"Pi 5"*) echo "pi5" ;;
+    *"Compute Module 4S"*) echo "pi4 cm4s" ;;
+    *"Compute Module 4"*) echo "pi4 cm4" ;;
+    *"Pi 400"*) echo "pi4 pi400" ;;
+    *"Pi 4"*) echo "pi4" ;;
+    *"Zero 2"*) echo "pi02" ;;
+    *"Zero W"*) echo "pi0 pi0w" ;;
+    *"Zero"*) echo "pi0" ;;
+    *"Pi 3"*Plus*) echo "pi3 pi3+" ;;
+    *"Pi 3"*) echo "pi3" ;;
+  esac
+}
+# The lines of a config.txt that apply to this board: before any section, under [all], or under a
+# model filter of this board. A line under [cm5] or [pi4] on a Pi 5, or under any other kind of
+# filter ([gpio4=1], [tryboot], ...), may not apply, so it does not count.
+board_lines() {
+  awk -v filters=" $(board_filters) " '
+    BEGIN { on = 1 }
+    /^[[:space:]]*\[[^]]*\][[:space:]]*$/ {
+      s = tolower($0); gsub(/[][[:space:]]/, "", s)
+      on = s == "all" || index(filters, " " s " ") > 0
+      next
+    }
+    on' "$1"
+}
 overlay_active() {
-  grep -Eq '^[[:space:]]*dtoverlay=dwc2,([^#]*,)?dr_mode=peripheral([[:space:],]|$)' "$1"
+  board_lines "$1" | grep -Eq '^[[:space:]]*dtoverlay=dwc2,([^#]*,)?dr_mode=peripheral([[:space:],]|$)'
 }
 last_section() { grep -E '^\[[^]]*\][[:space:]]*$' "$1" | tail -n 1 | tr -d '[:space:]' || true; }
 
@@ -423,7 +456,7 @@ if ((bootcfg)); then
     if ! udc_exists; then overlay_pending=1; fi   # set in an earlier run, no reboot since
   elif udc_exists; then
     say "a USB device controller is present already: leaving $cfg alone"
-  elif grep -Eq '^[[:space:]]*dtoverlay=dwc2([,[:space:]]|$)' "$cfg"; then
+  elif board_lines "$cfg" | grep -Eq '^[[:space:]]*dtoverlay=dwc2([,[:space:]]|$)'; then
     warn "$cfg has a dwc2 overlay without dr_mode=peripheral; not editing it."
     warn "change that line to '$OVERLAY' by hand, then reboot."
     overlay_pending=1

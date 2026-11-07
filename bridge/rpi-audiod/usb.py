@@ -5,7 +5,7 @@ here touches the system, so tests/test_usb.py checks it on any machine."""
 
 from typing import NamedTuple
 
-FS_BUDGET = 1099   # B per frame the Pi 4's VL805 accepted (docs/hw/2026-10-29-f2-usb-devices.md)
+FS_BUDGET = 1099   # B per frame the Pi 4's VL805 accepted (docs/hw/2026-10-29-f2-usb-devices.md); not measured on a Pi 5
 ISOCHRONOUS = 1
 
 

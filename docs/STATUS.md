@@ -1,4 +1,14 @@
-# Estado: 2026-11-04
+# Estado: 2026-11-07
+
+## Actualización del 7 de noviembre: Pi 5
+
+- [Pi, repo] **La Pi 4 se ha cambiado por una Pi 5 (1 GB) con la misma SD.** Acceso: `no3z@raspberrypi.local` (Ethernet 192.168.1.109, Wi-Fi 192.168.2.34). Las IP de la Pi 4 ya no valen.
+  - Al arrancar fallaba el gadget: el overlay `dwc2` estaba bajo `[pi4]`. Movido a `[all]` (copia `config.txt.rpi-audio-20261107-154340`) y reinicio. `install.sh` ahora mira solo las secciones de `config.txt` que aplican a la placa. `fs_isoc_pad` (solo VL805) sale de modules-load.
+  - Tras reiniciar: UDC `1000480000.usb`, gadget, `rpi-audiod` (Hub sobre el pHAT), UI y CPU activos; `rpi-audiod doctor` correcto salvo «UDC not attached» (no hay host conectado).
+  - **Sin probar en la Pi 5:** host (portátil, Force), dispositivos USB (Tracker, GP-150, mezclador), OLED/encoder a mano y el pHAT de oído. Los dispositivos sin serie cambian de clave de slot por la nueva topología USB.
+  - **Alimentación:** la fuente se ve como 3 A, así que la Pi 5 limita los USB-A a 600 mA en total. No se ha tocado `usb_max_current_enable`.
+
+  [Sesión](hw/2026-11-07-pi5-migration.md).
 
 ## Actualización del 4 de noviembre
 

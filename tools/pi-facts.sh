@@ -4,11 +4,11 @@
 # Read-only inventory of the Pi: board, kernel, USB topology and TTs, ALSA,
 # the gadget's state, CPU settings. Nothing is changed and no sudo is needed.
 #
-#   PI_HOST=no3z@192.168.1.106 tools/pi-facts.sh > out/pi-facts-$(date +%F-%H%M%S).txt
+#   PI_HOST=no3z@raspberrypi.local tools/pi-facts.sh > out/pi-facts-$(date +%F-%H%M%S).txt
 
 set -euo pipefail
 
-host="${PI_HOST:-no3z@192.168.1.106}"
+host="${PI_HOST:-no3z@raspberrypi.local}"
 echo "# pi-facts $(date -Is) host=${host#*@}"
 
 ssh -o BatchMode=yes -o ConnectTimeout=8 "$host" 'sh -s' <<'REMOTE'

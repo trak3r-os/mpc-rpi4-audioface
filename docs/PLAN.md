@@ -26,6 +26,8 @@ Marcas de evidencia:
 
 ### Raspberry Pi (192.168.1.106, usuario `no3z`, clave SSH instalada)
 
+> **2026-11-07:** la Pi 4 se ha sustituido por una **Pi 5** (1 GB, `raspberrypi.local`) con la misma SD. Esta tabla describe la Pi 4; la Pi 5 está en `docs/hw/2026-11-07-pi5-migration.md` y en F2b.
+
 | Hecho | Fuente |
 |---|---|
 | Raspberry Pi 4 Model B Rev 1.5, **1 GB**, 4 × Cortex-A72; páginas de 4 KiB | [Pi] |
@@ -430,6 +432,7 @@ Probable: con el Tracker en "10 OUT / 2 IN" y la tarjeta USB, el presupuesto FS 
   - la CPU por canal remuestreado;
   - el periodo máximo del gadget con páginas de 16 KiB.
 - **Criterio:** si caben al menos dos dispositivos FS medianos y el gadget va tan bien como en la Pi 4, la Pi 5 pasa a ser la plataforma de F3 en adelante.
+- **2026-11-07, en marcha** [Pi]: Pi 5 de 1 GB con la misma SD y el mismo `deploy`. El gadget enlaza en `1000480000.usb`, páginas de 16 KiB, dos xHCI del RP1 (buses 1–2 y 3–4). Faltan todas las pruebas con host y dispositivos. Fuente vista como 3 A: USB-A limitados a 600 mA. [Sesión](hw/2026-11-07-pi5-migration.md).
 
 ### F6: Ordenadores (macOS, Windows y Linux)
 

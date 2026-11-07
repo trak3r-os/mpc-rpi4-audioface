@@ -67,7 +67,8 @@ reserve_out = [1, 2]
 # device direction whose load does not fit what the running bridges leave is not started
 # (it waits, with the reason in `rpi-audiod status`) until another device leaves.
 # High-speed devices cost nothing. 1099 is what the Pi 4's VL805 accepted
-# (docs/hw/2026-10-29-f2-usb-devices.md); 0 turns the check off.
+# (docs/hw/2026-10-29-f2-usb-devices.md); a Pi 5 has two buses, each with its own budget,
+# not measured yet. 0 turns the check off.
 fs_budget = 1099
 
 [ui]

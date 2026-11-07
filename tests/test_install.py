@@ -176,6 +176,48 @@ def test_overlay_not_edited_when_other_dwc2_line(root):
     assert "by hand" in r.stderr
 
 
+def model(root, text):
+    d = root / "proc/device-tree"
+    d.mkdir(parents=True)
+    (d / "model").write_bytes(text.encode() + b"\0")
+
+
+# A stock Raspberry Pi OS trixie config.txt (tail): CM4/CM5 lines that do not apply to a Pi 4 or 5.
+STOCK = ("[cm4]\notg_mode=1\n[cm5]\ndtoverlay=dwc2,dr_mode=host\n[pi5]\ndtoverlay=nospi10\n[all]\n")
+
+
+def test_overlay_added_on_stock_pi5_despite_cm5_host_line(root):
+    model(root, "Raspberry Pi 5 Model B Rev 1.1")
+    cfg = boot(root, STOCK)
+    r = run(root, "-y")
+    assert r.returncode == 0, r.stderr
+    assert cfg.read_text() == STOCK + OVERLAY + "\n"
+
+
+def test_overlay_under_other_board_section_does_not_count(root):
+    text = STOCK + "[pi4]\n" + OVERLAY + "\n[all]\ndtoverlay=hifiberry-dac\n"
+    model(root, "Raspberry Pi 5 Model B Rev 1.1")
+    cfg = boot(root, text)
+    assert run(root, "-y").returncode == 0
+    assert cfg.read_text() == text + OVERLAY + "\n"
+
+
+@pytest.mark.parametrize("board, section", [
+    ("Raspberry Pi 4 Model B Rev 1.5", "pi4"),
+    ("Raspberry Pi 400 Rev 1.0", "pi4"),
+    ("Raspberry Pi 5 Model B Rev 1.1", "pi5"),
+    ("Raspberry Pi Compute Module 5 Rev 1.0", "cm5"),
+])
+def test_overlay_under_own_board_section_counts(root, board, section):
+    model(root, board)
+    text = "[" + section + "]\n" + OVERLAY + "\n[all]\n"
+    cfg = boot(root, text)
+    r = run(root, "-y")
+    assert r.returncode == 0, r.stderr
+    assert cfg.read_text() == text
+    assert "reboot" in r.stdout   # set, but no UDC yet
+
+
 def test_uninstall_and_purge(root):
     assert run(root, "--no-boot-config", "--host", "akai-force").returncode == 0
     r = run(root, "--uninstall")

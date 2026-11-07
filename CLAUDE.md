@@ -1,4 +1,4 @@
-# rpi-audio: hub de audio USB genérico sobre una Raspberry Pi 4
+# rpi-audio: hub de audio USB genérico sobre una Raspberry Pi (4 o 5; desde el 2026-11-07 una Pi 5)
 
 La Pi se presenta ante un host USB como una interfaz de audio UAC2 (gadget configfs en el USB-C), y detrás agrega y enruta cualquier dispositivo de audio o MIDI USB. El proyecto es genérico: **no pongas nombres ni supuestos ligados a un host concreto** en el código, la configuración por defecto ni los nombres. Lo específico de cada host (la Akai Force es el primero que probamos) va en `docs/hosts/` y `tools/hosts/`. El plan, con su evidencia, está en `docs/PLAN.md`.
 
@@ -18,7 +18,7 @@ Al empezar cada sesión, lee `docs/STATUS.md` (estado y traspaso) y la fase en c
      - Nada más en AKAI_SSD ni en las preferencias, y nunca con un proyecto del usuario sin guardar.
 
   Las contraseñas van en variables de entorno (`FORCE_PASS`), nunca en un fichero. La Force se resuelve como `force.local`.
-- **Pi.** `no3z@192.168.1.106`, con clave SSH. Los cambios de sistema van por `tools/deploy.sh` (idempotente) y se anotan en `docs/hw/`. Nada destructivo sin preguntar: formatear, borrar datos, cambiar la red o el arranque.
+- **Pi.** Una Pi 5 desde el 2026-11-07: `no3z@raspberrypi.local` (Ethernet 192.168.1.109, Wi-Fi 192.168.2.34 por DHCP), con clave SSH. 192.168.2.154 es otra placa (una Pi 2): no tocarla. Los cambios de sistema van por `tools/deploy.sh` (idempotente) y se anotan en `docs/hw/`. Nada destructivo sin preguntar: formatear, borrar datos, cambiar la red o el arranque.
 - **Gadget.** Se monta una vez al arrancar (`rpi-audio-gadget.service`). No reenlaces el UDC en bucle: los reenlaces repetidos pueden bloquear el dwc2.
 - **No editar** `../track3r-os`, `../o3-sdk` ni `../o3-303`. Lo que necesite el Tracker se anota en `docs/PLAN.md` §7.
 - **Privacidad.** Nada de contraseñas, números de serie ni salidas en bruto en git: van a `out/`, que está ignorado. En `docs/hw/` solo van resúmenes.

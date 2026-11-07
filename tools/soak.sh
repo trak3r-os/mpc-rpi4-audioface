@@ -17,7 +17,7 @@ set -euo pipefail
 
 ch=${1:?usage: soak.sh CHANNELS SECONDS}
 secs=${2:?usage: soak.sh CHANNELS SECONDS}
-host=${PI_HOST:-no3z@192.168.1.106}
+host=${PI_HOST:-no3z@raspberrypi.local}
 hcard=${HOST_CARD:-rpiaudio}
 pcard=${PI_CARD:-UAC2Gadget}
 format=${FORMAT:-S32_LE}   # must match GADGET_SSIZE: S32_LE for 4, S16_LE for 2
@@ -28,8 +28,9 @@ mkdir -p "$out"
 fmt="-t raw -f $format -c $ch -r 44100"
 
 pi() { ssh -o BatchMode=yes "$host" "$@"; }
-# Sum of the gadget controller's interrupt counters over all CPUs (dwc2 is fe980000.usb on a Pi 4).
-dwc2_irqs() { pi "awk '/fe980000\\.usb/ { for (i = 2; i <= NF && \$i ~ /^[0-9]+\$/; i++) s += \$i } END { print s + 0 }' /proc/interrupts"; }
+# Sum of the gadget controller's interrupt counters over all CPUs (its UDC name: fe980000.usb on a Pi 4,
+# 1000480000.usb on a Pi 5).
+dwc2_irqs() { pi "u=\$(basename \$(ls -d /sys/class/udc/* | head -n 1)); awk -v u=\"\$u\" 'index(\$0, u) { for (i = 2; i <= NF && \$i ~ /^[0-9]+\$/; i++) s += \$i } END { print s + 0 }' /proc/interrupts"; }
 
 irq0=$(dwc2_irqs); t0=$(date +%s)
 
