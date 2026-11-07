@@ -15,6 +15,8 @@
 # starts rpi-audio-ui.service (the OLED and its encoder).
 # --ui-only updates the Python display service and its restricted power policy, with a backup and UI restart;
 # it preserves audio, configuration, the native meter helper and boot settings.
+# --usb-c-bench host|restore only changes the Pi 4 USB-C boot role, with a checked
+# backup. Requires explicit user approval; never reboots or runs the installer.
 # A running rpi-audiod is restarted so it runs the new code: the host hears a gap.
 # Needs passwordless sudo for the SSH user on the Pi (see docs/STATUS.md).
 # This is a thin wrapper: it copies the repo to the Pi and runs install.sh there as root with
@@ -26,7 +28,7 @@ set -euo pipefail
 host="${PI_HOST:-no3z@raspberrypi.local}"
 root="$(cd "$(dirname "$0")/.." && pwd)"
 stage=rpi-audio-stage
-enable=0 hat=0 network=0 ui_only=0 hostconf=
+enable=0 hat=0 network=0 ui_only=0 hostconf= usb_c_bench=
 while (($#)); do
   case $1 in
     --enable) enable=1 ;;
@@ -34,10 +36,22 @@ while (($#)); do
     --network) network=1 ;;
     --ui-only) ui_only=1 ;;
     --host) hostconf=${2:?--host needs a name}; shift ;;
-    *) echo "usage: $0 [--enable] [--host NAME] [--hat] [--network] [--ui-only]" >&2; exit 2 ;;
+    --usb-c-bench) usb_c_bench=${2:?--usb-c-bench needs host or restore}; shift ;;
+    *) echo "usage: $0 [--enable] [--host NAME] [--hat] [--network] [--ui-only] | --usb-c-bench host|restore" >&2; exit 2 ;;
   esac
   shift
 done
+if [[ -n $usb_c_bench ]]; then
+  if [[ $usb_c_bench != host && $usb_c_bench != restore ]] ||
+     ((enable || hat || network || ui_only)) || [[ -n $hostconf ]]; then
+    echo "deploy: --usb-c-bench host|restore must be used alone" >&2
+    exit 2
+  fi
+  bench_ssh=(-o BatchMode=yes -o StrictHostKeyChecking=yes)
+  [[ -z ${PI_SSH_HOST_KEY_ALIAS:-} ]] || bench_ssh+=(-o "HostKeyAlias=$PI_SSH_HOST_KEY_ALIAS")
+  ssh "${bench_ssh[@]}" "$host" "sudo -n python3 - $usb_c_bench" < "$root/tools/hosts/pi-usb-c-bench.py"
+  exit 0
+fi
 if ((ui_only && (enable || hat || network))) || { ((ui_only)) && [[ -n $hostconf ]]; }; then
   echo "deploy: --ui-only cannot be combined with audio/boot installation options" >&2
   exit 2

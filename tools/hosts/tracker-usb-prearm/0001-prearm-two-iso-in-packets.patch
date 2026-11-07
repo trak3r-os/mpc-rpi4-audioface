@@ -1,0 +1,251 @@
+diff --git a/cmake/O3osLabels.cmake b/cmake/O3osLabels.cmake
+index b39acf9..75246be 100644
+--- a/cmake/O3osLabels.cmake
++++ b/cmake/O3osLabels.cmake
+@@ -77,7 +77,7 @@ set(O3OS_LABEL_RULES
+   "^qemu_(core|jobs)$" "core"
+   "^qemu_(wav|wav_sample|wavetable_import|iff_sample|formats_.*)$" "formats"
+   "^qemu_(model_undo|params|params_model|pattern_rules|dir_index)$" "model"
+-  "^qemu_(usb|usb_device|usb_return|mk66|platform|probe|probe_stack)$" "platform"
++  "^qemu_(usb|usb_device|usb_return|usb_iso|mk66|platform|probe|probe_stack)$" "platform"
+   "^qemu_(audio.*|module_.*)$" "audio"
+   "^qemu_(midi|seq|seq_model|metro_sync)$" "seq"
+   "^qemu_(eve|plot|boot)$" "app"
+diff --git a/docs/specs/USB-PREARM-bench.md b/docs/specs/USB-PREARM-bench.md
+new file mode 100644
+index 0000000..a7439ef
+--- /dev/null
++++ b/docs/specs/USB-PREARM-bench.md
+@@ -0,0 +1,16 @@
++# USB IN prearm experimental bench
++
++New Community OS behaviour, Level C: keep both isochronous IN descriptors armed.
++Intent: tolerate two host frame polls before the USB interrupt services completion.
++Each descriptor owns its own 992-byte InPacketBuffer until completion.
++Keep PingPong ownership, reset/alt-stop and feedback handling unchanged.
++Refill work is bounded by two packets per call; the existing ISR token loop stays bounded at 16.
++The second queued packet adds about one USB frame of buffering and one silent startup packet.
++No persistent formats, descriptors, audio sample clock or product UI change.
++Acceptance: the existing 12 iso tests plus known-data delayed-IRQ recovery pass for P2/P4/P6/P8/P10/P11.
++Acceptance: focused USB suites pass on host and Cortex-M4F QEMU; new regression is explicitly registered.
++Acceptance: two fresh MinSizeRel MK66 builds, rate44100 ON, audio-test OFF, produce identical verified HEX.
++Budget: one additional 992-byte packet buffer, actual alignment delta measured; preserve 32 KiB above the 24 KiB stack.
++Gate: target full ctest, image/flashconfig/link/ramfunc/noinit checks pass without warnings.
++Hardware pending: CPU/ISR peak, underruns, capture loss in capture/duplex, start/stop/re-enumeration.
++Bench only: gated image may be tested on the authorized unit; no merge, remote push or publishing.
+diff --git a/tests/CMakeLists.txt b/tests/CMakeLists.txt
+index 7d16d5e..db9b12a 100644
+--- a/tests/CMakeLists.txt
++++ b/tests/CMakeLists.txt
+@@ -43,6 +43,9 @@ if(O3OS_PLATFORM STREQUAL "qemu")
+   o3os_target_suite(usb_device DEPENDS usb
+     SOURCES usb_endpoint_test.cpp usb_control_test.cpp usb_device_test.cpp usb_cdc_test.cpp usb_diag_shell_test.cpp usb_diag_log_test.cpp
+     TIMEOUT 180)
++  # Isochronous IN ownership and delayed-completion recovery on the Cortex-M4F.
++  o3os_target_suite(usb_iso DEPENDS usb
++    SOURCES usb_iso_device_test.cpp usb_iso_prearm_test.cpp TIMEOUT 180)
+   # OS-005a: the audio engine skeleton's pure parts on the Cortex-M4F: the rate and interrupt-table contract, the slot protocol against
+   # its reference model, the tone against the double oracle, AudioStatus and the diag text, the pipeline driven by hand. Left out:
+   # audio_status_thread_test.cpp (std::thread: host and TSan). The fake-I2S suite (qemu_audio_fake) is in platform/qemu.
+diff --git a/tests/usb_iso_device_test.cpp b/tests/usb_iso_device_test.cpp
+index 48e6207..249250e 100644
+--- a/tests/usb_iso_device_test.cpp
++++ b/tests/usb_iso_device_test.cpp
+@@ -131,7 +131,7 @@ TEST_CASE("usb iso: alt 1 on the stems interface starts the stream, the packets
+   CHECK(f.hook.channels == 10u);
+   CHECK_FALSE(f.hook.out_active);
+   CHECK(f.rig.dev.counters().iso_in_starts == 1u);
+-  CHECK(f.rig.dev.counters().iso_in_packets == 1u);  // the first token already finds a (silent, priming) packet
++  CHECK(f.rig.dev.counters().iso_in_packets == 2u);  // both descriptors already have silent priming packets
+   CHECK(f.rig.hw.endpt(4) == (kEndptRxEn | kEndptTxEn | kEndptCtlDisable));  // streaming does not touch the enables
+ 
+   for (unsigned i = 0; i < 3u; ++i) {
+@@ -170,8 +170,8 @@ TEST_CASE("usb iso: alt 1 on the stems interface starts the stream, the packets
+       f.engine.produce_block();
+     }
+   }
+-  CHECK(silent_packets == 1u);
+-  CHECK(real_packets == 399u);
++  CHECK(silent_packets == 2u);
++  CHECK(real_packets == 398u);
+   CHECK(sizes[0] > 0u);
+   CHECK(sizes[1] > 0u);
+   CHECK(f.rig.audio.in_size_other == 0u);
+diff --git a/tests/usb_iso_prearm_test.cpp b/tests/usb_iso_prearm_test.cpp
+new file mode 100644
+index 0000000..a39a2c5
+--- /dev/null
++++ b/tests/usb_iso_prearm_test.cpp
+@@ -0,0 +1,81 @@
++// SPDX-License-Identifier: GPL-3.0-or-later
++#include <doctest/doctest.h>
++#include "usb_rig.h"
++#include "usb_test_util.h"
++#include <o3os/usb/iso_audio.h>
++#include <initializer_list>
++#include <cstring>
++
++using namespace o3os::usb;
++using namespace usb_rig;
++
++TEST_CASE("iso prearm: two frame polls survive a delayed interrupt then recover") {
++  for (Profile profile : {Profile::P2, Profile::P4, Profile::P6, Profile::P8, Profile::P10, Profile::P11}) {
++    Config cfg;
++    cfg.mode = Mode::Audio;
++    cfg.profile = profile;
++    cfg.usb_return = false;
++    Rig rig(cfg);
++    StemRing stems;
++    ReturnRing returns;
++    ReturnReader reader(returns, rig.audio);
++    IsoAudio iso(stems, returns, reader, rig.audio);
++    rig.dev.bind_audio(&iso);
++    rig.hw.set_sof_period(nominal_sof_cycles(Speed::Full));
++    USB_REQUIRE(rig.enumerate());
++    std::uint8_t setup[8];
++    usb_fake::make_setup(setup, 0x01, 0x0B, 1, layout::kIfAudioIn, 0);
++    USB_REQUIRE(rig.host.control_none(setup).ok);
++    alignas(4) std::int16_t pool[3][kMaxChannels][kStemBlockFrames] = {};
++    const std::uint32_t channels = profile_channels(profile);
++    for (std::uint32_t b = 0; b < 3u; ++b) {
++      StemBlock block{};
++      for (std::uint32_t c = 0; c < channels; ++c) {
++        for (std::uint32_t i = 0; i < kStemBlockFrames; ++i) {
++          pool[b][c][i] = static_cast<std::int16_t>(1u + (b * kStemBlockFrames + i) * 11u + c);
++        }
++        block.ch[c] = pool[b][c];
++      }
++      stems.write(&block, 1);
++    }
++    std::uint8_t first[1024], second[1024];
++    std::uint32_t len = 0;
++    bool data1 = false;
++    // Consume the two initial silent packets; their refills now contain known stem data.
++    for (unsigned i = 0; i < 2u; ++i) {
++      rig.hw.sof();
++      USB_REQUIRE(rig.hw.in(4, first, sizeof first, len, data1) == Reply::Ack);
++    }
++    std::uint32_t next_frame = 0;
++    const auto check_samples = [&](const std::uint8_t* packet, std::uint32_t bytes) {
++      USB_REQUIRE(bytes > 0u);
++      USB_REQUIRE(bytes % (channels * 2u) == 0u);
++      for (std::uint32_t frame = 0; frame < bytes / (channels * 2u); ++frame) {
++        for (std::uint32_t c = 0; c < channels; ++c) {
++          std::int16_t actual = 0;
++          std::memcpy(&actual, packet + (frame * channels + c) * 2u, sizeof actual);
++          CHECK(actual == static_cast<std::int16_t>(1u + (next_frame + frame) * 11u + c));
++        }
++      }
++      next_frame += bytes / (channels * 2u);
++    };
++    rig.hw.set_auto_isr(false);
++    // First transfer completes in hardware. Its completion interrupt is delayed.
++    rig.hw.sof();
++    CHECK(rig.hw.in(4, first, sizeof first, len, data1) == Reply::Ack);
++    check_samples(first, len);
++    // The host polls in the next frame before the IRQ has serviced the first completion.
++    rig.hw.sof();
++    CHECK(rig.hw.in(4, second, sizeof second, len, data1) == Reply::Ack);
++    check_samples(second, len);
++    // After servicing the queued completions both descriptors are refilled in order.
++    rig.hw.interrupt();
++    rig.hw.set_auto_isr(true);
++    rig.hw.sof();
++    CHECK(rig.hw.in(4, first, sizeof first, len, data1) == Reply::Ack);
++    check_samples(first, len);
++    CHECK(rig.dev.counters().pingpong_resyncs == 0u);
++    // The two descriptors must point to distinct storage.
++    CHECK(rig.bdt.entry[bdt_index(4, true, false)].addr != rig.bdt.entry[bdt_index(4, true, true)].addr);
++  }
++}
+diff --git a/usb/include/o3os/usb/device.h b/usb/include/o3os/usb/device.h
+index c39110b..6d85eca 100644
+--- a/usb/include/o3os/usb/device.h
++++ b/usb/include/o3os/usb/device.h
+@@ -35,11 +35,11 @@
+ //   * Counters have one writer (the interrupt, or the CDC writer for its own drop count); the main loop reads them as plain words.
+ //   * AUDIO mode (OS-006d, ADR 0012): endpoint numbers 4 (isochronous stems IN + isochronous return OUT) and 5 (feedback IN) are driven by the
+ //     same interrupt through an `IsoAudio` bound with bind_audio(). A SET_INTERFACE that selects alt 1 takes the endpoint's descriptors back and
+-//     starts the stream (stop for alt 0, a configuration event or a bus reset). IN: ONE packet is armed at a time, built at the completion of the
+-//     previous one (so it is ready a whole frame ahead of the host's token) and at a start of frame when nothing is armed (the first one, or after a
+-//     missed frame). OUT: both descriptors are always armed, each re-armed as its token completes. Feedback: one packet armed at a SOF when none is
++//     starts the stream (stop for alt 0, a configuration event or a bus reset). IN: both descriptors are armed with distinct packet buffers. A completion refills the free descriptor; the other remains
++//     available if its token arrives before the interrupt can run. A start of frame also fills any free descriptor. OUT: both descriptors are always armed, each re-armed as its token completes. Feedback: one packet armed at a SOF when none is
+ //     pending, so the host always reads a value at most one polling interval old. No handshake, no data toggle on any of them (bd::arm_iso).
+-//     Everything happens in the one interrupt, bounded: one interleave of at most 45 frames x 11 channels, one ring write of at most 48 words.
++//     Each IN refill call builds at most two packets of 45 frames x 11 channels; the ISR services at most 16 token completions per entry.
++//     Each OUT completion writes at most 48 words to the return ring.
+ namespace o3os::usb {
+ 
+ // ---- The serial interface engine's bits (K66 RM "USB OTG FS": ISTAT, INTEN, CTL, ERRSTAT, STAT) ---------------------------
+@@ -133,11 +133,10 @@ struct UsbBuffers {
+   alignas(4) std::uint8_t cdc_out[2][kCdcPacketBytes];
+   alignas(4) std::uint8_t midi_in[2][kCdcPacketBytes];
+   alignas(4) std::uint8_t midi_out[2][kCdcPacketBytes];
+-  // AUDIO mode (OS-006d): the isochronous packet buffers; their types declare the alignment. The OUT pair keeps both descriptors armed, so it has one
+-  // buffer each. The IN stems packet and the feedback packet are armed ONE AT A TIME (arm_iso_in / arm_iso_fb only arm with nothing pending), so the two
+-  // descriptors of each pair take turns on a single buffer, which is rebuilt only after the controller has finished the previous packet: this saves 1 KB of
+-  // SRAM_U, which has 4 KB of margin over its 32 KiB floor (ADR 0013 D7).
+-  InPacketBuffer iso_in;
++  // AUDIO mode: each armed stems IN descriptor owns a separate buffer until its completion.
++  // This uses one additional InPacketBuffer (about 1 KiB); check the target SRAM_U margin before flashing.
++  // OUT already has one buffer per descriptor. Feedback remains one packet at a time on a shared buffer.
++  InPacketBuffer iso_in[2];
+   OutPacketBuffer iso_out[2];
+   FeedbackPacketBuffer iso_fb;
+ };
+@@ -783,7 +782,7 @@ class UsbDevice {
+     iso_in_on_ = true;
+     iso_in_seen_token_ = true;  // the first start of frame is not a miss
+     ++c_.iso_in_starts;
+-    arm_iso_in();  // the first token finds a packet (silence while the stem ring primes)
++    arm_iso_in();  // both initial tokens find a packet (silence while the stem ring primes)
+   }
+   void stop_iso_out() noexcept {
+     take_back_direction(kAudioNumber, false);
+@@ -803,16 +802,15 @@ class UsbDevice {
+     arm_iso_fb();
+   }
+ 
+-  // One IN packet in flight: built from the stem ring into the free buffer of the pair and handed over. The count is frames x channels x 2.
++  // Keep both IN descriptors ready without ever rebuilding a buffer still owned by the controller.
+   void arm_iso_in() noexcept {
+-    if (!iso_in_on_ || iso_in_pp_.armed() != 0u) {
+-      return;
++    while (iso_in_on_ && iso_in_pp_.can_arm()) {
++      const PingPong::Slot slot = iso_in_pp_.arm();
++      InPacketBuffer& packet = buf_.iso_in[slot.odd ? 1 : 0];
++      const std::uint32_t bytes = iso_->build_in(packet.samples);
++      give_iso(entry(kAudioNumber, true, slot.odd), packet.samples, bytes);
++      ++c_.iso_in_packets;
+     }
+-    const PingPong::Slot slot = iso_in_pp_.arm();
+-    InPacketBuffer& packet = buf_.iso_in;  // nothing was armed, so the controller is not reading it
+-    const std::uint32_t bytes = iso_->build_in(packet.samples);
+-    give_iso(entry(kAudioNumber, true, slot.odd), packet.samples, bytes);
+-    ++c_.iso_in_packets;
+   }
+   void token_iso_in(bool odd) noexcept {
+     if (!iso_in_pp_.complete(odd)) {
+@@ -869,7 +867,7 @@ class UsbDevice {
+         ++c_.iso_in_missed;
+       }
+       iso_in_seen_token_ = false;
+-      arm_iso_in();  // a no-op while the packet built at the last token is still waiting for this frame's token
++      arm_iso_in();  // a no-op while both packet descriptors remain armed
+     }
+     arm_iso_fb();
+   }
+diff --git a/usb/include/o3os/usb/iso_audio.h b/usb/include/o3os/usb/iso_audio.h
+index 66fa255..64d7e16 100644
+--- a/usb/include/o3os/usb/iso_audio.h
++++ b/usb/include/o3os/usb/iso_audio.h
+@@ -20,7 +20,7 @@
+ //   main loop               the getters, for `diag usb audio`: plain words, torn at most across fields.
+ // RING CONTRACTS:
+ //   stem ring  (StemRing)    engine writes whole 128-frame blocks (never waits, drops the oldest when the USB side lags: counted in in_dropped_blocks);
+-//                            the ISR is the single consumer (InStream/StemReader), at most one packet (45 frames) per SOF.
++//                            the ISR is the single consumer (InStream/StemReader), at most two packets (45 frames each) per IN refill call.
+ //   return ring (ReturnRing) the ISR writes at most 48 frames per OUT packet (never waits, drops the oldest: out_dropped_frames); the engine's pull is
+ //                            the single consumer, 64 frames per render block.
+ // No allocation, no blocking, no virtual calls; every loop is bounded by a frame or channel count.
