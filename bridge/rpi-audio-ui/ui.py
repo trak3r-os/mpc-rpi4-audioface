@@ -283,7 +283,8 @@ class Status(Menu):
     def items(self, ui, status, now):
         return [('Machine & buffers', MachineInfo), ('All inputs', lambda: IOStatus('in')),
                 ('All outputs', lambda: IOStatus('out')), ('Profile readiness', ProfileReadiness),
-                ('Session counters', SessionInfo), ('Recent events', RecentEvents)]
+                ('Session counters', SessionInfo), ('Recent events', RecentEvents),
+                (f'WiFi [{wifi_label(ui.hardware)}]', WifiInfo)]
 
     def select(self, ui, payload, status, now):
         ui.stack.append(payload())

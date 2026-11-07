@@ -15,6 +15,8 @@ El modo `hub` usa el pHAT como reloj local a 48 kHz. El grafo JACK continúa aun
 
 El host USB se representa como origen/destino estable `usb-host`. Los otros destinos son `local-dac`, `network-rtp` y `network-link`. Pueden combinarse mediante rutas. Apagar una salida corta sus rutas; el puente de envío USB mantiene silencio para no dejar al host sin alimentación de audio. Apagar una salida de red detiene solo su proceso. No se cambia el reloj automáticamente al conectar equipos.
 
+En Hub, la reproducción de cada dispositivo USB físico se abre solo cuando alguna ruta guardada lo tiene como destino. Al quitar su última ruta entrante se cierra ese puente y se libera su presupuesto USB, conservando su captura y el reloj local. Las asignaciones USB guardadas sin ruta de retorno no requieren una reproducción activa para que un perfil esté Ready. Los modos host y standalone conservan su comportamiento anterior.
+
 La primera entrada en Hub convierte una sola vez los mapas USB guardados en rutas explícitas. Se pueden borrar después sin que reaparezcan. Los dispositivos nuevos se enrutan desde Send audio. Los mapas y el comportamiento automático del modo host original se conservan.
 
 Las escenas nuevas guardan mapas de canales, nombres, rutas, niveles, mute y activación de salidas. Las escenas antiguas sin nombres conservan los actuales. Los perfiles de host pueden guardar solo reservas, una copia completa independiente o un vínculo a una escena; los perfiles de usuario se conservan en hosts.json y los usuarios del grupo audio pueden editarlos sin root. El modo de motor y los parámetros de transporte no cambian al cargar una escena.

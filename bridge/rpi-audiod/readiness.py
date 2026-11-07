@@ -16,6 +16,7 @@ def assess(setup, status, reserved=None, midi_present=()):
     devices = {d['identity']: d for d in status.get('devices', [])}
     names = setup.get('names', {})
     expected = {}
+    playback_needed = set()
     midi_needs = set()
 
     def issue(code, identity, text):
@@ -42,6 +43,7 @@ def assess(setup, status, reserved=None, midi_present=()):
             continue
         need(src, 'in', 2 * route.get('src_pair', 1) - 1)
         need(dst, 'out', 2 * route.get('dst_pair', 1) - 1)
+        playback_needed.add(dst)
     for identity, enabled in setup.get('outputs', {}).items():
         if enabled and identity in VIRTUAL:
             need(identity, 'out')
@@ -66,12 +68,14 @@ def assess(setup, status, reserved=None, midi_present=()):
         if info is None or info.get('channels', 0) < channels:
             issue('channels', identity, f'{title}: {side.upper()} needs {channels} ch')
             continue
+        idle_playback = (status.get('engine_mode') == 'hub' and side == 'out' and
+                         identity not in VIRTUAL and identity not in playback_needed)
         if (status.get('engine_mode', 'host') == 'host' and identity not in VIRTUAL and
                 'start' in info and info['start'] is None):
             issue('allocation', identity, f'No USB channels: {title} {side.upper()}')
         elif info.get('blocked'):
             issue('blocked', identity, f"{title}: {info['blocked']}")
-        elif not info.get('running'):
+        elif not info.get('running') and not idle_playback:
             issue('waiting', identity, f'Waiting: {title} {side.upper()}')
         elif identity == 'network-link' and outputs.get(identity, {}).get('state') != 'sending':
             issue('receiver', identity, 'Link Audio: waiting for receiver')

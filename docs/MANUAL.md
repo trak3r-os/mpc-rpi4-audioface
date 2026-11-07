@@ -184,7 +184,7 @@ A **virtual MIDI cable is not a musical MIDI channel**. Cable 2 may still carry 
 5. Create or select an audio track on the host and choose those inputs.
 6. Play the instrument. Check the track meter, then listen.
 
-To return sound in Hub, open **Send audio → USB host**, choose the host output pair, then enable pHAT DAC or an attached playback device. In host mode, choose the outputs shown in that device's map. Not every device receives the host's main output 1–2.
+To return sound in Hub, open **Send audio → USB host**, choose the host output pair, then enable pHAT DAC or an attached playback device. Hub opens an attached device's playback stream when a saved audio route targets it and closes it when its last incoming route is removed. Capturing from that device to the DAC does not open its USB return. In host mode, choose the outputs shown in that device's map. Not every device receives the host's main output 1–2.
 
 The USB interface is configured for **26 inputs and 26 outputs at 44.1 kHz, 16-bit**. Scenes and host profiles change assignments, reservations and routes, not the number of USB channels advertised to the host. They can use fewer channels without reconnecting USB. The local pHAT and each network output are stereo; 26 does not describe their channel count. A 32-channel USB interface is not implemented: the [stock gadget driver](https://github.com/raspberrypi/linux/blob/rpi-6.18.y/drivers/usb/gadget/function/f_uac2.c) supports at most 27 channels per direction, and going beyond that needs a separate module change and host tests.
 
@@ -334,6 +334,7 @@ Open **Status** in the main menu:
 
 - **Machine & buffers:** CPU and memory bars, temperature, engine state, sample rate, period, buffer frames and duration, DSP processing load, uptime and MIDI counts. Turn to read lower rows and network error counters.
 - **All inputs / All outputs:** each endpoint has a state and a measured peak bar. Turn to scroll; press a device to see channels, sample rate, ALSA state, actual period/buffer sizes, delay and available frames when reported. Network endpoints show their available packet, queue, xrun and dropped-frame counters.
+- **WiFi:** current connection state, network name, IP address and signal strength. The same details are available in **Connections → WiFi**.
 
 `--` means unavailable. An unrouted output may have no measurable source. ALSA buffer fill is a sampled reading, refreshed about every two seconds. Buffer duration is capacity in milliseconds, not the complete input-to-output delay. **Session XRuns** counts notifications from the independent observer over the retained monitoring session. DSP load refers to audio processing; CPU refers to the whole Pi. A configured buffer is labelled **Config buf** when an actual ALSA read is unavailable.
 
@@ -454,7 +455,7 @@ Menu
   MIDI             choose sender → select receivers
   Scenes           slot → Load / Save here... → confirm saving
   Connections      USB host / WiFi / physical devices and their details
-  Status           Machine & buffers / All inputs / All outputs
+  Status           Machine & buffers / All inputs / All outputs / WiFi
                    Profile readiness / Session counters / Recent events
   Settings         display sleep, saver, brightness, rotation, encoder
 ```

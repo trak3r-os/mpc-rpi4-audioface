@@ -1526,6 +1526,31 @@ def test_hub_keeps_local_clock_running_when_host_leaves(monkeypatch, tmp_path):
     assert frozenset(('keys_in:capture_1', 'level_dac_out:playback_1')) in w.connections
 
 
+def test_hub_opens_device_playback_only_for_routes_and_keeps_capture_running(monkeypatch, tmp_path):
+    w, d = make(monkeypatch, tmp_path, engine={"mode": "hub"})
+    w.devices = [usb_device(2, 'Keys')]
+    daemon.cmd_change('route usb-Keys local-dac')
+    w.seconds(1.2)
+    capture, playback = d.bridges[('usb-Keys', IN)], d.bridges[('usb-Keys', OUT)]
+    clock, source = d.jackd, capture.child
+    assert source.alive() and playback.child is None and not playback.holding
+    assert not next(dev for dev in d.status_data()['devices'] if dev['card'] == 'Keys')['out']['running']
+    daemon.cmd_change('route usb-host usb-Keys')
+    w.rates = (48000, 48000)
+    w.seconds(1.2)
+    returned = playback.child
+    assert returned.alive() and playback.holding
+    assert frozenset(('usb_host_in:capture_1', 'keys_out:playback_1')) in w.connections
+    daemon.cmd_change('unroute usb-host usb-Keys')
+    w.seconds(1.2)
+    assert not returned.alive() and playback.child is None and not playback.holding
+    assert source is capture.child and source.alive() and d.jackd is clock
+    assert frozenset(('keys_in:capture_1', 'level_dac_out:playback_1')) in w.connections
+    daemon.cmd_change('route usb-host usb-Keys')
+    w.seconds(1.2)
+    assert playback.child.alive() and playback.child is not returned
+
+
 def test_network_output_toggles_and_failures_do_not_restart_other_outputs(monkeypatch, tmp_path):
     w, d = make(monkeypatch, tmp_path, engine={"mode": "hub"})
     w.rates = (48000, 48000)

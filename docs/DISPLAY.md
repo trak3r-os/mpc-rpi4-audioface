@@ -96,6 +96,8 @@ The OLED is an **SH1106**, 128×64, at I2C address **0x3C** (`SH1106LCDI2CAddres
 
 ## The service
 
+WiFi details are also available directly under **Status → WiFi**, including connection state, network name, IP address and signal strength.
+
 `rpi-audio-ui.service` reads `/run/rpi-audio/status.json` twice a second (a file older than ten seconds counts as no service: the row above the connection bar then says so) and runs each command through `rpi-audiod cmd TEXT`. A separate background worker reads NetworkManager's connection information (`nmcli`, without rescanning), the USB controller state in sysfs and physical audio/MIDI cards in `/proc/asound` every two seconds. These reads do not block the encoder or depend on commands finishing. Missing GPIO is retried every five seconds; the display worker retries I²C independently. `install.sh --hat` (or `tools/deploy.sh --enable --hat`) enables it and installs `python3-smbus2` and `python3-libgpiod`; without `--hat` its files are installed but it does not run. For Python-only UI updates on an installed Pi, `tools/deploy.sh --ui-only` backs up and updates the display service and restarts it if running, preserving the audio service, configuration and boot settings.
 
 Settings go in the `[ui]` table of `/etc/rpi-audio/rpi-audio.toml` or a file in `rpi-audio.d/` (all optional):

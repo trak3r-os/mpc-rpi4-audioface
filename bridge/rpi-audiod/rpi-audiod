@@ -1641,6 +1641,12 @@ class Daemon:
                 self.next_scan = now + 0.5
             if self.jack_ready:
                 for b in self.bridges.values():
+                    # Hub playback only needs a USB stream when a stored route feeds it.
+                    # Opening an unused return wastes bus time and can disturb capture on a duplex device.
+                    if self.hub and b.direction == OUT and not any(r.dst == b.dev.identity for r in self.routes):
+                        b.stop()
+                        b.blocked, b.next_try, b.backoff = None, 0.0, 1.0
+                        continue
                     if b.child and not b.child.alive():
                         self.note('bridge_failures', f'{b.client}: bridge exited', severity='warning')
                     was_blocked = bool(b.blocked)

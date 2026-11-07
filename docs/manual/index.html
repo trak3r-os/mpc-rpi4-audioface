@@ -299,7 +299,7 @@ footer { padding:24px 5%; font-size:14px; color:#506878; }
 <li>Create or select an audio track on the host and choose those inputs.</li>
 <li>Play the instrument. Check the track meter, then listen.</li>
 </ol>
-<p>To return sound in Hub, open <strong>Send audio → USB host</strong>, choose the host output pair, then enable pHAT DAC or an attached playback device. In host mode, choose the outputs shown in that device's map. Not every device receives the host's main output 1–2.</p>
+<p>To return sound in Hub, open <strong>Send audio → USB host</strong>, choose the host output pair, then enable pHAT DAC or an attached playback device. Hub opens an attached device's playback stream when a saved audio route targets it and closes it when its last incoming route is removed. Capturing from that device to the DAC does not open its USB return. In host mode, choose the outputs shown in that device's map. Not every device receives the host's main output 1–2.</p>
 <p>The USB interface is configured for <strong>26 inputs and 26 outputs at 44.1 kHz, 16-bit</strong>. Scenes and host profiles change assignments, reservations and routes, not the number of USB channels advertised to the host. They can use fewer channels without reconnecting USB. The local pHAT and each network output are stereo; 26 does not describe their channel count. A 32-channel USB interface is not implemented: the <a href="https://github.com/raspberrypi/linux/blob/rpi-6.18.y/drivers/usb/gadget/function/f_uac2.c">stock gadget driver</a> supports at most 27 channels per direction, and going beyond that needs a separate module change and host tests.</p>
 <p>For the Force, the tested sample rate is 44.1 kHz. After booting, you may need to select rpi-audio again. If it is missing after reconnecting, leave Preferences and reopen it. The add-ons that restore the Force's internal audio are optional and have separate installation instructions.</p>
 <p>Physical tests of the original host mode are recorded for Linux and the Force. Hub USB supervision and independent rates have automated tests; physical Hub USB interoperability is not yet verified with a host in this session. Equivalent Windows/macOS hardware tests are not recorded here; check their channel visibility and actual operation before relying on them.</p>
@@ -449,6 +449,7 @@ rpi-audiod host rehearsal
 <ul>
 <li><strong>Machine &amp; buffers:</strong> CPU and memory bars, temperature, engine state, sample rate, period, buffer frames and duration, DSP processing load, uptime and MIDI counts. Turn to read lower rows and network error counters.</li>
 <li><strong>All inputs / All outputs:</strong> each endpoint has a state and a measured peak bar. Turn to scroll; press a device to see channels, sample rate, ALSA state, actual period/buffer sizes, delay and available frames when reported. Network endpoints show their available packet, queue, xrun and dropped-frame counters.</li>
+<li><strong>WiFi:</strong> current connection state, network name, IP address and signal strength. The same details are available in <strong>Connections → WiFi</strong>.</li>
 </ul>
 <p><code>--</code> means unavailable. An unrouted output may have no measurable source. ALSA buffer fill is a sampled reading, refreshed about every two seconds. Buffer duration is capacity in milliseconds, not the complete input-to-output delay. <strong>Session XRuns</strong> counts notifications from the independent observer over the retained monitoring session. DSP load refers to audio processing; CPU refers to the whole Pi. A configured buffer is labelled <strong>Config buf</strong> when an actual ALSA read is unavailable.</p>
 <h3 id="profile-readiness">Profile readiness</h3>
@@ -581,7 +582,7 @@ Menu
   MIDI             choose sender → select receivers
   Scenes           slot → Load / Save here... → confirm saving
   Connections      USB host / WiFi / physical devices and their details
-  Status           Machine &amp; buffers / All inputs / All outputs
+  Status           Machine &amp; buffers / All inputs / All outputs / WiFi
                    Profile readiness / Session counters / Recent events
   Settings         display sleep, saver, brightness, rotation, encoder
 </code></pre>

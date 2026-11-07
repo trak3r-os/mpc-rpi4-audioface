@@ -27,6 +27,18 @@ def test_profile_ready_missing_device_wrong_mode_and_waiting():
     assert any(i['code'] == 'engine' for i in readiness.assess(SETUP, {**STATUS, 'jack_ready': False})['issues'])
 
 
+def test_hub_saved_playback_assignment_can_be_idle_until_a_route_needs_it():
+    synth = {'identity': 'synth', 'out': {'channels': 2, 'running': False}}
+    status = {**STATUS, 'devices': [*STATUS['devices'], synth]}
+    setup = {**SETUP, 'out': {'synth': 3}, 'out_channels': {'synth': 2}}
+    assert readiness.assess(setup, status)['state'] == 'ready'
+    routed = {**setup, 'routes': [*SETUP['routes'], {'src': 'guitar', 'dst': 'synth'}]}
+    assert any(i['code'] == 'waiting' and i['identity'] == 'synth'
+               for i in readiness.assess(routed, status)['issues'])
+    assert any(i['code'] == 'waiting' and i['identity'] == 'synth'
+               for i in readiness.assess(setup, {**status, 'engine_mode': 'host'})['issues'])
+
+
 def test_profile_checks_midi_port_and_intentionally_disabled_network_routes():
     setup = {**SETUP, 'midi_routes': [{'src': 'keys/1', 'dst': 'synth/0'}],
              'routes': [*SETUP['routes'], {'src': 'guitar', 'dst': 'network-rtp'}],
