@@ -44,6 +44,7 @@ Pi 5 en el USB host de la Force; mezclador (PCM2902), GP-150 y luego el Tracker 
 - [Pi] **GP-150** enumera a 480 Mbit/s en el bus 1: no consume presupuesto FS.
 - [Pi] **Tracker a 8 canales en el RP1, reproduciendo (datos distintos de cero):** usbmon, 60 s: 59 997 paquetes de captura de 704/720 B, **0 errores ni vacíos**; mezclador 59 997 sin errores; 0 xruns nuevos. En la Pi 4 (VL805) este caso perdía 40–195 paquetes en 20 s. Falta un soak largo y la integridad con señal conocida.
 - [Pi] Desde las 21:11:57 el I²C de la pantalla (`1f00074000.i2c`) da `controller timed out` ~1/s, y `eth0` queda sin portadora; coincide con conectar el Tracker. La Pi no se reinició (mismo arranque, `throttled=0x0`). Se sigue por Wi-Fi.
+- [Pi] 21:18: el mezclador pasa al USB-A del bus 1 (con la GP-150, que va a HS). Nueva clave `usb-1-2-08bb:2902`: cada cambio de puerto obliga a rehacer sus rutas (hecho: IN 1–2, OUT 3–4; quitadas las de `usb-3-2`). Los dos puentes abren. usbmon 20 s: mezclador 20 000 paquetes, GP-150 159 992 (microtramas), Tracker 19 999, **0 errores** en todos.
 - [?] No comprobado en la Force: si MPC oye cada entrada. No había `FORCE_PASS` para MPC Remote.
 
 ## Falta

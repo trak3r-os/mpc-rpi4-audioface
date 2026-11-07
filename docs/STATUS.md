@@ -9,7 +9,7 @@
   - **Alimentación:** la fuente se ve como 3 A, así que la Pi 5 limita los USB-A a 600 mA en total. No se ha tocado `usb_max_current_enable`.
 
   [Sesión](hw/2026-11-07-pi5-migration.md).
-- [Pi, código] **Primera prueba con la Force en la Pi 5:** enumera y MPC abre a 44,1 kHz. Los puentes del gadget no abrían en modo Hub (`u_audio` exige ≥ 4 periodos y se pedían 3): arreglado a `-n 4` y desplegado. Rutas rehechas para la nueva clave del mezclador y para el Tracker (IN 15–22, OUT 11–12). **Tracker a 8 canales reproduciendo en el RP1: 0 errores en 60 s de usbmon** (en el VL805 perdía). La salida del mezclador no cabe en el presupuesto FS del bus 3 (1099 B, valor de la Pi 4). I²C de la pantalla con timeouts y `eth0` sin portadora desde que se enchufó el Tracker. Falta confirmar de oído en MPC. [Sesión](hw/2026-11-07-pi5-migration.md#primera-sesión-con-la-force-21022115).
+- [Pi, código] **Primera prueba con la Force en la Pi 5:** enumera y MPC abre a 44,1 kHz. Los puentes del gadget no abrían en modo Hub (`u_audio` exige ≥ 4 periodos y se pedían 3): arreglado a `-n 4` y desplegado. Rutas rehechas para la nueva clave del mezclador y para el Tracker (IN 15–22, OUT 11–12). **Tracker a 8 canales reproduciendo en el RP1: 0 errores en 60 s de usbmon** (en el VL805 perdía). El mezclador, movido al bus 1 (con la GP-150 en HS), ya va en los dos sentidos (IN 1–2, OUT 3–4); sin número de serie, su clave cambia con cada puerto y hay que rehacer sus rutas. I²C de la pantalla con timeouts y `eth0` sin portadora desde que se enchufó el Tracker. Falta confirmar de oído en MPC. [Sesión](hw/2026-11-07-pi5-migration.md#primera-sesión-con-la-force-21022115).
 
 ## Actualización del 4 de noviembre
 
