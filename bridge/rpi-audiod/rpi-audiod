@@ -883,6 +883,11 @@ class Daemon:
         except (TypeError, ValueError):
             log(f"rpi-audiod: [usb] fs_budget {cfg['usb']['fs_budget']!r} is not a number; using {usb.FS_BUDGET}")
             self.fs_budget = usb.FS_BUDGET
+        try:   # frames per period of the gadget bridges: 4 periods of this size buffer each direction
+            self.host_period = min(max(int(cfg["usb"].get("host_period", 256)), 32), 256)
+        except (TypeError, ValueError):
+            log(f"rpi-audiod: [usb] host_period {cfg['usb']['host_period']!r} is not a number; using 256")
+            self.host_period = 256
         self.slots_stamp = None
         self.unknown_host = None   # the host profile already warned about
         ports = 0 if self.standalone else int(gadget_setting("GADGET_MIDI_PORTS", 0))
@@ -1371,10 +1376,10 @@ class Daemon:
                 for key, rate, client, tool in (("usb-send", self.rates[0], "usb_host_out", "zita-j2a"),
                                                 ("usb-receive", self.rates[1], "usb_host_in", "zita-a2j")):
                     if rate:
-                        # u_audio refuses fewer than 4 periods of 256 frames (PERIODS [4 16] on
-                        # 6.18 rpi-2712), and zita then fails to open the gadget card.
+                        # u_audio refuses fewer than 4 periods (PERIODS [4 16] on 6.18 rpi-2712) and
+                        # periods over one page, and zita then fails to open the gadget card.
                         desired[key] = [tool, "-j", client, "-d", f"hw:CARD={self.usb_card}", "-r", str(rate),
-                                        "-c", str(self.usb_channels), "-p", "256", "-n", "4"]
+                                        "-c", str(self.usb_channels), "-p", str(self.host_period), "-n", "4"]
             helper = str(Path(__file__).resolve().parent / "network/rpi-audio-network")
             for identity, transport, client in ((outputs.RTP, "rtp", "network_rtp_out"),
                                                 (outputs.LINK, "link", "network_link_out")):

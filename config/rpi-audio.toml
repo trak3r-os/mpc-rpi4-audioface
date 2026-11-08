@@ -63,6 +63,10 @@ reserve_in = []
 reserve_out = [1, 2]
 
 [usb]
+# Frames per period of the bridges to the USB host (4 periods each way, 32-256). Smaller is
+# lower latency: 256 -> 128 -> 64 measured 65 -> 47 -> 39 ms host round trip through the Pi 5
+# with a laptop host (docs/hw/2026-11-07-pi5-migration.md).
+# host_period = 256
 # The most periodic (isochronous) full-speed bytes per frame one USB bus takes. A full-speed
 # device direction whose load does not fit what the running bridges leave is not started
 # (it waits, with the reason in `rpi-audiod status`) until another device leaves.
