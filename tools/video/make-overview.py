@@ -1,135 +1,48 @@
 #!/usr/bin/env python3
-"""Render the rpi5-audioface overview video: silent slides drawn with Pillow, a procedural music bed, ffmpeg.
+"""Render the rpi5-audioface overview film: animated scenes drawn frame by frame with Pillow, a procedural
+music bed (music.py), and ffmpeg.
 
-    python3 tools/video/make-overview.py            # -> out/video/rpi5-audioface-overview.mp4
-    python3 tools/video/make-overview.py --frames   # only the slide PNGs (out/video/build/), no encoding
+    python3 tools/video/make-overview.py                 # -> out/video/rpi5-audioface-overview.mp4 (1080p)
+    python3 tools/video/make-overview.py --small         # also the 720p two-pass file under 9 MB
+    python3 tools/video/make-overview.py --still 12.5    # one PNG of the film at 12.5 s (for checking layout)
 
-Needs Python 3 with Pillow and numpy, DejaVu fonts, and ffmpeg. No network, no Pi, no downloaded assets:
-every diagram is drawn here, the OLED screens are cropped from docs/manual/img/ or rendered with the
-project's own OLED renderer (bridge/rpi-audio-ui), and the music comes from music.py.
+Needs Python 3 with Pillow and numpy, DejaVu fonts, and ffmpeg. No network, no Pi, no downloaded assets: every
+illustration is drawn in draw.py, the OLED screens come from docs/manual/img/ or from the project's own OLED
+renderer (bridge/rpi-audio-ui), and the screenshots are the ones in docs/img/.
 """
 import argparse
+import math
 import subprocess
 import sys
-from pathlib import Path
+from multiprocessing import Pool
+from pathlib import Path as FsPath
 
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image
 
-HERE = Path(__file__).resolve().parent
+HERE = FsPath(__file__).resolve().parent
 ROOT = HERE.parents[1]
 sys.path.insert(0, str(HERE))
 sys.path.insert(0, str(ROOT / "bridge/rpi-audio-ui"))
 
-W, H, S = 1920, 1080, 2          # output size, supersampling factor (everything is drawn at 2x, then reduced)
-FPS = 25
-SLIDE_FADE, STAGE_FADE = 0.9, 0.4  # seconds of crossfade between slides, and between reveal steps of a slide
-SPEED = 0.92                       # global timing factor
+from draw import *  # noqa: E402,F401,F403  (the drawing kit: Cv, easing, cables, illustrations)
 
-PAPER, INK, MUTED, LINE = "#f4f7fb", "#17304a", "#4d6178", "#cfdbe8"
-TEAL, BLUE, PURPLE, AMBER, RED = "#087d76", "#2563ad", "#7660ac", "#b7791f", "#b4412f"
-WHITE, NIGHT, TERM = "#ffffff", "#10243a", "#0d1a2a"
-FONT_DIR = Path("/usr/share/fonts/truetype/dejavu")
-OLED = ROOT / "docs/manual/img"
-REPO_URL = "github.com/trak3r-os/rpi5-audioface"
+FPS, FADE = 25, 0.5
+OUT = ROOT / "out/video"
+MANUAL, IMG = ROOT / "docs/manual/img", ROOT / "docs/img"
+IN_D, OUT_D = "#0b7f73", "#2563eb"
+_IMGS = {}
 
 
-class Cv:
-    """A 1920x1080 canvas in logical coordinates, drawn at S times the size for smooth edges."""
+def load(path):
+    if path not in _IMGS:
+        _IMGS[path] = Image.open(path).convert("RGB")
+    return _IMGS[path]
 
-    _fonts = {}
-
-    def __init__(self, bg=PAPER):
-        self.im = Image.new("RGB", (W * S, H * S), bg)
-        self.d = ImageDraw.Draw(self.im)
-
-    def font(self, size, bold=False, mono=False):
-        key = (size, bold, mono)
-        if key not in self._fonts:
-            name = ("DejaVuSansMono" if mono else "DejaVuSans") + ("-Bold" if bold else "") + ".ttf"
-            self._fonts[key] = ImageFont.truetype(str(FONT_DIR / name), size * S)
-        return self._fonts[key]
-
-    def tw(self, s, size, bold=False, mono=False):
-        return self.d.textlength(s, font=self.font(size, bold, mono)) / S
-
-    def text(self, x, y, s, size=34, color=INK, bold=False, mono=False, anchor="la"):
-        self.d.text((x * S, y * S), s, font=self.font(size, bold, mono), fill=color, anchor=anchor)
-
-    def wrap(self, s, size, maxw, bold=False, mono=False):
-        lines = []
-        for para in s.split("\n"):
-            cur = ""
-            for word in para.split(" "):
-                trial = (cur + " " + word).strip()
-                if cur and self.tw(trial, size, bold, mono) > maxw:
-                    lines.append(cur)
-                    cur = word
-                else:
-                    cur = trial
-            lines.append(cur)
-        return lines
-
-    def para(self, x, y, s, size=32, color=MUTED, maxw=600, bold=False, gap=1.4, mono=False):
-        """Wrapped paragraph; returns the y below it."""
-        for line in self.wrap(s, size, maxw, bold, mono):
-            self.text(x, y, line, size, color, bold, mono)
-            y += size * gap
-        return y
-
-    def box(self, x0, y0, x1, y1, fill=WHITE, outline=LINE, r=22, w=2, bar=None):
-        self.d.rounded_rectangle([x0 * S, y0 * S, x1 * S, y1 * S], r * S, fill=fill, outline=outline, width=w * S)
-        if bar:
-            self.d.rounded_rectangle([x0 * S, y0 * S, (x0 + 12) * S, y1 * S], 6 * S, fill=bar)
-
-    def card(self, x0, y0, x1, y1, title, body="", color=TEAL, tsize=38, bsize=30):
-        """White card with a coloured left bar, a bold title and a wrapped body."""
-        self.box(x0, y0, x1, y1, bar=color)
-        self.text(x0 + 36, y0 + 24, title, tsize, INK, bold=True)
-        if body:
-            self.para(x0 + 36, y0 + 24 + tsize * 1.5, body, bsize, MUTED, x1 - x0 - 72)
-
-    def pill(self, cx, cy, s, size=28, fill=TEAL, color=WHITE, padx=22, h=None):
-        w = self.tw(s, size, True) + 2 * padx
-        h = h or size + 24
-        self.d.rounded_rectangle([(cx - w / 2) * S, (cy - h / 2) * S, (cx + w / 2) * S, (cy + h / 2) * S], h / 2 * S, fill=fill)
-        self.text(cx, cy, s, size, color, bold=True, anchor="mm")
-
-    def line(self, pts, color=INK, w=6):
-        self.d.line([(x * S, y * S) for x, y in pts], fill=color, width=w * S, joint="curve")
-
-    def head(self, tip, frm, color, size=28):
-        import math
-        a = math.atan2(tip[1] - frm[1], tip[0] - frm[0])
-        p1 = (tip[0] - size * math.cos(a - 0.42), tip[1] - size * math.sin(a - 0.42))
-        p2 = (tip[0] - size * math.cos(a + 0.42), tip[1] - size * math.sin(a + 0.42))
-        self.d.polygon([(tip[0] * S, tip[1] * S), (p1[0] * S, p1[1] * S), (p2[0] * S, p2[1] * S)], fill=color)
-
-    def arrow(self, pts, color=TEAL, w=7, both=False):
-        """Polyline with an arrowhead at the end (and at the start when both)."""
-        self.line(pts, color, w)
-        self.head(pts[-1], pts[-2], color)
-        if both:
-            self.head(pts[0], pts[1], color)
-
-    def oled(self, img, x, y, w):
-        h = int(w * img.height / img.width)
-        ratio = w * S / img.width
-        mode = Image.Resampling.NEAREST if abs(ratio - round(ratio)) < 1e-6 else Image.Resampling.LANCZOS
-        self.im.paste(img.resize((w * S, h * S), mode), (x * S, y * S))
-        self.d.rectangle([x * S - 3, y * S - 3, (x + w) * S + 3, (y + h) * S + 3], outline=INK, width=6)
-        return h
-
-    def done(self):
-        return self.im.resize((W, H), Image.Resampling.LANCZOS)
-
-
-# ---------------------------------------------------------------------------------------------- OLED screens
 
 def crop_oled(name, side):
     """One of the two 640x320 screens in a manual figure (pair layout: 1440x450)."""
-    im = Image.open(OLED / name).convert("RGB")
     x = 42 if side == 0 else 758
-    return im.crop((x, 125, x + 640, 445))
+    return load(MANUAL / name).crop((x, 125, x + 640, 445))
 
 
 def render_usb_ports(mixer_bus):
@@ -167,452 +80,634 @@ def render_usb_ports(mixer_bus):
     return img.resize((640, 320), Image.Resampling.NEAREST)
 
 
-# ---------------------------------------------------------------------------------------------- slide helpers
+# ------------------------------------------------------------------------------------------------ scene helpers
 
-def device_chip(c, x, y, w, h, title, sub="", color=TEAL):
-    c.box(x, y, x + w, y + h, bar=color)
-    c.text(x + 34, y + 18, title, 32, INK, bold=True)
-    if sub:
-        c.text(x + 34, y + 62, sub, 26, MUTED)
+def head(c, t, title, color=INK, size=80, y=58):
+    p = e_out(seg(t, 0.1, 0.6))
+    with c.at(0, -26 * (1 - p), 1, p):
+        c.text(960, y, title, size, color, True, anchor="ma")
 
 
-def term(c, x, y, w, lines, size=34):
-    """Terminal panel; each line is (text, color)."""
-    h = 40 + len(lines) * int(size * 1.6)
-    c.box(x, y, x + w, y + h, fill=TERM, outline=TERM, r=20)
+def caps(c, t, items, size=50, y=948, color=MUTED, bold=True):
+    """Bottom captions: (t_in, t_out or None, text). Each fades in, and out when it has an end."""
+    for t0, t1, s in items:
+        a = e_out(seg(t, t0, t0 + 0.45))
+        if t1 is not None:
+            a = min(a, 1 - e_io(seg(t, t1 - 0.3, t1)))
+        if a > 0.01:
+            with c.at(0, 14 * (1 - a), 1, a):
+                c.text(960, y, s, size, color, bold, anchor="ma")
+
+
+def notes(c, t, n=7, region=(120, 900), base=900, top=140, colors=(IN_C, OUT_C, MIDI_C, CTRL_C), size=64):
+    for i in range(n):
+        ph = (t * 0.11 + i / n) % 1
+        x = region[0] + (region[1] - region[0]) * ((i * 0.37) % 1) + 28 * math.sin(t * 1.3 + i * 2)
+        y = base - (base - top) * ph
+        a = min(1.0, ph * 6, (1 - ph) * 4) * 0.8
+        c.text(x, y, "♪♫"[i % 2], size, mix(colors[i % 4], c.bg, a), True, anchor="mm")
+
+
+def label(c, x, y, s, t, t0, size=40, color=INK):
+    fade_text(c, x, y, s, t, t0, size, color, True)
+
+
+def tag(c, x, y, s, t, t0, fill, size=40):
+    p = seg(t, t0, t0 + 0.45)
+    if p > 0:
+        with c.at(x, y, max(0.02, e_back(p)), clamp(p * 3)):
+            c.pill(0, 0, s, size, fill=fill)
+
+
+def usb_cable(c, pts, t, t0, dur=0.9, r=40, **kw):
+    path = Path(pts, r)
+    p = e_io(seg(t, t0, t0 + dur))
+    cable(c, path, p, **kw)
+    return path, p
+
+
+def draw_term_lines(c, x, y, lines, t, t0, size=44, step=1.1):
+    """Typed terminal lines: (text, colour). A new line starts every `step` seconds."""
     for i, (s, col) in enumerate(lines):
-        c.text(x + 36, y + 26 + i * int(size * 1.6), s, size, col, mono=True)
-    return y + h
+        ts = t0 + i * step
+        if t < ts:
+            break
+        cursor = "▌" if int(t * 2.5) % 2 == 0 and (i == len(lines) - 1 or t < ts + 0.8) and col == "#7dd3fc" else ""
+        c.text(x, y + i * size * 1.55, typed(s, t, ts, 26) + cursor, size, col, True, mono=True)
 
 
-def bus_row(c, x, y, w, name, load, demand, budget, chips, hot=False):
-    c.box(x, y, x + w, y + 168, outline=RED if hot else LINE, w=3 if hot else 2)
-    c.text(x + 28, y + 14, f"Bus {name}", 30, INK, bold=True)
-    c.text(x + w - 28, y + 14, f"FS {load}/{budget}" + ("  !" if hot else ""), 30, RED if hot else MUTED, bold=True, anchor="ra")
-    bx0, bx1, by = x + 28, x + w - 28, y + 62
-    c.box(bx0, by, bx1, by + 30, fill="#e6edf5", outline="#e6edf5", r=15)
-    if load:
-        c.box(bx0, by, bx0 + (bx1 - bx0) * min(load, budget) / budget, by + 30, fill=RED if hot else TEAL, outline=RED if hot else TEAL, r=15)
-    c.text(x + 28, y + 110, chips, 26, MUTED)
+# ------------------------------------------------------------------------------------------------ scenes
+
+def s_title(c, t):
+    notes(c, t, 9, (120, 1800), 1000, 100)
+    p = e_back(seg(t, 0.1, 0.8))
+    with c.at(960, 150 + 0, p, clamp(p * 3)):
+        c.text(0, 0, "rpi5-audioface", 128, INK, True, anchor="ma")
+    show(c, pi5, 960, 600, t, 0.6, s=1.45, bob=8, dur=0.8)
+    fade_text(c, 960, 860, "Your Raspberry Pi becomes a USB sound card", t, 1.6, 54, MUTED)
+    fade_text(c, 960, 938, "and a hub for all your audio and MIDI gear", t, 2.4, 54, MUTED)
 
 
-def tick_bullets(c, x, y, items, size=32, maxw=800, color=TEAL, gap=22):
-    for head, body in items:
-        c.d.ellipse([x * S, (y + size * 0.42) * S, (x + 16) * S, (y + size * 0.42 + 16) * S], fill=color)
-        c.text(x + 36, y, head, size, INK, bold=True)
-        y = c.para(x + 36, y + size * 1.4, body, size - 4, MUTED, maxw - 36, gap=1.35) + gap
-    return y
+def s_one(c, t):
+    head(c, t, "One cable to your host")
+    show(c, laptop, 290, 520, t, 0.3, s=1.05, bob=0)
+    show(c, pi5, 930, 560, t, 0.8, s=1.0)
+    devs = [(mixer, 1590, 330, 0.75), (synth, 1590, 590, 0.7), (pedal, 1590, 840, 0.5)]
+    for i, (fn, x, y, sc) in enumerate(devs):
+        show(c, fn, x, y, t, 1.4 + 0.3 * i, s=sc)
+    host, _ = usb_cable(c, [(500, 626), (724, 626)], t, 1.2, 0.6)
+    ports = (-34, -12, 22, 44)
+    chains = []
+    for i, (fn, x, y, sc) in enumerate(devs):
+        left = {mixer: -110, synth: -150, pedal: -80}[fn] * sc + x
+        px, py = 930 + 206, 560 + ports[i]
+        pa, _ = usb_cable(c, [(px, py), (1250 + i * 36, py), (1250 + i * 36, y), (left, y)], t, 2.0 + 0.3 * i, 0.9, r=34, w=10)
+        chains.append(pa)
+    ta = seg(t, 3.4, 4.2)
+    pulses(c, host, t, IN_C, ta, rev=True, off=-13)
+    pulses(c, host, t, OUT_C, ta, off=13)
+    for pa in chains:
+        pulses(c, pa, t, IN_C, ta, rev=True, off=-13, gap=170)
+        pulses(c, pa, t, OUT_C, ta, off=13, gap=170)
+    caps(c, t, [(0.9, 3.8, "Plug your gear into the Pi"), (4.2, None, "Your host sees one USB audio interface")])
 
 
-# ---------------------------------------------------------------------------------------------- the slides
-
-def s_title(c, k):
-    c.box(0, 0, 36, H, fill=TEAL, outline=TEAL, r=0)
-    c.text(140, 250, "rpi5-audioface", 132, WHITE, bold=True)
-    c.text(144, 410, "A Raspberry Pi 5 that turns many USB audio and MIDI devices", 46, "#cfe4f2")
-    c.text(144, 475, "into one USB audio interface for your computer or sampler.", 46, "#cfe4f2")
-    if k >= 2:
-        for i, (label, col) in enumerate((("Host", BLUE), ("Raspberry Pi 5", TEAL), ("USB devices", PURPLE))):
-            x = 144 + i * 560
-            c.box(x, 640, x + 440, 780, fill=NIGHT, outline=col, r=26, w=4)
-            c.text(x + 220, 710, label, 40, WHITE, bold=True, anchor="mm")
-            if i < 2:
-                c.arrow([(x + 450, 710), (x + 550, 710)], "#7fd1c7", both=True)
-        c.text(144, 870, "An instructional overview  ·  GPL-3.0-or-later", 32, "#8fb0c8")
-
-
-def s_what(c, k):
-    cards = [("One interface for the host",
-              "The host sees one class-compliant USB audio interface (UAC2): 26 in x 26 out, 44.1 kHz, 16-bit, plus 4 USB MIDI ports.", BLUE),
-             ("Many devices behind it",
-              "Mixers, guitar processors, synths and trackers plug into the Pi's USB-A ports. Each device gets its own channels.", TEAL),
-             ("You decide the routing",
-              "Sticky channel slots, a Hub mode with explicit routes, names, levels, mutes and 8 saved presets.", PURPLE),
-             ("Control it from anywhere",
-              "Use the OLED menu on the box, or MIDI over the same USB cable from the host. No network and no app needed.", AMBER)]
-    for i, (t, b, col) in enumerate(cards[:k]):
-        x, y = 100 + (i % 2) * 870, 230 + (i // 2) * 370
-        c.card(x, y, x + 850, y + 340, t, b, col, tsize=40, bsize=34)
+def s_inout(c, t):
+    head(c, t, "Sound goes both ways")
+    show(c, laptop, 300, 560, t, 0.3, s=1.05)
+    show(c, pi5, 880, 560, t, 0.7, s=0.85)
+    show(c, pedal, 1560, 370, t, 1.1, s=0.62)
+    show(c, speaker, 1560, 770, t, 1.3, s=1.0, play=seg(t, 3.5, 4.3))
+    host, _ = usb_cable(c, [(500, 622), (705, 622)], t, 1.0, 0.5)
+    a, _ = usb_cable(c, [(1050, 530), (1280, 530), (1280, 370), (1480, 370)], t, 1.6, 0.8, w=10)
+    b, _ = usb_cable(c, [(1050, 600), (1350, 600), (1350, 780), (1500, 780)], t, 1.8, 0.8, w=10)
+    ta = seg(t, 2.8, 3.6)
+    pulses(c, host, t, IN_C, ta, rev=True, off=-14, speed=330)
+    pulses(c, a, t, IN_C, ta, rev=True, speed=330)
+    pulses(c, host, t, OUT_C, ta, off=14, speed=330)
+    pulses(c, b, t, OUT_C, ta, speed=330)
+    tag(c, 1180, 250, "IN  to the host", t, 3.0, IN_D, 44)
+    tag(c, 1180, 880, "OUT  from the host", t, 3.6, OUT_D, 44)
+    caps(c, t, [(0.9, 4.8, "Your gear plays into the host..."), (5.2, None, "...and the host plays out to your gear")])
 
 
-def s_flow(c, k):
-    c.box(100, 320, 460, 740, bar=BLUE)
-    c.text(146, 350, "Host", 48, INK, bold=True)
-    c.para(146, 425, "Computer, DAW or standalone sampler", 32, MUTED, 290)
-    c.para(146, 610, "Selects the interface called rpi-audio", 30, BLUE, 290, bold=True)
-    c.box(700, 250, 1220, 800, bar=TEAL)
-    c.text(746, 272, "Raspberry Pi 5", 44, INK, bold=True)
-    for i, (t, sub) in enumerate((("USB gadget", "UAC2 audio + USB MIDI"), ("JACK + rpi-audiod", "slots, routes, levels"), ("USB host ports", "USB-A sockets"))):
-        y = 350 + i * 145
-        c.box(746, y, 1190, y + 122, fill="#eef5f9")
-        c.text(776, y + 18, t, 34, INK, bold=True)
-        c.text(776, y + 66, sub, 28, MUTED)
-    c.box(1460, 250, 1820, 805, fill=PAPER, outline=PAPER)
-    names = (("Mixer", "USB audio"), ("Guitar processor", "USB audio"), ("Synth / tracker", "USB audio + MIDI"), ("MIDI keyboard", "USB MIDI"))
-    for i, (t, sub) in enumerate(names):
-        device_chip(c, 1470, 250 + i * 145, 350, 122, t, sub, PURPLE)
-    if k >= 2:
-        c.arrow([(690, 470), (470, 470)], TEAL, both=False)
-        c.arrow([(470, 590), (690, 590)], BLUE)
-        c.text(580, 360, "USB-C", 34, INK, bold=True, anchor="ma")
-        c.text(580, 404, "gadget port", 28, MUTED, anchor="ma")
-        c.line([(1450, 310), (1450, 745)], MUTED, 6)
-        for i in range(4):
-            c.line([(1450, 311 + i * 145), (1470, 311 + i * 145)], MUTED, 6)
-        c.arrow([(1450, 470), (1230, 470)], TEAL)
-        c.arrow([(1230, 590), (1450, 590)], BLUE)
-        c.text(1340, 360, "USB-A", 34, INK, bold=True, anchor="ma")
-        c.text(1340, 404, "Pi is the host", 28, MUTED, anchor="ma")
-    if k >= 3:
-        c.box(300, 880, 340, 920, fill=TEAL, outline=TEAL, r=8)
-        c.text(360, 880, "IN: devices to Pi to host (what the host records)", 32, INK)
-        c.box(1250, 880, 1290, 920, fill=BLUE, outline=BLUE, r=8)
-        c.text(1310, 880, "OUT: host to Pi to devices", 32, INK)
+def sdcard(c, t=0.0):
+    c.poly([(-34, -46), (20, -46), (38, -28), (38, 46), (-34, 46)], "#2b3a55")
+    c.rect(-22, -52, 26, -26, "#2b3a55")
+    for i in range(4):
+        c.rect(-26 + i * 14, -40, -18 + i * 14, -22, "#d4a93c")
+    c.text(2, 18, "SD", 28, "#9fb3d1", True, anchor="mm")
 
 
-def s_hardware(c, k):
-    c.text(100, 215, "You need", 44, TEAL, bold=True)
-    tick_bullets(c, 100, 285, [
-        ("Raspberry Pi 5 + power supply", "A 5 A USB-PD supply is best. With a 3 A supply the USB-A ports are limited to 600 mA in total. A Pi 4 works too."),
-        ("USB-C power / data splitter", "The Pi's single USB-C port is both its power input and its gadget port. The splitter separates the two."),
-        ("USB audio and MIDI devices", "On the Pi's USB-A ports. A host with a USB port, connected directly (not through a hub)."),
-        ("Raspberry Pi OS, 64-bit", "On a microSD card. The Pi uses JACK; PipeWire is not needed."),
-    ], 34, 820, TEAL, 18)
-    if k >= 2:
-        c.box(1030, 200, 1820, 930, fill=WHITE, outline=LINE)
-        c.text(1070, 215, "Optional", 44, BLUE, bold=True)
-        tick_bullets(c, 1070, 285, [
-            ("OLED + rotary encoder", "128x64 screen, encoder with push, CONFIRM and BACK buttons: the on-box menu."),
-            ("pHAT DAC", "Local line output and the 48 kHz clock for Hub mode."),
-            ("Ethernet or Wi-Fi", "Setup, administration and optional network outputs."),
-        ], 34, 700, BLUE, 18)
+def s_parts(c, t):
+    head(c, t, "What you need")
+    items = [("Pi 5 + SD card", 0), ("USB-C splitter", 1), ("5 V supply", 2), ("USB gear", 3), ("OLED + knob", 4)]
+    for i, (name, k) in enumerate(items):
+        x0 = 70 + i * 368
+        p = e_back(seg(t, 0.4 + 0.5 * i, 1.0 + 0.5 * i))
+        if p <= 0:
+            continue
+        with c.at(x0 + 170, 540 + 40 * (1 - clamp(p)), 1, clamp(p * 3)):
+            c.card(-170, -290, 170, 290)
+            if k == 0:
+                with c.at(0, -90, 0.7):
+                    pi5(c, t)
+                with c.at(0, 80, 1.6):
+                    sdcard(c)
+            elif k == 1:
+                with c.at(0, -40, 1.0):
+                    splitter(c, t)
+            elif k == 2:
+                with c.at(-10, -40, 1.7):
+                    psu(c, t)
+            elif k == 3:
+                with c.at(-20, -140, 0.72):
+                    mixer(c, t)
+                with c.at(30, 70, 0.8):
+                    synth(c, t)
+            else:
+                with c.at(0, -130, 0.42):
+                    oled_unit(c, t, crop_oled("04-overview.png", 1))
+                with c.at(0, 50, 1.0):
+                    encoder(c, t, t * 2)
+            c.text(0, 218, name, 40, INK, True, anchor="mm")
+            if k == 4:
+                c.text(0, 262, "optional", 36, MUTED, False, anchor="mm")
+    caps(c, t, [(5.0, None, "No soldering. Nothing to install on the host.")])
 
 
-def s_cables(c, k):
-    device_chip(c, 100, 230, 360, 130, "Power supply", "USB-C", AMBER)
-    device_chip(c, 100, 700, 360, 130, "Host", "computer or sampler", BLUE)
-    c.box(700, 330, 1120, 760, bar=TEAL)
-    c.para(750, 350, "USB-C power / data splitter", 34, INK, 330, bold=True)
-    c.text(910, 640, "one cable in,", 28, MUTED, anchor="ma")
-    c.text(910, 676, "two ports out", 28, MUTED, anchor="ma")
-    c.pill(690, 540, "POWER", 28, AMBER)
-    c.pill(690, 678, "USB2 DATA", 28, BLUE)
-    c.pill(1130, 563, "DATA POWER", 28, TEAL)
-    device_chip(c, 1400, 330, 420, 230, "Raspberry Pi 5", "", TEAL)
-    c.para(1436, 400, "USB-C port: power in and gadget (device mode)", 28, MUTED, 360)
-    if k >= 1:
-        c.arrow([(460, 295), (560, 295), (560, 540), (590, 540)], AMBER)
-        c.arrow([(1250, 563), (1300, 563), (1300, 445), (1400, 445)], TEAL)
-    if k >= 2:
-        c.arrow([(590, 678), (560, 678), (560, 765), (470, 765)], BLUE, both=True)
-    if k >= 3:
-        device_chip(c, 1400, 700, 420, 130, "USB devices", "plug into the USB-A sockets", PURPLE)
-        c.arrow([(1610, 700), (1610, 570)], PURPLE, both=True)
-        c.para(100, 905, "Labels follow the splitter used in this project; other splitters may differ. Use data cables: charge-only cables do not work.", 28, MUTED, 1700)
+def s_install(c, t):
+    head(c, t, "Install in two commands")
+    p = e_out(seg(t, 0.3, 0.9))
+    with c.at(0, 30 * (1 - p), 1, p):
+        terminal(c, 220, 230, 1700, 800)
+    lines = [("$ git clone <repo>", "#7dd3fc"), ("$ sudo ./install.sh", "#7dd3fc"),
+             ("✓ gadget  ✓ audio daemon  ✓ ready", "#86efac"), ("$ rpiaudiod doctor".replace("rpiaudiod", "rpi-audiod"), "#7dd3fc"),
+             ("All checks passed", "#86efac")]
+    draw_term_lines(c, 270, 300, lines, t, 1.0, size=46, step=1.35)
+    caps(c, t, [(1.0, 5.5, "Copy it. Install it."), (6.0, None, "Then ask the doctor if all is well")])
 
 
-def s_install(c, k):
-    G, Y, M = "#8fe0c8", "#f4d58d", "#8aa4bd"
-    term(c, 100, 215, 1720, [
-        ("$ git clone https://github.com/trak3r-os/rpi5-audioface.git", G),
-        ("$ cd rpi5-audioface", G),
-        ("$ sudo ./install.sh", Y),
-        ("$ sudo reboot        # only if the installer enabled the USB gadget overlay", M),
-    ][:max(1, min(4, k + 2))], 36)
-    if k >= 2:
-        c.card(100, 560, 560, 910, "What it sets up", "The USB gadget and the rpi-audiod service, both started at boot. Existing settings in /etc/rpi-audio are kept.", TEAL, 36, 30)
-    if k >= 3:
-        c.card(590, 560, 1170, 910, "Update and remove", "Update: git pull && sudo ./install.sh\nRemove: sudo ./install.sh --uninstall", BLUE, 36, 30)
-        c.card(1200, 560, 1820, 910, "Optional extras", "--network adds the network audio adapters.\n--hat adds the OLED meter helper.", PURPLE, 36, 30)
+def s_connect(c, t):
+    head(c, t, "Plug in. Power on.")
+    show(c, laptop, 250, 320, t, 0.3, s=0.75)
+    show(c, psu, 250, 830, t, 0.3, s=1.1)
+    show(c, splitter, 700, 570, t, 0.7, s=0.8)
+    show(c, pi5, 1190, 570, t, 0.9, s=0.8)
+    show(c, mixer, 1700, 330, t, 5.4, s=0.6)
+    show(c, synth, 1700, 800, t, 5.7, s=0.6)
+    fade_text(c, 700, 660, "USB-C splitter", t, 1.0, 40, MUTED, False)
+    tag(c, 250, 440, "1  Host", t, 1.4, IN_D, 44)
+    host, _ = usb_cable(c, [(378, 330), (480, 330), (480, 546), (586, 546)], t, 1.8, 0.9, r=36)
+    data, _ = usb_cable(c, [(814, 570), (910, 570), (910, 618), (1025, 618)], t, 3.0, 0.8, r=24)
+    ta = seg(t, 3.4, 4.0)
+    pulses(c, host, t, IN_C, ta, rev=True, off=-12, gap=150)
+    pulses(c, host, t, OUT_C, ta, off=12, gap=150)
+    tag(c, 250, 940, "2  Power", t, 3.6, "#b7791f", 44)
+    pw, _ = usb_cable(c, [(346, 830), (480, 830), (480, 594), (586, 594)], t, 3.8, 0.9, r=36, color="#f3c77a", edge=AMBER)
+    tp = seg(t, 4.6, 5.2)
+    pulses(c, pw, t, AMBER, tp, speed=240, gap=120)
+    pulses(c, data, t, AMBER, tp, speed=240, gap=120, off=0)
+    pulses(c, data, t, IN_C, ta, rev=True, off=-12, gap=150)
+    pulses(c, data, t, OUT_C, ta, off=12, gap=150)
+    tag(c, 1700, 560, "3  Your gear", t, 5.6, PURPLE, 44)
+    for i, y in enumerate((330, 800)):
+        ys = 540 if i == 0 else 600
+        p_, _ = usb_cable(c, [(1396, ys), (1500 + 30 * i, ys), (1500 + 30 * i, y), (1600 if i == 0 else 1590, y)], t, 6.0 + 0.3 * i, 0.9, r=30, w=10)
+        tg = seg(t, 7.0, 7.6)
+        pulses(c, p_, t, IN_C, tg, rev=True, off=-10, gap=120)
+        pulses(c, p_, t, OUT_C, tg, off=10, gap=120)
+    caps(c, t, [(7.4, None, "Any USB audio or MIDI device works")], y=985)
 
 
-def s_connect(c, k):
-    steps = [("1", "Plug the splitter's data side into the host", "Directly, not through a hub.", BLUE),
-             ("2", "On the Pi, check the installation", None, TEAL),
-             ("3", "On the host, pick the interface", "Look for an audio interface and MIDI ports named rpi-audio.", PURPLE)]
-    for i, (n, t, b, col) in enumerate(steps[:k]):
-        y = 220 + i * 215
-        c.box(100, y, 1180, y + 190, bar=col)
-        c.d.ellipse([140 * S, (y + 40) * S, 220 * S, (y + 120) * S], fill=col)
-        c.text(180, y + 80, n, 44, WHITE, bold=True, anchor="mm")
-        c.text(250, y + 24, t, 36, INK, bold=True)
-        if b:
-            c.para(250, y + 82, b, 30, MUTED, 880)
+def s_slots(c, t):
+    head(c, t, "26 slots each way")
+    blocks = [("Mixer", BLUE), ("Tracker", PURPLE), ("Pedal", AMBER)]
+    sizes = {0: (2, 8, 2), 1: (2, 2, 2)}
+    x0, wslot, gap = 90, 62, 5.6
+    for row, (name, y) in enumerate((("IN", 400), ("OUT", 760))):
+        rp = e_out(seg(t, 0.3 + 0.25 * row, 0.9 + 0.25 * row))
+        with c.at(0, 0, 1, rp):
+            c.pill(190, y - 120, name, 46, IN_D if row == 0 else OUT_D, padx=30)
+            c.text(300, y - 143, "device to host" if row == 0 else "host to device", 44, MUTED, True)
+        for i in range(26):
+            c.rect(x0 + i * (wslot + gap), y - 55, x0 + i * (wslot + gap) + wslot, y + 55, "#e5ecf4", LINE, r=12, w=2)
+        pos = 0
+        for k, (dn, col) in enumerate(blocks):
+            n = sizes[row][k]
+            ts = 1.6 + k * 1.4 + row * 4.2
+            p = e_back(seg(t, ts, ts + 0.7))
+            if p > 0:
+                xa = x0 + pos * (wslot + gap)
+                xb = x0 + (pos + n) * (wslot + gap) - gap
+                with c.at((xa + xb) / 2, y, 1, clamp(p * 3)):
+                    c.rect(-(xb - xa) / 2 * min(p, 1.05), -55, (xb - xa) / 2 * min(p, 1.05), 55, col, r=12)
+                    if p >= 1:
+                        c.text(0, 0, str(n), 50, WHITE, True, anchor="mm")
+                if row == 0:
+                    label(c, (xa + xb) / 2, y + 66, dn, t, ts + 0.3, 40, col)
+            pos += n
+    caps(c, t, [(1.2, 7.4, "Every device gets its own slots"), (8.0, None, "Plug in more gear, more slots fill up")], y=930)
+
+
+def s_modes(c, t):
+    head(c, t, "Pick a mode")
+    cards = [("Host clock", "The host sets the pace", laptop, 0.75), ("Hub", "The Pi mixes it all", pi5, 0.72),
+             ("Standalone DAC", "A plain USB sound card", speaker, 1.5)]
+    for i, (title, sub, fn, sc) in enumerate(cards):
+        x = 335 + i * 625
+        p = e_back(seg(t, 0.5 + 0.8 * i, 1.2 + 0.8 * i))
+        if p <= 0:
+            continue
+        hi = seg(t, 4.0 + 1.6 * i, 4.4 + 1.6 * i) * (1 - seg(t, 5.4 + 1.6 * i, 5.8 + 1.6 * i)) if i < 2 else seg(t, 7.2, 7.6)
+        with c.at(x, 520 + 40 * (1 - clamp(p)), 1 + 0.03 * hi, clamp(p * 3)):
+            c.card(-285, -250, 285, 290, edge=mix(TEAL, LINE, hi) if hi > 0 else LINE)
+            with c.at(0, -70, sc):
+                fn(c, t)
+            if i == 0:
+                c.circle(160, -170, 36, WHITE, MUTED, w=5)
+                c.line([(160, -170), (160, -194)], MUTED, 5)
+                c.line([(160, -170), (180, -162)], MUTED, 5)
+            c.text(0, 130, title, 54, INK, True, anchor="mm")
+            c.text(0, 205, sub, 40, MUTED, False, anchor="mm")
+    caps(c, t, [(8.4, None, "Change it any time from the OLED")], y=930)
+
+
+def s_oled(c, t):
+    head(c, t, "Turn. Press. Done.")
+    imgs = [crop_oled("04-overview.png", 1), crop_oled("05-connections.png", 1), crop_oled("08-routes.png", 0)]
+    k = min(int(clamp(t - 1.0, 0, 8) // 2.6), 2)
+    zoom = 1.0 + 0.05 * seg(t, 1.0, 9.0)
+    p = e_back(seg(t, 0.3, 1.0))
+    with c.at(600, 520, 1.15 * zoom * max(0.1, p), clamp(p * 3)):
+        c.rect(-350, -200, 350, 200, "#1b2a3a", "#0d1620", r=26, w=4)
+        c.rect(-324, -164, 324, 164, "#02090d")
+        fr = (t - 1.0) % 2.6
+        for j in (k, k - 1):
+            if j < 0:
+                continue
+            a = e_io(seg(fr, 0, 0.3)) if j == k else 1 - e_io(seg(fr, 0, 0.3))
+            if k == 0:
+                a = 1.0
+            with c.at(0, 0, 1, a):
+                c.pic(imgs[j], -320, -160, 640)
+    p2 = show(c, encoder, 1530, 440, t, 1.0, s=1.5, ang=t * 2.2)
+    if p2 >= 1:
+        a = 0.5 + 0.5 * math.sin(t * 2.2)
+        c.text(1530, 300, "↻", 90, mix(TEAL, c.bg, 0.4 + 0.5 * a), True, anchor="mm")
+    tag(c, 1530, 670, "turn to move", t, 2.0, IN_D, 44)
+    tag(c, 1530, 770, "press to choose", t, 3.0, PURPLE, 44)
+    for tt in (3.4, 5.2, 7.0):
+        ring(c, 1530, 440, 80, t, tt, PURPLE, 0.8)
+    caps(c, t, [(1.0, None, "No keyboard or screen needed")])
+
+
+def lane(c, y, name, t, t0):
+    p = e_out(seg(t, t0, t0 + 0.6))
+    with c.at(0, 0, 1, p):
+        c.rect(140, y - 100, 1800, y + 100, "#c9d4e1", r=26)
+        for x in range(180, 1780, 90):
+            c.rect(x, y - 3, x + 46, y + 3, "#f4f7fb", r=3)
+        c.text(140, y - 150, name, 44, INK, True)
+
+
+def car(c, x, y, w, name, col, h=140):
+    with c.at(x, y):
+        c.rect(0, -h / 2, w, h / 2, col, r=30)
+        c.circle(54, h / 2, 22, "#1b2733")
+        c.circle(w - 54, h / 2, 22, "#1b2733")
+        c.text(w / 2, -4, name, 48, WHITE, True, anchor="mm")
+
+
+def s_lanes(c, t):
+    head(c, t, "USB has two lanes")
+    fade_text(c, 960, 160, "The Pi 5 has two USB controllers", t, 0.5, 42, MUTED, False)
+    lane(c, 400, "Lane A", t, 0.3)
+    lane(c, 740, "Lane B", t, 0.5)
+    # tracker (big) parks at the right end of lane B
+    ptk = e_out(seg(t, 1.2, 2.6))
+    car(c, lerp(-1250, 640, ptk), 740, 1150, "Tracker", PURPLE)
+    # mixer: too long for what is left of lane B, so it overhangs; then it takes lane A
+    if t >= 3.4:
+        if t < 7.0:
+            x, y = lerp(-620, 80, e_out(seg(t, 3.4, 4.6))), 740
+            bad = t > 4.6
         else:
-            c.text(250, y + 84, "rpi-audiod doctor", 32, TEAL, mono=True, bold=True)
-            c.text(250, y + 130, "rpi-audiod status", 32, TEAL, mono=True, bold=True)
-    if k >= 2:
-        c.card(1230, 220, 1820, 410, "doctor", "One line per check: controller, services, governor, power.", TEAL, 34, 28)
-        c.card(1230, 435, 1820, 640, "status", "The gadget, connected devices, channel blocks, levels, names and presets.", TEAL, 34, 28)
-    if k >= 3:
-        c.box(100, 880, 1820, 975, fill="#eaf1f8", outline="#eaf1f8", r=18)
-        c.text(130, 927, "Tested: a Linux laptop and an Akai Force (example host; notes in docs/hosts/). macOS and Windows: not tested.", 28, INK, anchor="lm")
+            pq = e_io(seg(t, 7.0, 8.2))
+            x, y = lerp(80, 120, pq) + 1000 * e_io(seg(t, 8.0, 9.4)), lerp(740, 400, pq)
+            bad = False
+        car(c, x, y, 560, "Mixer", RED if bad else BLUE)
+    if 4.6 < t < 7.2:
+        with c.at(380, 640, max(0.02, e_back(seg(t, 4.6, 5.1)))):
+            c.pill(0, 0, "Full!", 60, fill=RED)
+    if t > 9.4:
+        with c.at(700, 400, max(0.02, e_back(seg(t, 9.4, 10.0)))):
+            c.pill(0, 0, "Fits ✓", 60, fill=GREEN)
+    caps(c, t, [(0.9, 3.4, "Full-speed devices share a lane"), (5.0, 7.2, "This one is too big for lane B"),
+                (7.6, None, "Plug it into the other lane. Done.")], y=900)
 
 
-def strip(c, y, label, blocks, color_of):
-    x0, cw = 160, 61
-    c.text(100, y - 52, label, 30, INK, bold=True)
-    for n in range(26):
-        x = x0 + n * cw
-        col = next((color for a, b, color, _ in blocks if a <= n + 1 <= b), None)
-        c.box(x, y, x + cw - 4, y + 64, fill=col or "#e6edf5", outline=col or "#d5dfea", r=8, w=1)
-        c.text(x + cw / 2 - 2, y + 32, str(n + 1), 24, WHITE if col else "#8aa0b5", bold=True, anchor="mm")
-    for a, b, col, name in blocks:
-        mid = x0 + ((a - 1) + b) / 2 * cw - 2
-        c.text(mid, y + 74, name, 26, col, bold=True, anchor="ma")
+def s_check(c, t):
+    head(c, t, "The OLED shows each lane")
+    a, b = render_usb_ports(3), render_usb_ports(1)
+    p = e_back(seg(t, 0.3, 1.0))
+    zoom = 1.0 + 0.06 * seg(t, 1.0, 7.0)
+    sw = e_io(seg(t, 3.4, 4.0))
+    with c.at(960, 520, 1.45 * zoom * max(0.1, p), clamp(p * 3)):
+        c.rect(-350, -200, 350, 200, "#1b2a3a", "#0d1620", r=26, w=4)
+        c.rect(-324, -164, 324, 164, "#02090d")
+        c.pic(a, -320, -160, 640)
+        with c.at(0, 0, 1, sw):
+            c.pic(b, -320, -160, 640)
+    if t < 3.7:
+        tag(c, 960, 905, "Lane B is full", t, 1.0, RED, 48)
+    else:
+        tag(c, 960, 905, "Moved to lane A: all fits", t, 4.0, GREEN, 48)
 
 
-def s_slots(c, k):
-    blocks_in = [(1, 2, TEAL, "Mixer"), (3, 8, BLUE, "Guitar processor"), (9, 10, PURPLE, "Synth")]
-    blocks_out = [(3, 4, TEAL, "Mixer"), (5, 8, BLUE, "Guitar processor")]
-    strip(c, 290, "IN: Pi to host (26 channels)", blocks_in, None)
-    strip(c, 480, "OUT: host to Pi (26 channels)", blocks_out, None)
-    c.text(1820, 215, "example assignment", 26, MUTED, anchor="ra")
-    if k >= 2:
-        c.card(100, 640, 940, 920, "Sticky slots", "Each device keeps its block. Unplug it, reboot the Pi, plug it back: it gets the same channels, so your host project keeps working.", TEAL, 36, 30)
-    if k >= 3:
-        c.card(980, 640, 1820, 920, "MIDI gets cables", "Each MIDI port of a device gets its own gadget cable. Cable 1 is reserved as the control port. Cables are not MIDI channels.", PURPLE, 36, 30)
+def s_midi(c, t):
+    head(c, t, "MIDI comes along")
+    show(c, laptop, 300, 520, t, 0.3, s=1.0)
+    show(c, pi5, 960, 560, t, 0.7, s=0.95)
+    show(c, midi_keys, 1560, 340, t, 1.2, s=0.8)
+    show(c, synth, 1560, 700, t, 1.5, s=0.75)
+    cols = [CTRL_C, MIDI_C, MIDI_C, MIDI_C]
+    pa = []
+    for i in range(4):
+        y = 510 + i * 34
+        pth, _ = usb_cable(c, [(500, y), (764, y)], t, 1.6 + 0.15 * i, 0.6, r=0, color=mix(cols[i], PAPER, 0.8), edge=cols[i], w=8)
+        pa.append(pth)
+        with c.at(0, 0, 1, seg(t, 2.2, 2.7)):
+            c.text(540, y + 2, str(i + 1), 28, cols[i], True, anchor="mm")
+    ta = seg(t, 3.0, 3.6)
+    pulses(c, pa[0], t, CTRL_C, ta, r=9, gap=120, rev=True)
+    pulses(c, pa[0], t, CTRL_C, ta, r=9, gap=120, off=0)
+    pulses(c, pa[1], t, MIDI_C, ta, r=9, gap=120, rev=True)
+    pulses(c, pa[2], t, MIDI_C, ta, r=9, gap=120)
+    a, _ = usb_cable(c, [(1130, 520), (1300, 520), (1300, 340), (1415, 340)], t, 2.0, 0.8, r=34)
+    b, _ = usb_cable(c, [(1130, 580), (1340, 580), (1340, 700), (1440, 700)], t, 2.2, 0.8, r=34)
+    pulses(c, a, t, MIDI_C, ta, rev=True, gap=150)
+    pulses(c, b, t, MIDI_C, ta, gap=150)
+    with c.at(0, 0, 1, seg(t, 3.4, 4.0)):
+        c.pill(520, 740, "1  control", 40, "#a8641a", padx=22)
+        c.pill(520, 820, "2-4  notes", 40, PURPLE, padx=22)
+    caps(c, t, [(1.0, 4.0, "4 MIDI cables inside the same USB cable"), (4.6, None, "Cable 1 is for controlling the Pi")])
 
 
-def s_modes(c, k):
-    modes = [("USB host clock", "Original mode", "The Pi follows the host's sample clock. Each device gets sticky channels automatically.", BLUE),
-             ("Hub", "DAC + USB + network", "The pHAT DAC runs a steady 48 kHz engine. You choose explicit routes, and the Pi keeps working with the host unplugged.", TEAL),
-             ("Standalone DAC", "No host at all", "Route USB devices to each other and to the local DAC, without the USB audio bridge.", PURPLE)]
-    for i, (t, sub, b, col) in enumerate(modes[:k]):
-        x = 100 + i * 590
-        c.box(x, 230, x + 550, 690, bar=col)
-        c.text(x + 36, 256, t, 42, INK, bold=True)
-        c.text(x + 36, 316, sub, 30, col, bold=True)
-        c.para(x + 36, 380, b, 32, MUTED, 480)
-    if k >= 3:
-        c.text(100, 770, "Choose it in the OLED menu: Outputs > Audio mode. The Pi asks first, because audio pauses.", 32, INK)
-        c.text(100, 826, "Network outputs (RTP/PCM, Link Audio) are send-only and start disabled.", 28, MUTED)
+def s_scenes(c, t):
+    head(c, t, "Save a setup. Recall it.")
+    cur = int(clamp(t - 1.8, 0, 99) // 1.1) % 8 if t > 1.8 else -1
+    names = ["Live", "Studio", "", "", "", "", "", ""]
+    for i in range(8):
+        col, row = i % 4, i // 4
+        x, y = 90 + col * 250, 330 + row * 250
+        p = e_back(seg(t, 0.4 + 0.12 * i, 0.9 + 0.12 * i))
+        if p <= 0:
+            continue
+        hi = 1.0 if cur == i else 0.0
+        with c.at(x + 110, y + 100, max(0.02, p) * (1 + 0.07 * hi), clamp(p * 3)):
+            c.card(-110, -100, 110, 100, fill=TEAL if hi else WHITE, edge=TEAL if hi else LINE, r=24)
+            c.text(0, -14 if names[i] else 0, str(i + 1), 84, WHITE if hi else TEAL, True, anchor="mm")
+            if names[i]:
+                c.text(0, 62, names[i], 40, WHITE if hi else INK, True, anchor="mm")
+    p = e_back(seg(t, 1.2, 1.9))
+    with c.at(1450, 500, 1.0, clamp(p * 3)):
+        c.pic(crop_oled("10-presets.png", 0), -320, -160, 640, border="#0d1620", r=10, bw=8)
+        c.text(0, 200, "on the OLED", 42, MUTED, True, anchor="ma")
+        if t > 6.0:
+            c.text(0, 262, "or from your host", 42, MUTED, True, anchor="ma")
+    caps(c, t, [(1.4, None, "8 setups, one tap each")])
 
 
-def s_hub(c, k):
-    srcs = ["Mixer", "Guitar processor", "Synth", "USB host"]
-    dsts = [("pHAT DAC", "listen locally"), ("USB host", "record over the cable"), ("Network RTP", "stereo send"), ("Link Audio", "stereo send")]
-    for i, s in enumerate(srcs):
-        c.box(100, 210 + i * 76, 460, 276 + i * 76, bar=TEAL)
-        c.text(140, 243 + i * 76, s, 30, INK, bold=True, anchor="lm")
-    c.box(640, 330, 960, 456, fill="#eaf6f4", outline=TEAL, w=3)
-    c.text(800, 372, "Routes", 38, TEAL, bold=True, anchor="mm")
-    c.text(800, 418, "source > destination", 26, MUTED, anchor="mm")
-    c.arrow([(470, 393), (630, 393)], TEAL)
-    for i, (d, sub) in enumerate(dsts):
-        y = 210 + i * 76
-        c.box(1160, y, 1560, y + 66, bar=BLUE)
-        c.text(1200, y + 33, d, 30, INK, bold=True, anchor="lm")
-        c.arrow([(970, 393), (1010, 393), (1010, y + 33), (1150, y + 33)], BLUE, w=5)
-    c.para(1600, 260, "Several sources can feed one destination (they add up). One source can feed several. A device is never routed to itself.", 28, MUTED, 220, gap=1.3)
-    if k >= 2:
-        c.text(100, 535, "On the OLED: Send audio", 36, INK, bold=True)
-        c.text(100, 595, "1. Choose the source", 30, TEAL, bold=True)
-        c.oled(crop_oled("08-routes.png", 0), 100, 640, 560)
-        c.text(740, 595, "2. Tick the destinations", 30, TEAL, bold=True)
-        c.oled(crop_oled("08-routes.png", 1), 740, 640, 560)
-        c.para(1360, 640, "A route waits, marked [~], until its device is present. Mute or change levels per device under Levels & mute.", 30, MUTED, 450)
+def s_doctor(c, t):
+    head(c, t, "Something odd? Ask the doctor")
+    p = e_out(seg(t, 0.3, 0.9))
+    with c.at(0, 30 * (1 - p), 1, p):
+        terminal(c, 220, 240, 1700, 800)
+    lines = [("$ rpi-audiod doctor", "#7dd3fc"), ("✓ USB gadget is up", "#86efac"), ("✓ host is connected", "#86efac"),
+             ("✓ 3 devices running", "#86efac"), ("! USB lane B is full", "#fbbf24")]
+    draw_term_lines(c, 270, 310, lines, t, 1.0, size=46, step=1.0)
+    caps(c, t, [(1.0, None, "It tells you what is wrong, and why")])
 
 
-def s_menu(c, k):
-    for i, (t, sub, col, x) in enumerate((("Turn + push", "move, select", TEAL, 250), ("CONFIRM", "same as push", BLUE, 540), ("BACK", "return or cancel", BLUE, 830))):
-        r = 70 if i == 0 else 50
-        c.d.ellipse([(x - r) * S, (300 - r) * S, (x + r) * S, (300 + r) * S], fill=WHITE, outline=col, width=8 * S)
-    if k >= 1:
-        for t, sub, x in (("Turn + push", "move, select", 250), ("CONFIRM", "same as push", 540), ("BACK", "return or cancel", 830)):
-            c.text(x, 392, t, 30, INK, bold=True, anchor="ma")
-            c.text(x, 432, sub, 26, MUTED, anchor="ma")
-    if k >= 2:
-        c.box(100, 500, 1000, 960, bar=TEAL)
-        items = [("Send audio", "route sources to destinations"), ("Outputs", "pHAT, USB host, network; Audio mode"),
-                 ("Levels & mute", "per device"), ("MIDI", "route between devices"), ("Scenes", "8 slots: load and save"),
-                 ("Connections", "host, Wi-Fi, devices and channels"), ("Status", "meters, buffers, events, USB ports"),
-                 ("Settings", "sleep, saver, brightness, flip")]
-        for i, (a, b) in enumerate(items):
-            y = 525 + i * 52
-            c.text(140, y, a, 29, TEAL if a == "Status" else INK, bold=True)
-            c.text(400, y, b, 28, MUTED)
-    if k >= 3:
-        c.text(1180, 200, "Overview, with live meters", 28, MUTED)
-        c.oled(crop_oled("04-overview.png", 1), 1180, 240, 640)
-        c.text(1180, 590, "Connections", 28, MUTED)
-        c.oled(crop_oled("05-connections.png", 1), 1180, 630, 640)
+def s_section(c, t):
+    notes(c, t, 6, (120, 1800), 1000, 100, size=56)
+    fade_text(c, 960, 120, "EXAMPLE HOST", t, 0.2, 52, "#7dd3fc")
+    p = e_back(seg(t, 0.3, 1.0))
+    with c.at(960, 190, p, clamp(p * 3)):
+        c.text(0, 0, "Akai Force", 140, WHITE, True, anchor="ma")
+    show(c, force, 960, 640, t, 0.8, s=1.25, bob=6, dur=0.9)
+    fade_text(c, 960, 930, "How one real host uses rpi5-audioface", t, 1.8, 54, "#c3d3e6", False)
 
 
-def s_usbports(c, k):
-    c.text(100, 200, "Before: bus 3 is over budget", 30, RED, bold=True)
-    c.oled(render_usb_ports(3), 100, 245, 560)
-    if k >= 2:
-        c.text(100, 600, "After: mixer moved to bus 1", 30, TEAL, bold=True)
-        c.oled(render_usb_ports(1), 100, 645, 560)
-    tick_bullets(c, 760, 215, [
-        ("Bus 1  FS 388/1099", "Full-speed bytes per USB frame in use, against the budget of that controller."),
-        ("p2 Mixer 12M", "The port, the device and its speed. 480M and 5G devices cost nothing."),
-        ("! after a bus", "That bus is at or over its budget."),
-        ("! after a port", "That device was refused: not enough bandwidth."),
-    ][:2 if k == 1 else 4], 34, 1060, TEAL, 22)
-    if k >= 2:
-        c.text(760, 780, "Press a device for the reason, bus, port and its own load.", 30, INK, bold=True)
-        c.text(760, 830, "Menu: Status > USB ports", 30, TEAL, bold=True)
+def s_force_host(c, t):
+    head(c, t, "The Force sees a sound card")
+    show(c, force, 440, 580, t, 0.3, s=0.85, bob=0)
+    show(c, pi5, 1110, 580, t, 0.8, s=0.8)
+    show(c, mixer, 1640, 350, t, 1.8, s=0.55)
+    show(c, pedal, 1640, 560, t, 2.0, s=0.42)
+    show(c, synth, 1640, 800, t, 2.2, s=0.5)
+    host, _ = usb_cable(c, [(670, 628), (945, 628)], t, 1.2, 0.7)
+    tag(c, 810, 520, "USB", t, 1.8, "#374357", 44)
+    ta = seg(t, 3.0, 3.8)
+    pulses(c, host, t, IN_C, ta, rev=True, off=-13, gap=140)
+    pulses(c, host, t, OUT_C, ta, off=13, gap=140)
+    for i, y in enumerate((350, 560, 800)):
+        pth, _ = usb_cable(c, [(1276, 560 + (-20 + 20 * i)), (1390, 560 + (-20 + 20 * i)), (1390, y), (1500, y)], t, 2.4 + 0.2 * i, 0.7, r=28, w=10)
+        pulses(c, pth, t, IN_C, ta, rev=True, off=-12, gap=140)
+        pulses(c, pth, t, OUT_C, ta, off=12, gap=140)
+    caps(c, t, [(1.0, 5.0, "A 26-in, 26-out USB audio interface"), (5.6, None, "The first host we tested")])
 
 
-def s_usbtips(c, k):
-    c.text(100, 190, "Two USB controllers, two budgets", 36, INK, bold=True)
-    x0, wd = 100, 840
-    c.text(x0, 250, "Crowded", 32, RED, bold=True)
-    bus_row(c, x0, 300, wd, "1", 0, 0, 1099, "Guitar processor 480M: free", False)
-    bus_row(c, x0, 490, wd, "3", 1099, 1291, 1099, "Tracker 903 B + mixer 196 B; mixer playback refused", True)
-    if k >= 2:
-        x1 = 980
-        c.text(x1, 250, "Spread out", 32, TEAL, bold=True)
-        bus_row(c, x1, 300, wd, "1", 388, 388, 1099, "Guitar processor 480M: free; mixer 388 B")
-        bus_row(c, x1, 490, wd, "3", 903, 903, 1099, "Tracker 903 B")
-    if k >= 3:
-        tick_bullets(c, 100, 720, [
-            ("Spread full-speed devices", "Move one to a USB port of the other controller."),
-            ("High-speed costs nothing", "Most modern interfaces are high-speed."),
-        ], 32, 820, TEAL, 10)
-        tick_bullets(c, 980, 720, [
-            ("rpi-audiod checks first", "It sizes each full-speed device before opening it and says why one waits."),
-            ("Serial-less devices", "Identified by port; one unique device moved to another port keeps its routes."),
-        ], 32, 840, BLUE, 10)
-        c.text(100, 992, "Budget measured on a Pi 4 (1099 B/frame); the Pi 5 value is not measured yet.", 22, MUTED)
+def s_force_panel(c, t):
+    head(c, t, "The Panel: control it from MPC")
+    shot = load(IMG / "panel-on-force.png")
+    regions = [(0, 0, 1280, 800), (300, 90, 1100, 590), (20, 205, 660, 605), (230, 340, 590, 565), (0, 0, 1280, 800)]
+    times = [0.0, 2.8, 5.6, 8.4, 11.2]
+    k = max(i for i, tt in enumerate(times) if t >= tt - 0.001) if t < times[-1] else len(times) - 1
+    if k >= len(times) - 1:
+        box = regions[-1]
+    else:
+        u = e_io(seg(t, times[k] + 0.2, times[k] + 1.2))
+        a0, a1 = regions[k], regions[k + 1]
+        box = tuple(lerp(x, y, u) for x, y in zip(a0, a1))
+        box = tuple(a0 if t < 0 else box)
+    p = e_out(seg(t, 0.2, 0.9))
+    box = tuple(round(v) for v in box)
+    # keep the crop inside the image and 16:10
+    with c.at(0, 24 * (1 - p), 1, p):
+        c.pic(shot, 80, 240, 1130, src=box, border=LINE, r=10, bw=6)
+    items = [(2.8, "Presets", PURPLE), (5.6, "Devices", BLUE), (8.4, "Faders and mutes", TEAL)]
+    for ts, s, col in items:
+        pr = e_back(seg(t, ts, ts + 0.6))
+        if pr > 0:
+            with c.at(1250, 330 + items.index((ts, s, col)) * 110, max(0.02, pr), clamp(pr * 3)):
+                c.circle(26, 0, 22, col)
+                c.text(70, 0, s, 50, INK, True, anchor="lm")
+    pn = e_back(seg(t, 10.0, 10.8))
+    if pn > 0:
+        with c.at(1250, 610, 1, clamp(pn * 3)):
+            with c.at(0, 0, max(0.02, pn)):
+                c.pic(load(IMG / "panel-name-picker.png"), 0, 0, 480, border=LINE, r=10, bw=5)
+    caps(c, t, [(0.8, None, "A plugin that runs on the Force screen")], y=985, size=46)
 
 
-def s_midi(c, k):
-    c.text(100, 200, "Host side", 28, MUTED)
-    c.text(1820, 200, "Pi side", 28, MUTED, anchor="ra")
-    lanes = [("Cable 1", "control port > rpi-audiod", AMBER), ("Cable 2", "Guitar processor MIDI", TEAL), ("Cable 3", "Synth / tracker MIDI", PURPLE), ("Cable 4", "MIDI keyboard", BLUE)]
-    for i, (t, sub, col) in enumerate(lanes):
-        y = 245 + i * 108
-        c.box(1010, y, 1820, y + 90, bar=col)
-        c.text(1048, y + 45, t, 30, INK, bold=True, anchor="lm")
-        c.text(1200, y + 45, sub, 28, MUTED, anchor="lm")
-        c.arrow([(700, y + 45), (1000, y + 45)], col, w=5, both=True)
-    c.box(100, 245, 600, 645, bar=BLUE)
-    c.text(146, 270, "Host", 40, INK, bold=True)
-    c.para(146, 335, "Any host with USB MIDI. On Linux: tools/midictl.py status", 28, MUTED, 420)
-    if k >= 2:
-        for i, (t, b, col, x) in enumerate((("SysEx text", "ping, status, mute, volume, name, preset, route", TEAL, 100),
-                                            ("CC messages", "ch 16 and 15: level CC 32+N, mute CC 64+N", BLUE, 700),
-                                            ("Program Change", "0 to 7 on ch 16 loads presets 1 to 8", PURPLE, 1300))):
-            c.card(x, 700, x + 520, 920, t, b, col, 34, 28)
-    if k >= 3:
-        c.text(100, 960, "Devices can also be joined to each other with no host: midiroute joins their MIDI ports in the kernel.", 28, MUTED)
+def s_force_io(c, t):
+    head(c, t, "Get the Force's own jacks back")
+    on = seg(t, 6.0, 6.6)
+    show(c, force, 540, 520, t, 0.3, s=0.95, jacks=None)
+    # redraw jacks on top, grey then teal (state changes with time)
+    with c.at(540, 520, 0.95):
+        for x in FORCE_OUT_X + (FORCE_HP_X,):
+            c.circle(x, 170, 13, mix(TEAL, "#3b4350", on), "#07090c", w=2)
+        for x in FORCE_IN_X:
+            c.circle(x, -170, 13, mix(IN_C, "#3b4350", on), "#07090c", w=2)
+    show(c, pi5, 1450, 520, t, 0.8, s=0.8)
+    host, _ = usb_cable(c, [(810, 560), (1244, 568)], t, 1.4, 0.8, r=0)
+    pulses(c, host, t, OUT_C, seg(t, 2.4, 3.0), off=12, gap=150)
+    pulses(c, host, t, IN_C, seg(t, 2.4, 3.0), rev=True, off=-12, gap=150)
+    for i, x in enumerate((420, 700)):
+        show(c, speaker, x, 860, t, 5.6 + 0.2 * i, s=0.55, play=on)
+    if on > 0:
+        for i, x in enumerate((FORCE_OUT_X[0], FORCE_OUT_X[2])):
+            xx = 540 + x * 0.95
+            pth = Path([(xx, 520 + 170 * 0.95 + 14), (xx, 780)], None)
+            pulses(c, pth, t, OUT_C, on, speed=200, gap=60, r=7)
+    if t < 5.6:
+        tag(c, 960, 250, "MPC uses the Pi: Force jacks are off", t, 3.4, "#7a8798", 44)
+    else:
+        tag(c, 960, 250, "Outputs add-on: jacks are back", t, 6.2, IN_D, 44)
+    ring(c, 540, 520 + 170 * 0.95, 80, t, 6.2, TEAL, 1.0)
+    caps(c, t, [(0.8, 5.4, "While MPC plays through the Pi, the Force jacks go silent"),
+                (6.4, 10.4, "A small add-on brings them back, as well"),
+                (11.0, None, "A separate project. Installed on its own.")], size=44, y=968)
 
 
-def s_scenes(c, k):
-    c.text(100, 200, "Names, levels, mutes", 28, TEAL, bold=True)
-    c.oled(crop_oled("09-levels-midi.png", 0), 100, 250, 540)
-    c.text(690, 200, "Scenes: 8 slots", 28, TEAL, bold=True)
-    c.oled(crop_oled("10-presets.png", 0), 690, 250, 540)
-    c.text(1280, 200, "Confirm before saving", 28, TEAL, bold=True)
-    c.oled(crop_oled("10-presets.png", 1), 1280, 250, 540)
-    c.para(100, 560, "A scene stores routing, channel assignments, MIDI cables, mutes, levels, output switches and names.", 32, INK, 1700, bold=True)
-    if k >= 2:
-        term(c, 100, 680, 1000, [("rpi-audiod name IDENTITY Guitar", "#8fe0c8"), ("rpi-audiod volume IDENTITY out 80", "#8fe0c8"),
-                                 ("rpi-audiod mute IDENTITY in on", "#8fe0c8"), ("rpi-audiod preset save 1 Live", "#f4d58d")], 30)
-        c.para(1160, 690, "The same actions work from the OLED, the command line, or the host over MIDI (Program Change 0 to 7 loads a scene).", 30, MUTED, 650)
+def s_force_pick(c, t):
+    head(c, t, "Pick what you need")
+    cards = [("The Force as host", "needs only rpi5-audioface", force, 0.3, IN_D),
+             ("The Panel", "optional MPC plugin", None, 0.34, PURPLE),
+             ("Outputs add-on", "optional, installed on its own", None, 0.3, OUT_D)]
+    for i, (title, sub, fn, sc, col) in enumerate(cards):
+        x = 340 + i * 620
+        p = e_back(seg(t, 0.5 + 0.9 * i, 1.2 + 0.9 * i))
+        if p <= 0:
+            continue
+        with c.at(x, 560 + 40 * (1 - clamp(p)), 1, clamp(p * 3)):
+            c.card(-280, -250, 280, 290)
+            with c.at(0, -90, 1):
+                if i == 0:
+                    with c.at(0, 0, 0.42):
+                        force(c, t)
+                elif i == 1:
+                    c.pic(load(IMG / "panel-on-force.png"), -190, -110, 380, border=LINE, r=6, bw=3)
+                else:
+                    with c.at(0, 0, 0.42):
+                        force(c, t, jacks=1)
+            c.text(0, 90, title, 50, INK, True, anchor="mm")
+            c.text(0, 160, sub, 36, MUTED, False, anchor="mm")
+            pill = seg(t, 1.6 + 0.9 * i, 2.1 + 0.9 * i)
+            if pill > 0:
+                with c.at(0, 232, max(0.02, e_back(pill))):
+                    c.pill(0, 0, "✓  works alone" if i else "✓  start here", 36, col)
+    caps(c, t, [(4.6, None, "None of these depend on each other")], y=925)
 
 
-def s_end(c, k):
-    c.box(0, 0, 36, H, fill=TEAL, outline=TEAL, r=0)
-    c.text(140, 150, "Where to read more", 80, WHITE, bold=True)
-    docs = [("README.md", "overview, install, hardware, USB budget"), ("docs/MANUAL.md", "illustrated user guide and build guide"),
-            ("docs/MIDI.md", "control protocol: SysEx, CC, Program Change"), ("docs/DISPLAY.md", "the OLED and encoder, screen by screen"),
-            ("docs/hosts/", "notes for specific hosts")]
-    for i, (a, b) in enumerate(docs):
-        y = 310 + i * 90
-        c.text(140, y, a, 40, "#7fd1c7", bold=True, mono=True)
-        c.text(640, y + 3, b, 36, "#dbe8f2")
-    c.text(140, 810, "Something wrong? Run:  rpi-audiod doctor", 38, "#f4d58d")
-    c.text(140, 900, REPO_URL, 44, WHITE, bold=True)
-    c.text(140, 965, "Open source, GPL-3.0-or-later", 32, "#8fb0c8")
+def s_end(c, t):
+    notes(c, t, 4, (60, 400), 1000, 100, size=56)
+    notes(c, t, 4, (1520, 1860), 1000, 100, size=56)
+    p = e_back(seg(t, 0.1, 0.8))
+    with c.at(960, 170, p, clamp(p * 3)):
+        c.text(0, 0, "rpi5-audioface", 120, WHITE, True, anchor="ma")
+    show(c, pi5, 960, 560, t, 0.5, s=1.2, bob=6)
+    fade_text(c, 960, 800, "github.com/trak3r-os/rpi5-audioface", t, 1.3, 56, "#7dd3fc", True)
+    fade_text(c, 960, 890, "Free software · GPL-3.0-or-later", t, 2.0, 46, "#c3d3e6", False)
 
 
-# (kicker, title, step durations in seconds, drawing function, dark background)
-SLIDES = [
-    (None, None, [3.2, 4.8], s_title, True),
-    ("What it is", "One USB interface, many devices", [3.0, 3.0, 3.0, 3.4], s_what, False),
-    ("Signal flow", "Host, Pi, devices", [4.0, 3.5, 3.5], s_flow, False),
-    ("Hardware", "What you need", [4.5, 5.0], s_hardware, False),
-    ("Cabling", "Power, data and devices", [3.5, 3.5, 4.5], s_cables, False),
-    ("Install", "Two commands on the Pi", [3.8, 3.8, 5.0], s_install, False),
-    ("Connect a host", "Plug in, check, select", [3.6, 3.6, 4.6], s_connect, False),
-    ("Channels and slots", "Every device gets its own block", [4.4, 4.4, 4.2], s_slots, False),
-    ("Audio modes", "Pick how the Pi routes audio", [3.5, 3.5, 4.5], s_modes, False),
-    ("Hub routes", "Explicit routes, source to destination", [4.5, 6.0], s_hub, False),
-    ("The OLED menu", "Turn, push, back", [3.0, 4.0, 4.5], s_menu, False),
-    ("Status > USB ports", "See which bus each device is on", [5.0, 6.5], s_usbports, False),
-    ("USB tips", "Spread full-speed devices across controllers", [4.0, 4.0, 6.0], s_usbtips, False),
-    ("MIDI control", "Control the Pi from the host", [3.8, 4.4, 3.8], s_midi, False),
-    ("Scenes and levels", "Name it, balance it, save it", [4.5, 5.5], s_scenes, False),
-    (None, None, [7.0], s_end, True),
-]
+DARK = {s_section, s_end}
+SCENES = [(s_title, 7), (s_one, 11), (s_inout, 9), (s_parts, 9), (s_install, 10), (s_connect, 10), (s_slots, 11),
+          (s_modes, 11), (s_oled, 10), (s_lanes, 13), (s_check, 7), (s_midi, 10), (s_scenes, 9), (s_doctor, 7),
+          (s_section, 5), (s_force_host, 10), (s_force_panel, 13), (s_force_io, 14), (s_force_pick, 8), (s_end, 7)]
+TOTAL = sum(d for _, d in SCENES)
+STARTS = [sum(d for _, d in SCENES[:i]) for i in range(len(SCENES))]
 
 
-def render_stages(outdir):
-    """Draw every reveal step of every slide to PNG; returns [(path, seconds, fade_after)]."""
-    outdir.mkdir(parents=True, exist_ok=True)
-    clips = []
-    n = len(SLIDES)
-    for i, (kicker, title, durs, fn, dark) in enumerate(SLIDES):
-        for k, dur in enumerate(durs, 1):
-            c = Cv(NIGHT if dark else PAPER)
-            if not dark:
-                c.text(100, 52, kicker.upper(), 28, TEAL, bold=True)
-                c.text(100, 88, title, 60, INK, bold=True)
-                c.text(100, 1034, f"rpi5-audioface   ·   {REPO_URL}", 24, MUTED)
-                c.text(1820, 1034, f"{i + 1} / {n}", 24, MUTED, anchor="ra")
-                c.box(0, 1074, W * (i + 1) / n, 1080, fill=TEAL, outline=TEAL, r=0)
-            fn(c, k)
-            path = outdir / f"slide{i + 1:02d}-{k}.png"
-            c.done().save(path)
-            last_step = k == len(durs)
-            fade = 0.0 if (i == n - 1 and last_step) else (SLIDE_FADE if last_step else STAGE_FADE)
-            clips.append((path, dur * SPEED, fade))
-    return clips
+def scene_frame(i, t):
+    fn = SCENES[i][0]
+    c = Cv(NIGHT if fn in DARK else PAPER)
+    fn(c, t)
+    return c.done()
 
 
-def encode(clips, music_wav, out_mp4):
-    """Chain the stills with xfade crossfades, then mux the AAC music bed."""
-    cmd = ["ffmpeg", "-y", "-loglevel", "error"]
-    for path, dur, fade in clips:
-        cmd += ["-loop", "1", "-framerate", str(FPS), "-t", f"{dur + fade:.3f}", "-i", str(path)]
-    cmd += ["-i", str(music_wav)]
-    parts = [f"[{i}:v]format=yuv420p,setsar=1[v{i}]" for i in range(len(clips))]
-    label, elapsed = "v0", 0.0
-    for i in range(1, len(clips)):
-        elapsed += clips[i - 1][1]
-        fade = clips[i - 1][2]
-        parts.append(f"[{label}][v{i}]xfade=transition=fade:duration={fade:.3f}:offset={elapsed:.3f}[x{i}]")
-        label = f"x{i}"
-    total = elapsed + clips[-1][1]
-    parts.append(f"[{label}]fade=t=in:st=0:d=0.8,fade=t=out:st={total - 1.6:.3f}:d=1.6[vout]")
-    cmd += ["-filter_complex", ";".join(parts), "-map", "[vout]", "-map", f"{len(clips)}:a",
-            "-c:v", "libx264", "-preset", "medium", "-crf", "18", "-pix_fmt", "yuv420p", "-r", str(FPS),
-            "-c:a", "aac", "-b:a", "192k", "-t", f"{total:.3f}", "-movflags", "+faststart", str(out_mp4)]
-    subprocess.run(cmd, check=True)
-    return total
+def frame_at(sec):
+    i = max(k for k, s in enumerate(STARTS) if s <= sec + 1e-9)
+    t = sec - STARTS[i]
+    im = scene_frame(i, t)
+    if i > 0 and t < FADE:
+        prev = scene_frame(i - 1, SCENES[i - 1][1] + t)
+        im = Image.blend(prev, im, e_io(t / FADE))
+    return im
+
+
+def render_job(n):
+    sec = n / FPS
+    if sec > TOTAL - 0.4:      # fade the last 0.4 s to black
+        im = frame_at(min(sec, TOTAL - 1e-3))
+        return Image.blend(im, Image.new("RGB", im.size, NIGHT), seg(sec, TOTAL - 0.4, TOTAL)).tobytes()
+    return frame_at(sec).tobytes()
+
+
+def encode(out, wav, crf=18):
+    OUT.mkdir(parents=True, exist_ok=True)
+    cmd = ["ffmpeg", "-y", "-loglevel", "error", "-f", "rawvideo", "-pix_fmt", "rgb24", "-s", f"{W}x{H}", "-r", str(FPS),
+           "-i", "-", "-i", str(wav), "-c:v", "libx264", "-preset", "medium", "-crf", str(crf), "-pix_fmt", "yuv420p",
+           "-c:a", "aac", "-b:a", "128k", "-movflags", "+faststart", "-shortest", str(out)]
+    proc = subprocess.Popen(cmd, stdin=subprocess.PIPE)
+    n = int(TOTAL * FPS)
+    with Pool() as pool:
+        for k, data in enumerate(pool.imap(render_job, range(n), chunksize=4)):
+            proc.stdin.write(data)
+            if k % 500 == 0:
+                print(f"  frame {k}/{n}", flush=True)
+    proc.stdin.close()
+    if proc.wait():
+        sys.exit("ffmpeg failed")
+
+
+def small(src, out):
+    """720p two-pass H.264 with AAC 64k, sized to stay under 9,000,000 bytes."""
+    dur = float(subprocess.check_output(["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of",
+                                         "default=nw=1:nk=1", str(src)]))
+    vkbps = int((8_600_000 * 8 / dur - 64_000) / 1000)
+    log = str(OUT / "pass")
+    base = ["ffmpeg", "-y", "-loglevel", "error", "-i", str(src), "-vf", "scale=1280:720:flags=lanczos", "-c:v", "libx264",
+            "-preset", "slow", "-b:v", f"{vkbps}k", "-pix_fmt", "yuv420p", "-passlogfile", log]
+    subprocess.check_call(base + ["-pass", "1", "-an", "-f", "mp4", "/dev/null"])
+    subprocess.check_call(base + ["-pass", "2", "-c:a", "aac", "-b:a", "64k", "-movflags", "+faststart", str(out)])
+    for f in OUT.glob("pass*.log*"):
+        f.unlink()
+    print(f"{out}: {out.stat().st_size} bytes at {vkbps} kbit/s video")
 
 
 def main():
-    ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    ap.add_argument("--out", default=str(ROOT / "out/video"), help="output directory (git-ignored by default)")
-    ap.add_argument("--frames", action="store_true", help="only render the slide PNGs")
-    args = ap.parse_args()
-    out = Path(args.out)
-    clips = render_stages(out / "build")
-    print(f"{len(clips)} stills in {out / 'build'}")
-    if args.frames:
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--out", default=str(OUT / "rpi5-audioface-overview.mp4"))
+    ap.add_argument("--small", action="store_true", help="also write the 720p two-pass file under 9 MB")
+    ap.add_argument("--still", type=float, help="write one PNG at this time (seconds) and stop")
+    a = ap.parse_args()
+    OUT.mkdir(parents=True, exist_ok=True)
+    if a.still is not None:
+        p = OUT / f"still-{a.still:07.2f}.png"
+        frame_at(a.still).save(p)
+        print(p)
         return
     import music
-    total = sum(d for _, d, _ in clips)
-    wav = out / "build" / "music.wav"
-    music.write_wav(wav, total)
-    mp4 = out / "rpi5-audioface-overview.mp4"
-    encode(clips, wav, mp4)
-    print(f"wrote {mp4} ({total:.1f} s)")
+    wav = OUT / "build-music.wav"
+    music.write_wav(wav, TOTAL)
+    encode(FsPath(a.out), wav)
+    print(f"{a.out}: {FsPath(a.out).stat().st_size} bytes, {TOTAL} s")
+    if a.small:
+        small(FsPath(a.out), OUT / "rpi5-audioface-overview-9mb.mp4")
 
 
 if __name__ == "__main__":
