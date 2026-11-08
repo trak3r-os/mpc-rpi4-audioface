@@ -372,6 +372,23 @@ def save_command(cmd):
         update_slots(lambda state: midi.apply_command(state, cmd)[0])
 
 
+# Set by rpi-audio-gadget at boot; "usb latency low" in slots.json selects LOW_LATENCY_REQUESTS.
+GADGET_REQUESTS = Path("/sys/kernel/config/usb_gadget/rpi-audio/functions/uac2.audio/req_number")
+LOW_LATENCY_REQUESTS = 2
+
+
+def usb_latency(state, live=GADGET_REQUESTS):
+    """The selected USB latency, the gadget's live requests in flight, and whether a restart is
+    still needed for the selection to apply."""
+    selected = "low" if state.get("usb_latency") == "low" else "normal"
+    try:
+        requests = int(read(live).strip())
+    except (OSError, ValueError):
+        requests = None
+    pending = requests is not None and (requests <= LOW_LATENCY_REQUESTS) != (selected == "low")
+    return {"selected": selected, "requests": requests, "pending": pending}
+
+
 def udc_state():
     return next((read(p).strip() for p in glob.glob("/sys/class/udc/*/state")), "")
 
@@ -1617,6 +1634,7 @@ class Daemon:
                 "gadget_channels": self.usb_channels if self.hub else self.channels,
                 "engine_mode": "hub" if self.hub else "standalone" if self.standalone else "host",
                 "host_profile": self.host_name(load_slots()), "host_profiles": sorted(hosts),
+                "usb_latency": usb_latency(load_slots()),
                 "host_profile_details": host_summary(self.cfg, hosts),
                 "host_profile_selection": load_slots().get("host_profile"),
                 "outputs": self.output_status(), "devices": devices, "usb_buses": self.usb_buses(),
@@ -1898,6 +1916,8 @@ def cmd_change(text):
         print(f'rpi-audiod: profile {name} saved; apply it with: rpi-audiod host {name}')
     elif command.verb == 'host' and command.arg('action') in ('rename', 'delete'):
         print('rpi-audiod: host profile updated')
+    elif command.verb == 'usb':
+        print('rpi-audiod: saved; the USB gadget applies it at the next restart of the Pi')
     else:
         print('rpi-audiod: saved; the service applies it within a second or two')
 

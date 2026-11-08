@@ -377,3 +377,15 @@ def test_state_permission_migration_does_not_follow_user_created_links(root):
     assert run(root, '--no-boot-config').returncode == 0
     assert external.stat().st_mode & 0o777 == 0o600
     assert (state / 'hosts.json').is_symlink() and external.read_text() == 'keep private'
+
+
+@pytest.mark.parametrize("saved, requests", [('{"usb_latency": "low"}', 2), ('{"usb_latency": "normal"}', 4),
+                                             ('{"engine_mode": "hub"}', 4), (None, 4)])
+def test_gadget_takes_low_usb_latency_from_the_saved_state(tmp_path, saved, requests):
+    state = tmp_path / "slots.json"
+    if saved is not None:
+        state.write_text(saved)
+    env = {k: v for k, v in os.environ.items() if not k.startswith("GADGET_")}
+    done = subprocess.run([str(Path(__file__).resolve().parent.parent / "gadget" / "rpi-audio-gadget"), "check"],
+                          env={**env, "GADGET_STATE": str(state)}, capture_output=True, text=True, check=True)
+    assert f"req_number {requests}" in done.stdout

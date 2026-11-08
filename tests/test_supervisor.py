@@ -2006,3 +2006,14 @@ def test_standalone_mode_follows_a_moved_device_too(monkeypatch, tmp_path):
     d.scan_devices()
     assert logged(w, "CODEC moved from 3-2 to 1-2")
     assert daemon.load_slots()["routes"] == [{"src": "usb-1-2-08bb:2902", "dst": "local-dac"}]
+
+
+def test_usb_latency_reports_a_pending_restart_until_the_gadget_has_the_choice(tmp_path):
+    live = tmp_path / "req_number"
+    live.write_text("4\n")
+    assert daemon.usb_latency({}, live) == {"selected": "normal", "requests": 4, "pending": False}
+    assert daemon.usb_latency({"usb_latency": "low"}, live) == {"selected": "low", "requests": 4, "pending": True}
+    live.write_text("2\n")
+    assert daemon.usb_latency({"usb_latency": "low"}, live)["pending"] is False
+    assert daemon.usb_latency({}, live)["pending"] is True
+    assert daemon.usb_latency({}, tmp_path / "missing") == {"selected": "normal", "requests": None, "pending": False}

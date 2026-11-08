@@ -423,3 +423,15 @@ def test_parse_aconnect_pid():
     text = "client 128: 'aseqdump' [type=user,pid=1117377]\n    0 'aseqdump        '\n"
     clients, _ = midi.parse_aconnect(text)
     assert clients[128].pid == 1117377 and clients[128].card is None
+
+
+def test_usb_latency_command_saves_the_choice_the_gadget_reads_at_boot():
+    cmd = midi.parse_command("usb latency low")
+    assert cmd == midi.Command("usb", None, (("latency", "low"),))
+    state, _ = midi.apply_command({"engine_mode": "hub"}, cmd)
+    assert state == {"engine_mode": "hub", "usb_latency": "low"}
+    state, _ = midi.apply_command(state, midi.parse_command("usb latency normal"))
+    assert state == {"engine_mode": "hub"}
+    for bad in ("usb", "usb latency", "usb latency fast", "usb speed low", "usb latency low now"):
+        with pytest.raises(ValueError, match="usage: usb latency"):
+            midi.parse_command(bad)

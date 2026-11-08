@@ -87,6 +87,7 @@ F0 7D 52 42 <ASCII text> F7      reply
 | `host preset NAME N\|none` | `ok` | Attaches a scene to an existing profile, or clears its setup and keeps only reservations; applies at next selection |
 | `host rename OLD NEW` | `ok` | Renames a saved user profile and tracks an active selection; refuses an existing target name |
 | `host delete NAME` | `ok` or `error: no saved host profile` | Deletes a profile you saved (the ones shipped in `hosts.d` stay) |
+| `usb latency low\|normal` | `ok` | USB requests in flight on the gadget: `low` is 2, `normal` is `GADGET_REQ_NUMBER` (4). Saved now, applied at the next Pi restart (the gadget reads it only at boot). `status` shows it as `usb_latency` (`selected`, live `requests`, `pending` until a restart applies it). On the display: Outputs → USB latency |
 
 Commands change the stored state (`slots.json`, `presets.json` for scenes, `hosts.json` for user profiles), exactly like the command line (`rpi-audiod assign|mute|volume|route|unroute|name|preset ...`). The service applies the change within one or two seconds. With an unknown identity, the command is still stored and applied when the device shows up.
 

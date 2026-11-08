@@ -660,3 +660,22 @@ def test_usb_ports_uses_labels_scrolls_and_survives_missing_fields():
     st["devices"], st["usb_buses"] = [], []
     assert text(u, st)[1].strip() == "No USB audio devices"
     assert u.handle("confirm", st, 0) == [] and u.screen.title == "USB ports"
+
+
+def test_usb_latency_is_chosen_from_outputs_and_offers_the_restart_that_applies_it():
+    st = status(engine_mode='hub', outputs=[], usb_latency={'selected': 'normal', 'requests': 4, 'pending': False})
+    u = display.UI()
+    press(u, st, 'cw', 'push')
+    assert 'USB latency: normal' in text(u, st)[2]
+    press(u, st, 'cw', 'push')
+    assert u.screen.title == 'USB latency'
+    assert press(u, st, 'push') == []            # already normal: nothing to do
+    assert press(u, st, 'cw', 'push') == ['usb latency low']
+    assert text(u, st)[0].strip() == 'Restart now?'
+    assert press(u, st, 'push') == []            # Later
+    assert u.screen.title == 'USB latency'
+    st['usb_latency'] = {'selected': 'low', 'requests': 4, 'pending': True}
+    press(u, st, 'back')
+    assert 'USB latency: low *' in text(u, st)[2]
+    press(u, st, 'push', 'cw', 'push')           # low again, still pending: offer the restart again
+    assert press(u, st, 'cw', 'push') == ['system reboot']

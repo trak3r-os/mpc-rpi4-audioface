@@ -20,6 +20,7 @@ SYSEX_END = 0xF7
 USAGE = {
     "output": "output local-dac|usb-host|network-rtp|network-link on|off | output ID level PERCENT",
     "engine": "engine host|standalone|hub",
+    "usb": "usb latency low|normal",
     "host": "host NAME|default | host save NAME [reserve_in=K,K] [reserve_out=K,K] [full|preset=N] [new] "
             "| host preset NAME N|none | host rename OLD NEW | host delete NAME",
     "ping": "ping",
@@ -309,6 +310,10 @@ def parse_command(text):
         return Command(verb, None, (("mode", rest[0]),))
     if verb == "host":
         return parse_host(rest, usage)
+    if verb == "usb":
+        if len(rest) != 2 or rest[0] != "latency" or rest[1] not in ("low", "normal"):
+            raise usage
+        return Command(verb, None, (("latency", rest[1]),))
     if verb == 'output':
         if len(rest) == 3 and rest[0] in outputs.IDS and rest[1] == 'level':
             return Command(verb, rest[0], (('level', number('level', rest[2], 0, 100)),))
@@ -430,6 +435,12 @@ def apply_command(state, cmd):
     device, port = split_endpoint(cmd.identity or "")
     if cmd.verb == "engine":
         state["engine_mode"] = cmd.arg("mode")
+    elif cmd.verb == "usb":
+        # Read by rpi-audio-gadget at boot: it takes effect on the next restart, not now.
+        if cmd.arg("latency") == "low":
+            state["usb_latency"] = "low"
+        else:
+            state.pop("usb_latency", None)
     elif cmd.verb == "host":
         if cmd.arg("action") != "select":
             raise ValueError("host save and delete change the profile store, not slots.json")

@@ -637,6 +637,7 @@ class OutputPairs(Menu):
 
 SAVE_HOST = object()  # the HostProfiles row that saves the current reservation as a new profile
 HOST_ROW = object()   # the Outputs row that opens HostProfiles; the others carry an output identity
+USB_LATENCY_ROW = object()  # the Outputs row that opens UsbLatency
 
 
 class Outputs(Menu):
@@ -646,6 +647,10 @@ class Outputs(Menu):
     def items(self, ui, status, now):
         rows = [(o['name'], o['identity']) for o in status.get('outputs', [])]
         rows.append((f"Audio mode: {status.get('engine_mode', 'host')}", None))
+        latency = status.get("usb_latency")
+        if latency:
+            rows.append((f"USB latency: {latency['selected']}{' *' if latency.get('pending') else ''}",
+                         USB_LATENCY_ROW))
         if status.get("host_profiles"):
             rows.append((f"Host: {status.get('host_profile') or 'default'}", HOST_ROW))
         return rows
@@ -657,7 +662,7 @@ class Outputs(Menu):
 
     def select(self, ui, identity, status, now):
         ui.stack.append(EngineModes() if identity is None else HostProfiles() if identity is HOST_ROW
-                        else OutputActions(identity))
+                        else UsbLatency() if identity is USB_LATENCY_ROW else OutputActions(identity))
         return []
 
 
@@ -849,6 +854,39 @@ class EngineModes(Menu):
         if mode != status.get("engine_mode", "host"):
             ui.stack.append(Confirm("Restart audio?", "Audio will pause", [f"engine {mode}"], "Switching audio..."))
         return []
+
+
+class UsbLatency(Menu):
+    """Requests in flight on the USB gadget: fewer is lower latency, but the gadget reads it only at boot."""
+    title = "USB latency"
+    icon = "settings"
+
+    def items(self, ui, status, now):
+        return [("Normal (4 requests)", "normal"), ("Low (2 requests)", "low")]
+
+    def badge(self, ui, status, payload):
+        return "on" if (status.get("usb_latency") or {}).get("selected") == payload else ""
+
+    def select(self, ui, choice, status, now):
+        latency = status.get("usb_latency") or {}
+        if choice == latency.get("selected") and not latency.get("pending"):
+            return []
+        ui.stack.append(UsbLatencyRestart())
+        return [f"usb latency {choice}"]
+
+
+class UsbLatencyRestart(PowerConfirm):
+    """Saved; offers the restart that applies it."""
+
+    def __init__(self):
+        super().__init__("reboot")
+        self.title = "Restart now?"
+
+    def items(self, ui, status, now):
+        return [("Later", False), ("Restart", True)]
+
+    def rows(self, ui, status, now):
+        return Menu.rows(self, ui, status, now) + [Row(fit('')), Row(fit('Applies on restart.'))]
 
 
 class MidiSources(Menu):

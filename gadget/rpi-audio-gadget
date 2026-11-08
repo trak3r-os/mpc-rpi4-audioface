@@ -16,6 +16,7 @@
 #   GADGET_SSIZE         bytes per sample: 2, 3 or 4                         default 4
 #   GADGET_HS_BINT       high-speed bInterval 1..4, 0 = auto                 default 2
 #   GADGET_REQ_NUMBER    USB requests in flight                             default 4
+#                        (2 when the menu chose low USB latency, below)
 #   GADGET_C_SYNC        host-to-Pi endpoint sync: async or adaptive        default async
 #   GADGET_PRODUCT       iProduct; never "UAC2_Gadget" (Akai MPC/Force
 #                        hosts ignore cards with that name)                 default rpi-audio
@@ -25,6 +26,9 @@
 #   GADGET_MIDI_PORTS    USB MIDI ports (cables) per direction, 0..16;
 #                        0 = no MIDI function                               default 0
 #   GADGET_MIDI_ID       ALSA card id of the MIDI function on the Pi        default MIDIGadget
+#   GADGET_STATE         rpi-audiod's saved state; "usb_latency": "low"
+#                        there (`usb latency low`, docs/MIDI.md) sets
+#                        GADGET_REQ_NUMBER to 2         default /var/lib/rpi-audio/slots.json
 
 set -euo pipefail
 shopt -s nullglob
@@ -34,6 +38,13 @@ shopt -s nullglob
 : "${GADGET_PRODUCT:=rpi-audio}" "${GADGET_MANUFACTURER:=rpi-audio}"
 : "${GADGET_VID:=0x1d6b}" "${GADGET_PID:=0x0104}"
 : "${GADGET_MIDI_PORTS:=0}" "${GADGET_MIDI_ID:=MIDIGadget}"
+: "${GADGET_STATE:=/var/lib/rpi-audio/slots.json}"
+
+# Low USB latency, chosen from the menu: two requests in flight instead of four (about 0.25 ms
+# less each way at bInterval 2). Read only at boot, like every other setting here.
+if [[ -r $GADGET_STATE ]] && grep -Eq '"usb_latency"[[:space:]]*:[[:space:]]*"low"' "$GADGET_STATE"; then
+  GADGET_REQ_NUMBER=2
+fi
 
 CONFIGFS=/sys/kernel/config
 G=$CONFIGFS/usb_gadget/rpi-audio
@@ -56,6 +67,7 @@ check_settings() {
     die "GADGET_CHANNELS must be 1..27 (f_uac2 rejects channel masks above bit 26)"
   [[ $GADGET_SSIZE =~ ^[234]$ ]] || die "GADGET_SSIZE must be 2, 3 or 4"
   [[ $GADGET_HS_BINT =~ ^[0-4]$ ]] || die "GADGET_HS_BINT must be 0..4"
+  [[ $GADGET_REQ_NUMBER =~ ^[1-9][0-9]?$ ]] || die "GADGET_REQ_NUMBER must be 1..99"
   [[ $GADGET_C_SYNC == async || $GADGET_C_SYNC == adaptive ]] || die "GADGET_C_SYNC must be async or adaptive"
   [[ $GADGET_MIDI_PORTS =~ ^[0-9]+$ ]] && (( GADGET_MIDI_PORTS <= 16 )) ||
     die "GADGET_MIDI_PORTS must be 0..16 (f_midi's limit)"
@@ -191,6 +203,6 @@ case "${1:-}" in
   up) up ;;
   down) down ;;
   status) status ;;
-  check) check_settings; echo "rpi-audio-gadget: settings ok" ;;
+  check) check_settings; echo "rpi-audio-gadget: settings ok (req_number $GADGET_REQ_NUMBER)" ;;
   *) echo "usage: ${0##*/} up|down|status|check" >&2; exit 2 ;;
 esac
