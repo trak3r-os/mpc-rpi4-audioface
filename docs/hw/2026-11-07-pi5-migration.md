@@ -73,3 +73,12 @@ Pi 5 en el USB host de la Force; mezclador (PCM2902), GP-150 y luego el Tracker 
 - MPC Remote por túnel funcionó para ver la pantalla (Preferences → Audio Device: rpi-audio); no hizo falta tocar nada.
 - [Pi] Soak de 60 min con esos valores y la Force en marcha (Tracker + mezclador): **0 xruns nuevos** (14 → 14), gadget RUNNING en las 13 lecturas, carga 1,2–1,6. usbmon 30 s al final: bus 1 (mezclador, captura) 29 999 URB y bus 3 (Tracker 8 ch) 29 999 URB, **0 errores** en ambos.
 - [Pi] **Temperatura 79–81 °C** sostenida durante todo el soak; `get_throttled` = `0xe0000` (límite térmico, recorte de frecuencia y throttling *ocurridos* desde el arranque, ninguno activo en las lecturas; sin subtensión). Falta refrigeración activa: con buffers pequeños, un recorte de frecuencia es lo que daría xruns.
+
+## Latencia con los periodos bajados, Hub frente a reloj del host (2026-11-08, 21:57–22:04)
+
+- Mismo montaje que por la mañana (portátil con JACK 256×2 a 44,1 kHz, 768 tramas = 17,4 ms propias; bucle por software en la Pi; `jack_iodelay`).
+- [Pi] **Hub** (jackd 128×3, `host_period` 32): 29,1 / 29,5 / 31,1 / 29,1 ms en total; parte de la Pi 514–605 tramas = **11,7–13,7 ms** (por la mañana, ~48 ms). Varía de una apertura a otra por los remuestreadores de zita.
+- [Pi] **Reloj del host** (modo `host`, jackd directamente sobre el gadget, sin zita en el bucle): con `[engine] period` 64×3, 991 tramas exactas = 22,5 ms total, **5,1 ms de la Pi**; con 32×3, 935 tramas = 21,2 ms total, **3,8 ms de la Pi**. Mismo valor en cada apertura.
+- [Pi] El contador de xruns pasó de 14 a 19 durante estas pruebas; no se sabe qué paso los causó (el JACK del portátil, sin tiempo real, también falló con periodos de 32 y 64 y provocó errores de sincronía en los puentes del gadget).
+- Se devolvió la Pi a Hub (copia de `slots.json` previa) con `[engine] period` 64. Ahora el grueso del bucle es el buffer del propio host.
+- Referencia externa: [squeaksquad/USB-AoIP](https://github.com/squeaksquad/USB-AoIP) (Pi 5, UAC2, Apache-2.0) mide 11,45 ms a 44,1 kHz Mac → Pi → Dante → conversor → Pi → Mac con buffer de 32 en el Mac; sin JACK ni zita (un único proceso SCHED_FIFO con MMAP) y `req_number=2` [ext].
