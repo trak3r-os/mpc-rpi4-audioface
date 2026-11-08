@@ -55,3 +55,10 @@ Pi 5 en el USB host de la Force; mezclador (PCM2902), GP-150 y luego el Tracker 
 - **Slots**: los dispositivos sin número de serie se identifican por la ruta USB (p. ej. el mezclador `usb-1-1.3-08bb:2902`). En la Pi 5 la topología cambia (sin hub interno), así que esos dispositivos tendrán clave nueva y habrá que reasignar sus canales y presets. El GP-150 va por número de serie y no cambia.
 - **Alimentación**: decidir si los dispositivos alimentados por bus caben en 600 mA o usar un hub alimentado. `usb_max_current_enable=1` solo con una fuente que dé de verdad 5 A.
 - `tools/hosts/pi-usb-c-bench.py` (banco del xHCI interno de la Pi 4) ya no aplica: exige una Pi 4 y el overlay bajo `[pi4]`, así que se niega en esta configuración.
+
+## Latencia de ida y vuelta con el portátil como host (2026-11-08)
+
+- Montaje: JACK en el portátil sobre `hw:rpiaudio` a 44,1 kHz, 256×2; en la Pi, conexión temporal `usb_host_in:capture_1 → usb_host_out:playback_1` (sin pasar por ningún dispositivo); `jack_iodelay` en el portátil. Pi en Hub, jackd 256×3 a 48 kHz.
+- [Pi] Total host → Pi → host según `[usb] host_period` (los puentes del gadget, 4 periodos): **256: 65,2 ms · 128: 47,0 ms · 64: 39,0 ms**. Restando los ~17,4 ms del propio JACK del portátil (768 tramas), la parte de la Pi baja de ~48 a ~22 ms [est].
+- [Pi] 0 xruns en cada ventana de ~30 s. Es una prueba corta: falta un soak con 64 y con la Force, y medir el salto por un dispositivo (cable de bucle en el mezclador).
+- Queda la Pi con `host_period = 64` en `/etc/rpi-audio/rpi-audio.toml` para seguir probando; el valor por defecto del código sigue en 256.
