@@ -62,3 +62,12 @@ Pi 5 en el USB host de la Force; mezclador (PCM2902), GP-150 y luego el Tracker 
 - [Pi] Total host → Pi → host según `[usb] host_period` (los puentes del gadget, 4 periodos): **256: 65,2 ms · 128: 47,0 ms · 64: 39,0 ms**. Restando los ~17,4 ms del propio JACK del portátil (768 tramas), la parte de la Pi baja de ~48 a ~22 ms [est].
 - [Pi] 0 xruns en cada ventana de ~30 s. Es una prueba corta: falta un soak con 64 y con la Force, y medir el salto por un dispositivo (cable de bucle en el mezclador).
 - Queda la Pi con `host_period = 64` en `/etc/rpi-audio/rpi-audio.toml` para seguir probando; el valor por defecto del código sigue en 256.
+
+## Bajada de periodos con la Force como host (2026-11-08, 14:01–14:30)
+
+- Pi con Tracker y mezclador (la GP-150 no aparecía); MPC abre 26×26 a 44,1 kHz. Cada paso reinicia `rpi-audiod` y observa 2 min: xruns del `status`, avisos en el journal y estado del gadget. MPC volvió a abrir el stream solo tras cada reinicio [Pi].
+- [Pi] Limpios (0 xruns, 0 avisos): `host_period` 64; jackd del pHAT `[standalone] period` 128 (×3); `[bridge] period` 128 y 64 (×2); `host_period` 32.
+- [Pi] `[standalone] period = 64`: **+8 xruns** en 2 min → vuelto a 128.
+- [Pi] Soak de 9 min con jackd 128×3, puentes de dispositivo 64×2 y puentes del gadget 32×4: 0 xruns nuevos, gadget RUNNING en los dos sentidos; zita del gadget ~10–20 % de un núcleo, carga 1,4.
+- Sin medir la latencia con estos valores: con la Force no hay bucle de vuelta. Falta medirla con el portátil, el salto por un dispositivo (cable de bucle) y un soak largo antes de cambiar los valores por defecto del repo (siguen en 256/256/256).
+- MPC Remote por túnel funcionó para ver la pantalla (Preferences → Audio Device: rpi-audio); no hizo falta tocar nada.
