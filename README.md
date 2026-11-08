@@ -2,11 +2,11 @@
 
 [![rpi-audio: a Raspberry Pi 4 routes USB audio and MIDI gear to a pHAT DAC, a 26×26 USB host interface, and stereo RTP or Link Audio network sends](docs/img/rpi-audio-banner.svg)](docs/MANUAL.md)
 
-[![Release CI](https://img.shields.io/github/actions/workflow/status/trak3r-os/mpc-rpi4-audioface/ci.yml?event=release&style=flat-square&logo=github&label=release%20CI)](https://github.com/trak3r-os/mpc-rpi4-audioface/actions/workflows/ci.yml)
+[![Release CI](https://img.shields.io/github/actions/workflow/status/trak3r-os/rpi5-audioface/ci.yml?event=release&style=flat-square&logo=github&label=release%20CI)](https://github.com/trak3r-os/rpi5-audioface/actions/workflows/ci.yml)
 [![License: GPL-3.0-or-later](https://img.shields.io/badge/license-GPL--3.0--or--later-60cbb3?style=flat-square)](LICENSE)
-[![Last commit](https://img.shields.io/github/last-commit/trak3r-os/mpc-rpi4-audioface?style=flat-square&logo=github)](https://github.com/trak3r-os/mpc-rpi4-audioface/commits/main/)
-[![GitHub issues](https://img.shields.io/github/issues/trak3r-os/mpc-rpi4-audioface?style=flat-square&logo=github)](https://github.com/trak3r-os/mpc-rpi4-audioface/issues)
-[![GitHub stars](https://img.shields.io/github/stars/trak3r-os/mpc-rpi4-audioface?style=flat-square&logo=github)](https://github.com/trak3r-os/mpc-rpi4-audioface/stargazers)
+[![Last commit](https://img.shields.io/github/last-commit/trak3r-os/rpi5-audioface?style=flat-square&logo=github)](https://github.com/trak3r-os/rpi5-audioface/commits/main/)
+[![GitHub issues](https://img.shields.io/github/issues/trak3r-os/rpi5-audioface?style=flat-square&logo=github)](https://github.com/trak3r-os/rpi5-audioface/issues)
+[![GitHub stars](https://img.shields.io/github/stars/trak3r-os/rpi5-audioface?style=flat-square&logo=github)](https://github.com/trak3r-os/rpi5-audioface/stargazers)
 
 [![Raspberry Pi 5](https://img.shields.io/badge/Raspberry_Pi-5-C51A4A?style=flat-square&logo=raspberrypi&logoColor=white)](docs/MANUAL.md#16-build-your-own-device)
 [![USB Audio Class 2](https://img.shields.io/badge/USB_Audio_Class_2-26_in_%C3%97_26_out-267d9c?style=flat-square)](docs/MANUAL.md#6-record-over-usb)
@@ -102,8 +102,8 @@ The **Pi 5** has no VL805: its USB-A ports hang off two USB host controllers in 
 Use Raspberry Pi OS, 64-bit. The tested system is Debian 13 (trixie) with kernel 6.18. The Pi does not need PipeWire: rpi-audio uses JACK.
 
 ```sh
-git clone https://github.com/trak3r-os/mpc-rpi4-audioface.git
-cd mpc-rpi4-audioface
+git clone https://github.com/trak3r-os/rpi5-audioface.git
+cd rpi5-audioface
 sudo ./install.sh                  # gadget + rpi-audiod, started at boot
 sudo ./install.sh --host akai-force   # the same, with the Akai Force profile
 sudo reboot                        # only if the installer enabled the USB gadget overlay

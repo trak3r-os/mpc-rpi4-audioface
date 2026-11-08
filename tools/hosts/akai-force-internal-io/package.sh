@@ -19,7 +19,7 @@ mkdir -p "$stage"
 cp addin.manifest build/mpc_internal_io.so mpc_internal_io.conf "$stage/"
 cp ../../../LICENSE "$stage/LICENSE"
 python3 "$tools/release_addin.py" --dir "$stage" --version "$version" \
-  --repo trak3r-os/mpc-rpi4-audioface --license GPL-3.0-or-later \
+  --repo trak3r-os/rpi5-audioface --license GPL-3.0-or-later \
   --about 'Keeps the device'"'"'s own audio inputs and outputs working while MPC uses an rpi-audio hub (USB audio and MIDI hub on a Raspberry Pi) as its audio interface.' \
   --requires 'An rpi-audio hub on the USB host port, chosen as the audio device in MPC. Tested on the Akai Force (MPC 3.9).' \
   -o dist

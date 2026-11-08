@@ -20,7 +20,7 @@ cp ../../../THIRD_PARTY.md build/notices/THIRD_PARTY.md
 
 python3 ../vendor/mpc-vst-plugins/tools/release.py \
   --so "$SO" --skin "$FOLDER" --entry build/pluginlist-entry.xml --version "$V" \
-  --id rpi-audio-panel --repo trak3r-os/mpc-rpi4-audioface --license GPL-3.0-or-later \
+  --id rpi-audio-panel --repo trak3r-os/rpi5-audioface --license GPL-3.0-or-later \
   --about 'Shows and controls an rpi-audio hub (USB audio and MIDI hub on a Raspberry Pi) from the touchscreen.' \
   --extra panel.conf:panel.conf --user-data panel.conf --extra build/notices:notices \
   -o dist

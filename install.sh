@@ -3,8 +3,8 @@
 #
 # Install rpi-audio on this Raspberry Pi, from a clone of the repository.
 #
-#   git clone https://github.com/trak3r-os/mpc-rpi4-audioface.git
-#   cd mpc-rpi4-audioface && sudo ./install.sh
+#   git clone https://github.com/trak3r-os/rpi5-audioface.git
+#   cd rpi5-audioface && sudo ./install.sh
 #
 #   sudo ./install.sh [--host NAME] [--no-enable] [--force-config] [--no-boot-config] [--tune-boot] [--hat] [--network] [-y]
 #   sudo ./install.sh --uninstall [--purge]

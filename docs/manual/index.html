@@ -909,8 +909,8 @@ nmcli radio wifi
 <p>On the first boot, leave the USB host disconnected. Reach the Pi using SSH to your chosen hostname or router-assigned address, or use a local keyboard and display. Run these commands <strong>on the Pi</strong>:</p>
 <pre><code class="language-sh">sudo apt update
 sudo apt install -y git
-git clone https://github.com/trak3r-os/mpc-rpi4-audioface.git
-cd mpc-rpi4-audioface
+git clone https://github.com/trak3r-os/rpi5-audioface.git
+cd rpi5-audioface
 sudo ./install.sh --hat --network
 </code></pre>
 <p>That command installs the OLED/GPIO support, enables I2C and the pHAT overlay, builds the main output-volume helper, and builds RTP/Link Audio using a pinned official SDK. The network build needs Internet access and may take several minutes. For the same physical build without network audio, use <code>sudo ./install.sh --hat</code> instead. For a USB-only build without the display and DAC, use <code>sudo ./install.sh</code>; do not select Hub/Standalone until a suitable local audio device is configured.</p>

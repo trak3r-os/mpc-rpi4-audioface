@@ -641,8 +641,8 @@ On the first boot, leave the USB host disconnected. Reach the Pi using SSH to yo
 ```sh
 sudo apt update
 sudo apt install -y git
-git clone https://github.com/trak3r-os/mpc-rpi4-audioface.git
-cd mpc-rpi4-audioface
+git clone https://github.com/trak3r-os/rpi5-audioface.git
+cd rpi5-audioface
 sudo ./install.sh --hat --network
 ```
 
