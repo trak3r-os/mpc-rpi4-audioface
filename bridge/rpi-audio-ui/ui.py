@@ -1157,7 +1157,8 @@ class SessionInfo(Info):
                   ('USB unplug', 'usb_disconnects'), ('Devices lost', 'device_disconnects'),
                   ('TX dropped frames', 'network_dropped_frames'), ('Rate changes', 'rate_changes'),
                   ('Buffer changes', 'buffer_changes'), ('Adapter faults', 'adapter_failures'),
-                  ('Link send stops', 'network_stops'), ('USB budget blocks', 'bandwidth_blocks')]
+                  ('Link send stops', 'network_stops'), ('USB budget blocks', 'bandwidth_blocks'),
+                  ('USB resyncs', 'usb_resyncs')]
         rows = ['Observer: ' + ('active' if session.get('monitor_available') else 'waiting'),
                 'Since:', session['started']]
         rows += [f'{label}: {counts.get(key, 0)}' for label, key in labels]

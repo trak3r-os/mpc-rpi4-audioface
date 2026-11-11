@@ -63,7 +63,7 @@ POWER_POLICY=$R/etc/sudoers.d/rpi-audio-power
 UDCDIR=$R/sys/class/udc
 OVERLAY='dtoverlay=dwc2,dr_mode=peripheral'
 units="rpi-audio-gadget rpi-audiod rpi-audio-keepalive rpi-audio-cpu rpi-audio-ui"
-packages="jackd2 jack-example-tools zita-ajbridge gcc libjack-jackd2-dev sudo"
+packages="jackd2 jack-example-tools zita-ajbridge gcc libjack-jackd2-dev libasound2-dev sudo"
 
 say() { echo "$tag: $*"; }
 warn() { echo "$tag: $*" >&2; }
@@ -305,6 +305,13 @@ if ((!staging)); then
   cc -O2 -std=c11 -Wall -Wextra -Werror "$here/bridge/audio/gain.c" -ljack -lm -o "$LIB/audio/rpi-audio-gain.new"
   chmod 755 "$LIB/audio/rpi-audio-gain.new"
   mv -f "$LIB/audio/rpi-audio-gain.new" "$LIB/audio/rpi-audio-gain"
+fi
+# The hub's native bridge to the gadget ([usb] host_bridge = "native"). -O3: its filter loop is vectorised.
+install -m 644 "$here"/bridge/audio/{hostbridge.c,hostbridge_core.h} "$LIB/audio/"
+if ((!staging)); then
+  cc -O3 -std=c11 -Wall -Wextra -Werror "$here/bridge/audio/hostbridge.c" -lasound -ljack -lm -o "$LIB/audio/rpi-audio-hostbridge.new"
+  chmod 755 "$LIB/audio/rpi-audio-hostbridge.new"
+  mv -f "$LIB/audio/rpi-audio-hostbridge.new" "$LIB/audio/rpi-audio-hostbridge"
 fi
 install -d "$LIB/network"
 install -m 644 "$here/bridge/network/network.cpp" "$LIB/network/"

@@ -4,10 +4,11 @@
 
 While the host streams both ways, it runs jackd on the gadget (mode A) and, for every USB
 audio card, a zita-a2j / zita-j2a bridge per direction, connected to that device's gadget
-channels. While the host only records from the Pi, it plays silence instead: some hosts
-drop the gadget when nothing plays into it (docs/hw/2026-10-29-f1-force.md). When the
-gadget has USB MIDI ports, every MIDI port of a USB device gets one of them, and the
-control port takes the commands below from the host too (docs/MIDI.md).
+channels. In hub mode the gadget itself is bridged the same way, or by rpi-audio-hostbridge
+([usb] host_bridge = "native": lower latency, bridge/audio/hostbridge.c). While the host only
+records from the Pi, it plays silence instead: some hosts drop the gadget when nothing plays
+into it (docs/hw/2026-10-29-f1-force.md). When the gadget has USB MIDI ports, every MIDI port
+of a USB device gets one of them, and the control port takes the commands below from the host too (docs/MIDI.md).
 
 With [engine] mode = "standalone" there is no host: jackd drives a local card (a pHAT DAC, [standalone] in
 the settings) from the start, the bridges run as soon as it is up, and the card is one more destination for
@@ -905,6 +906,14 @@ class Daemon:
         except (TypeError, ValueError):
             log(f"rpi-audiod: [usb] host_period {cfg['usb']['host_period']!r} is not a number; using 256")
             self.host_period = 256
+        # Hub: what bridges the gadget to JACK. "native" is rpi-audio-hostbridge (bridge/audio/hostbridge.c).
+        self.host_bridge = cfg["usb"].get("host_bridge", "zita")
+        if self.host_bridge not in ("zita", "native"):
+            log(f"rpi-audiod: [usb] host_bridge {self.host_bridge!r} is not zita or native; using zita")
+            self.host_bridge = "zita"
+        self.host_bridge_missing = False   # native asked for, helper not built: said once
+        self.host_margin_us = self.usb_number("host_margin_ms", 1.5, 0.25, 20.0, lambda v: round(v * 1000))
+        self.host_quality = self.usb_number("host_quality", 32, 8, 96, int)
         self.slots_stamp = None
         self.unknown_host = None   # the host profile already warned about
         ports = 0 if self.standalone else int(gadget_setting("GADGET_MIDI_PORTS", 0))
@@ -936,6 +945,32 @@ class Daemon:
             self.network, self.network_error = None, str(error)
         if self.hub:
             update_slots(outputs.migrate_host_routes)
+
+    def usb_number(self, key, default, low, high, convert):
+        """A numeric [usb] setting within its limits, converted; the default (with a warning) otherwise."""
+        value = self.cfg["usb"].get(key, default)
+        if isinstance(value, bool) or not isinstance(value, (int, float)) or not low <= value <= high:
+            log(f"rpi-audiod: [usb] {key} {value!r} is not a number from {low} to {high}; using {default}")
+            value = default
+        return convert(value)
+
+    def host_bridge_command(self, tool, client, rate):
+        """The process that bridges one direction of the gadget in hub mode: rpi-audio-hostbridge when
+        [usb] host_bridge = "native" and it is built, else zita-a2j / zita-j2a."""
+        helper = Path(__file__).resolve().parent / "audio/rpi-audio-hostbridge"
+        if self.host_bridge == "native":
+            if os.access(helper, os.X_OK):
+                return [str(helper), "--client", client, "--device", f"hw:CARD={self.usb_card}",
+                        "--direction", "capture" if tool == "zita-a2j" else "playback", "--rate", str(rate),
+                        "--channels", str(self.usb_channels), "--margin-us", str(self.host_margin_us),
+                        "--quality", str(self.host_quality)]
+            if not self.host_bridge_missing:
+                log(f"rpi-audiod: [usb] host_bridge is native but {helper} is not built; using zita")
+                self.host_bridge_missing = True
+        # u_audio refuses fewer than 4 periods (PERIODS [4 16] on 6.18 rpi-2712) and
+        # periods over one page, and zita then fails to open the gadget card.
+        return [tool, "-j", client, "-d", f"hw:CARD={self.usb_card}", "-r", str(rate),
+                "-c", str(self.usb_channels), "-p", str(self.host_period), "-n", "4"]
 
     def note(self, kind, detail, count=1, severity='info'):
         if hasattr(self, 'session'):
@@ -1362,6 +1397,9 @@ class Daemon:
                             before = self.session.value('engine_' + field, value)
                             if before and before != value:
                                 self.note(kind, f'JACK {field}: {before} -> {value}')
+                elif identity.startswith('usb-'):   # rpi-audio-hostbridge, one per direction
+                    self.session.observe(identity + '/resyncs', data.get('resyncs'), 'usb_resyncs',
+                                         f'{self.adapter_label(identity)}: jumped back to its buffer margin')
                 elif identity in (outputs.RTP, outputs.LINK):
                     if (identity == outputs.LINK and previous.get('state') == 'sending' and
                             data.get('state') == 'waiting'):
@@ -1393,10 +1431,7 @@ class Daemon:
                 for key, rate, client, tool in (("usb-send", self.rates[0], "usb_host_out", "zita-j2a"),
                                                 ("usb-receive", self.rates[1], "usb_host_in", "zita-a2j")):
                     if rate:
-                        # u_audio refuses fewer than 4 periods (PERIODS [4 16] on 6.18 rpi-2712) and
-                        # periods over one page, and zita then fails to open the gadget card.
-                        desired[key] = [tool, "-j", client, "-d", f"hw:CARD={self.usb_card}", "-r", str(rate),
-                                        "-c", str(self.usb_channels), "-p", str(self.host_period), "-n", "4"]
+                        desired[key] = self.host_bridge_command(tool, client, rate)
             helper = str(Path(__file__).resolve().parent / "network/rpi-audio-network")
             for identity, transport, client in ((outputs.RTP, "rtp", "network_rtp_out"),
                                                 (outputs.LINK, "link", "network_link_out")):
@@ -1437,13 +1472,14 @@ class Daemon:
             if key in self.output_workers or now < self.output_retry.get(key, 0):
                 continue
             try:
-                self.session.reset_observer(key + ('/xruns' if key == 'observer' else '/dropped'))
+                self.session.reset_observer(key + ('/xruns' if key == 'observer' else '/resyncs'
+                                                   if key.startswith('usb-') else '/dropped'))
                 if key == 'observer':
                     self.observer_seen = None
                 self.output_metrics.pop(key, None)
                 self.output_workers[key] = Child(key, command, stop_signal=signal.SIGINT if key.startswith("usb-")
                                                  else signal.SIGTERM,
-                                                 on_line=None if key.startswith("usb-") else
+                                                 on_line=None if command[0].startswith("zita-") else
                                                  lambda line, identity=key: self.output_line(identity, line),
                                                  control=key.startswith("level-"))
                 if key.startswith('level-'):
@@ -1470,6 +1506,13 @@ class Daemon:
                 self.sdp_error = str(error)
                 log(f"rpi-audiod: SDP download unavailable: {error}")
                 self.next_sdp = now + 5
+
+    def bridge_metrics(self, key):
+        """{"bridge": the last status line of a running rpi-audio-hostbridge}, or {} (zita says nothing)."""
+        child, metrics = self.output_workers.get(key), self.output_metrics.get(key, {})
+        if not (child and child.alive() and metrics.get("event") == "status"):
+            return {}
+        return {"bridge": {k: v for k, v in metrics.items() if k != "event"}}
 
     def rtp_available(self):
         child = self.output_workers.get(outputs.RTP)
@@ -1614,9 +1657,10 @@ class Daemon:
         if self.hub:
             devices.append({"identity": outputs.USB, "name": "USB host", "virtual": True, "card": self.usb_card,
                             IN: {"channels": self.usb_channels, "running": bool(self.output_workers.get("usb-receive")),
-                                 "rate": capture_rate, "client": "usb_host_in"},
+                                 "rate": capture_rate, "client": "usb_host_in", **self.bridge_metrics("usb-receive")},
                             OUT: {"channels": self.usb_channels, "running": bool(self.output_workers.get("usb-send")),
-                                  "rate": playback_rate, "fixed_level": True, "client": "usb_host_out"}})
+                                  "rate": playback_rate, "fixed_level": True, "client": "usb_host_out",
+                                  **self.bridge_metrics("usb-send")}})
         for output in self.output_status():
             if output["identity"] not in (outputs.RTP, outputs.LINK) or not (self.hub or output["enabled"]):
                 continue
@@ -1777,6 +1821,11 @@ def cmd_status(_):
                 if side in d:
                     b = d[side]
                     print(f"    {side}: {b['channels']} ch, {'running' if b['running'] else 'waiting'}")
+                    m = b.get("bridge")
+                    if m:   # rpi-audio-hostbridge: its buffer in gadget frames, as of each JACK cycle's start
+                        print(f"      native bridge {m.get('state')}: buffer {m.get('fill_min')}/{m.get('fill_avg')}/"
+                              f"{m.get('fill_max')} frames (min/avg/max, margin {m.get('margin')}), "
+                              f"{m.get('ppm')} ppm, {m.get('resyncs')} resyncs, late up to {m.get('late_max_us')} us")
             continue
         if d.get("local"):
             b = d[OUT]

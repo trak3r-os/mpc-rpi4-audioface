@@ -1,4 +1,11 @@
-# Estado: 2026-11-07
+# Estado: 2026-11-11
+
+## Actualización del 11 de noviembre: puente nativo del gadget (sin medir con un host)
+
+- [código] **`rpi-audio-hostbridge`** (`bridge/audio/hostbridge.c` y `hostbridge_core.h`): puente propio entre el gadget y JACK para el modo Hub, en lugar de los dos zita. Trabaja dentro de la callback de JACK sobre el buffer ALSA del gadget (mmap), sin hilo ni cola propios. Se activa con `[usb] host_bridge = "native"`; **por defecto sigue zita**. Ajustes `host_margin_ms` (1,5) y `host_quality` (32). Descripción en [OUTPUTS.md](OUTPUTS.md#puente-nativo-del-gadget-opcional-sin-medir-con-un-host).
+- [repo] Núcleo comprobado en el portátil con un banco fuera del repo: senoide remuestreada 44,1 ↔ 48 kHz con la relación variando, 85–100 dB de SNR con calidad 32; el lazo simulado con ±300 ppm, paquetes de 250 µs y 300 µs de retraso aleatorio mantiene el buffer en 60–72 tramas sobre 66. Suite: los mismos resultados antes y después del cambio.
+- [Pi] Compilado en la Pi 5 en un directorio temporal (con las cabeceras de ALSA copiadas: **falta `libasound2-dev`**, que `install.sh` instala ahora). 26 canales con calidad 32: ~2 % de un núcleo por sentido. **Arranque contra el gadget real sin host transmitiendo**, con un jackd `dummy` privado: abre S16_LE, buffer 1024, acepta los umbrales y el silencio automático, registra los 26 puertos, espera (captura) o recorta (reproducción) y sale limpio con SIGINT. `rpi-audiod` no se tocó.
+- **Sin probar:** nada con un host transmitiendo. Falta desplegar, activar `native`, y medir con el portátil (latencia con `jack_iodelay`, integridad con `tonecheck`) y con la Force (soak, resyncs, si MPC tolera la corrección de ritmo). No hay pruebas automáticas del puente todavía.
 
 ## Actualización del 7 de noviembre: Pi 5
 

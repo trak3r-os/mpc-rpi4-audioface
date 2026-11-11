@@ -9,7 +9,7 @@ El modo `hub` usa el pHAT como reloj local a 48 kHz. El grafo JACK continúa aun
 | Destino | Adaptador | Estado |
 |---|---|---|
 | pHAT DAC | Puertos JACK `system:playback_N` | Salida local del motor Hub/Standalone |
-| Host USB | `zita-j2a`; retorno independiente `zita-a2j` | Puentes por sentido y frecuencia del gadget; conservan su número de canales |
+| Host USB | `zita-j2a`; retorno independiente `zita-a2j`. Opcional: `rpi-audio-hostbridge` (`[usb] host_bridge = "native"`) | Puentes por sentido y frecuencia del gadget; conservan su número de canales |
 | Network RTP | Adaptador nativo JACK → RTP L16 estéreo | Envío UDP, RTCP y descripción SDP; desactivado inicialmente |
 | Link Audio | Adaptador nativo con SDK oficial Ableton Link 4.1.1 fijado por commit | Envío estéreo con descubrimiento y suscripción; desactivado inicialmente |
 
@@ -20,6 +20,16 @@ En Hub, la reproducción de cada dispositivo USB físico se abre solo cuando alg
 La primera entrada en Hub convierte una sola vez los mapas USB guardados en rutas explícitas. Se pueden borrar después sin que reaparezcan. Los dispositivos nuevos se enrutan desde Send audio. Los mapas y el comportamiento automático del modo host original se conservan.
 
 Las escenas nuevas guardan mapas de canales, nombres, rutas, niveles, mute y activación de salidas. Las escenas antiguas sin nombres conservan los actuales. Los perfiles de host pueden guardar solo reservas, una copia completa independiente o un vínculo a una escena; los perfiles de usuario se conservan en hosts.json y los usuarios del grupo audio pueden editarlos sin root. El modo de motor y los parámetros de transporte no cambian al cargar una escena.
+
+## Puente nativo del gadget (opcional, sin medir con un host)
+
+`[usb] host_bridge = "native"` sustituye en Hub los dos zita del gadget por `rpi-audio-hostbridge` (`bridge/audio/hostbridge.c`, núcleo sin hardware en `hostbridge_core.h`), un proceso por sentido con los mismos clientes y puertos (`usb_host_in:capture_N`, `usb_host_out:playback_N`). Por defecto sigue `zita`; si el programa no está compilado, también.
+
+- **Sin hilo ni cola propios.** Todo ocurre en la callback de tiempo real de JACK: lee o escribe el buffer ALSA del gadget en su sitio (mmap, sin bloquear) y remuestrea entre el reloj del host y el local. El único buffer es el de ALSA, mantenido en `host_margin_ms` (1,5 ms por defecto) ajustando la relación del remuestreador con un lazo PI de 0,1 Hz.
+- **Retardo añadido por sentido:** el margen más el filtro (`host_quality` tramas; 32 = 0,7 ms y ~86 dB), además del periodo de JACK. zita añade ~5 ms por sentido (periodo ALSA + periodo JACK + filtro, y 4 periodos en reproducción).
+- **Los streams no se paran por xrun** (umbral de parada en el límite, y silencio automático en reproducción): si un ciclo llega tarde, el host recibe silencio al ritmo correcto y el puente vuelve de un salto a su margen. Cada salto cuenta como «USB resyncs» en la sesión.
+- **Para ajustarlo:** `rpi-audiod status` muestra por sentido el buffer mínimo/medio/máximo en tramas (referido al inicio del ciclo), la corrección en ppm, los resyncs y lo tarde que corre el puente dentro del ciclo. Se baja `host_margin_ms` mientras el mínimo quede lejos de 0.
+- `host_period` no se aplica al puente nativo. El buffer del gadget tiene que dar para dos periodos de JACK más márgenes; si no, el puente lo dice y no arranca.
 
 ## Transporte y SDP
 
