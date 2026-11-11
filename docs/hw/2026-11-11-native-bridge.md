@@ -85,6 +85,14 @@ Referencia del 2026-11-08 con el mismo método: Hub con zita 11,7–13,7 ms; mod
 - **No aplicado:** `--read-only` ni `--hw-watchdog`. Cambian el arranque y necesitan el visto bueno del usuario. Detalle en [2026-11-11-f5-appliance.md](2026-11-11-f5-appliance.md).
 - `deploy.sh` volvió a sobrescribir `/etc/rpi-audio/rpi-audio.toml`; se repuso desde `rpi-audio.toml.bak-20261111`, que es idéntico al de antes (comprobado con `cmp`).
 
+## Primera prueba con la Force (19:03–19:09)
+
+- [Pi, Force] La Pi pasó al puente nativo con `/etc/rpi-audio/rpi-audio.d/zz-force-test.toml` mientras la Force no transmitía; el gadget no se tocó. MPC abrió rpi-audio 15 s después (19:03:33): 26 canales, S16, 44,1 kHz, periodo 128, los dos PCM `RUNNING` (lectura de `/proc/asound` en la Force, solo lectura).
+- [Pi] Los dos puentes arrancaron sin resyncs. En 6 min, buffer de 54–76 tramas sobre 66, ±36–118 ppm y como mucho 410 µs de retraso dentro del ciclo. Contador de xruns de la sesión sin cambios (303).
+- [Pi, Force] **Una incidencia, a las 19:06:16:** MPC reinició sus dos PCM (`trigger_time` de 161,5 s a 325,2 s desde el arranque) y en ese mismo segundo la captura del puente hizo **1 resync** («USB return: jumped back to its buffer margin»). La reproducción no se movió, no hubo error USB en ningún lado y MPC siguió en rpi-audio. [?] No se sabe qué empezó primero. Que solo se resincronizara el sentido que viene de la Force apunta a un reinicio de MPC (un xrun propio o algo que hizo el usuario) que dejó un hueco en el OUT.
+- [Pi] **Cortada a los 6 min por temperatura:** de 74 a 79,6 °C con la Force conectada, sin ventilador, todavía con `throttled=0x0`.
+- Sin comprobar: si se oye algún clic en MPC, y si MPC mostró algún error.
+
 ## Pendiente
 
 - **La Force:** nada de esto está probado con ella. Falta saber si MPC tolera la corrección de ritmo y hacer un soak con el puente nativo.
