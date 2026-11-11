@@ -1,0 +1,23 @@
+[Unit]
+Description=rpi-audio: bring back the saved state on a read-only root (install.sh --read-only)
+# Enabled only by install.sh --read-only. The root is then a RAM overlay, so /var/lib/rpi-audio starts
+# every boot as it was in the image; this puts the newest saved copy (/boot/firmware/rpi-audio/) in place
+# before the gadget reads its low-latency setting and before the services start. Ordering only: the
+# gadget and the services start even when this fails.
+DefaultDependencies=no
+RequiresMountsFor=/boot/firmware /var/lib
+After=local-fs.target
+Before=rpi-audio-gadget.service rpi-audiod.service rpi-audio-ui.service shutdown.target
+Conflicts=shutdown.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/lib/rpi-audio/rpi-audio-persist restore
+# At shutdown this unit stops after the services (it started before them): the last changes are saved
+# once they have stopped writing, while /boot/firmware is still mounted.
+ExecStop=/usr/local/lib/rpi-audio/rpi-audio-persist save --now
+TimeoutSec=30
+
+[Install]
+WantedBy=sysinit.target

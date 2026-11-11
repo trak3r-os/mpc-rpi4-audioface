@@ -426,6 +426,20 @@ def test_stalled_pointer_restarts_the_feeder_in_the_loop(monkeypatch, tmp_path):
     assert zita_names(w) == ["mixer_in", "mixer_out"]
 
 
+def test_every_pass_of_the_loop_pets_the_service_watchdog(monkeypatch, tmp_path):
+    # rpi-audiod.service has WatchdogSec=: systemd restarts the service when the loop stops coming round,
+    # so the heartbeat is in the loop itself, also while jackd is being restarted.
+    w, d = make(monkeypatch, tmp_path)
+    beats = []
+    d.heartbeat = beats.append
+    w.devices = [usb_device(1, "mixer")]
+    streaming(w)
+    w.ptr_step = 0
+    w.seconds(6)
+    assert logged(w, "jackd stalled")
+    assert len(beats) == 60 and beats == sorted(beats) and beats[-1] - beats[0] == pytest.approx(5.9)
+
+
 def test_repeated_jackd_failures_fall_back_to_silence(monkeypatch, tmp_path):
     w, d = make(monkeypatch, tmp_path)
     w.devices = [usb_device(1, "mixer")]

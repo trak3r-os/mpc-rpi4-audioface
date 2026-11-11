@@ -423,6 +423,21 @@ También la CLI `rpi-audio`, `config/rpi-audio.toml` y `config/devices.d/` (perf
 
 **Aceptación:** 20 cortes de corriente sin corrupción, y la Force la encuentra en todos.
 
+- **2026-11-11, en el repo; sin probar en la Pi** [repo]. Las dos partes son opcionales y vienen apagadas. [Nota](hw/2026-11-11-f5-appliance.md).
+  - **Watchdogs:**
+    - `rpi-audiod` pasa a `Type=notify`, con `WatchdogSec=30s`. Manda `READY=1` y un `WATCHDOG=1` por segundo desde su bucle (`sdnotify.py`, sin dependencias).
+    - El gadget sigue sin watchdog y sin `Restart=`.
+    - `install.sh --hw-watchdog S|off` cambia el watchdog hardware. Raspberry Pi OS ya lo arma a 1 min en esta Pi [Pi].
+  - **Root de solo lectura:** `install.sh --read-only` activa `overlayroot=tmpfs` y `/boot/firmware` en `ro`, con las mismas ediciones que `raspi-config`.
+    - El estado (`/var/lib/rpi-audio`, `/var/lib/rpi-audio-ui`) se guarda en `/boot/firmware/rpi-audio/`, en dos ranuras con CRC, y se repone al arrancar (`persist.py`, `rpi-audio-persist`).
+    - Es el patrón de raspimidihub, sin su código.
+    - Cambios respecto a lo planeado arriba:
+      - `/etc/rpi-audio` se queda en la imagen;
+      - en la ranura van ficheros enteros y no un único JSON;
+      - no hay copias `.bak` aparte: la otra ranura hace de copia.
+  - **`deploy.sh`** se niega a desplegar en una Pi con el overlay activo y da los pasos; con `--volatile`, despliega igualmente.
+  - **Falta:** todo en hardware (lista y cortes en la nota). El arranque en 15 s, la matriz web y `apt-mark hold` no se han tocado.
+
 ### F2b: Evaluar la Pi 5
 
 Probable: con el Tracker en "10 OUT / 2 IN" y la tarjeta USB, el presupuesto FS de la Pi 4 no llega (§2). Se hace si F2 lo confirma, o si falta CPU. Ahora solo tienes la Pi 4 (con su fuente oficial), así que habría que comprarla; con 4 GB basta.

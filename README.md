@@ -118,6 +118,9 @@ Run only one of the two `install.sh` lines. Use `--host akai-force` if the host 
 | `--force-config` | Overwrites `/etc/rpi-audio/*`. By default existing files are kept, and the new versions are written next to them as `*.new` |
 | `--no-boot-config` | Does not add `dtoverlay=dwc2,dr_mode=peripheral` to the boot configuration |
 | `--tune-boot` | Also tunes the boot for audio: `threadirqs` in `cmdline.txt` and `dtparam=audio=off` (the Pi's own analogue audio) in `config.txt`, each with a backup. Only with this option; it takes effect after a reboot |
+| `--read-only` | Appliance mode, off by default: the root file system becomes a RAM overlay (`overlayroot`, the same change as `raspi-config`'s overlay file system), the boot partition is mounted read-only, and the saved state is kept on the boot partition. Power can then be cut without corrupting the root. Backs up what it edits, takes effect after a reboot, and prints how to undo it. See [the guide](docs/MANUAL.md#read-only-appliance-mode) |
+| `--hw-watchdog S\|off` | Sets the hardware watchdog timeout (5 to 300 seconds) or turns it off. Raspberry Pi OS already arms it at 1 minute. A watchdog reset skips the gadget's orderly shutdown; see [the guide](docs/MANUAL.md#watchdogs) |
+| `--volatile` | Installs into an active RAM overlay anyway; the change is gone at the next reboot |
 | `-y` | Does not ask before adding the gadget overlay |
 
 The installer also enables `rpi-audio-cpu.service`, which keeps the CPU governor at `performance` so the audio threads do not wake up on a slowed clock. `sudo systemctl disable --now rpi-audio-cpu` goes back to `ondemand`.
@@ -272,6 +275,8 @@ Deploy to a Pi from another machine (the Pi needs SSH and passwordless sudo):
 ```sh
 PI_HOST=user@pi-address tools/deploy.sh
 ```
+
+`deploy.sh` passes `--read-only`, `--hw-watchdog` and `--volatile` on to the installer. On a Pi whose root is already a RAM overlay it stops and prints the steps to turn the overlay off first, because the deploy would be gone at the next boot.
 
 Run the tests:
 
