@@ -6,6 +6,15 @@ BindsTo=rpi-audio-gadget.service
 Conflicts=rpi-audio-keepalive.service
 
 [Service]
+# READY=1 once the settings are loaded, then WATCHDOG=1 from every pass of the main loop (sdnotify.py).
+# A pass normally takes 0.1 s. The slowest normal ones take seconds: each external command it runs times
+# out after 2 s, and a mode change stops every child, each with 1 s to exit before it is killed (MIDI
+# replies go out from a thread of their own). 30 s leaves room for about ten seconds of that, three
+# times over: only a hang (a lock, a child stuck in the kernel) trips it, and then systemd aborts the
+# service and Restart= brings it back. The gadget unit has no watchdog and no Restart=, on purpose.
+Type=notify
+NotifyAccess=main
+WatchdogSec=30s
 EnvironmentFile=-/etc/rpi-audio/gadget.env
 ExecStart=/usr/local/lib/rpi-audio/rpi-audiod
 Restart=always

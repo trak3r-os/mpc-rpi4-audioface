@@ -1,0 +1,12 @@
+[Unit]
+Description=rpi-audio: save the state when it changes, on a read-only root (install.sh --read-only)
+After=rpi-audio-persist-restore.service
+
+[Path]
+# A change of any file in these folders (a write, a rename into place) starts the save.
+PathChanged=/var/lib/rpi-audio
+PathChanged=/var/lib/rpi-audio-ui
+Unit=rpi-audio-persist.service
+
+[Install]
+WantedBy=multi-user.target

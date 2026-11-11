@@ -1,0 +1,233 @@
+#!/usr/bin/env python3
+# SPDX-License-Identifier: GPL-3.0-or-later
+"""rpi-audio-persist: keep rpi-audio's runtime state on the boot partition when the root is read-only.
+
+  rpi-audio-persist restore      copy the newest valid saved state into /var/lib (rpi-audio-persist-restore.service,
+                                 before the gadget and the services start)
+  rpi-audio-persist save [--now] store the state if it changed (rpi-audio-persist.path starts it on every change;
+                                 it waits for the changes to settle unless --now)
+  rpi-audio-persist status       what each slot holds, and what restore would use
+
+Only installed and enabled by install.sh --read-only (docs/MANUAL.md). The store is two alternating slots
+with a CRC (persist.py) in /boot/firmware/rpi-audio/; the boot partition is remounted read-write only for
+the length of one write, under a lock, then synced and made read-only again.
+"""
+
+import argparse
+import contextlib
+import fcntl
+import os
+import stat
+import subprocess
+import sys
+import time
+from pathlib import Path
+
+import persist
+
+STORE = Path(os.environ.get("RPI_AUDIO_PERSIST_DIR", "/boot/firmware/rpi-audio"))
+ROOT = Path(os.environ.get("RPI_AUDIO_STATE_ROOT", "/var/lib"))
+LOCK = Path(os.environ.get("RPI_AUDIO_PERSIST_LOCK", "/run/rpi-audio-persist.lock"))
+# What changes at runtime, relative to ROOT, and the mode each file has there. Config (/etc/rpi-audio) is not
+# here: it is part of the image and only changes with install.sh, with the overlay turned off.
+TRACKED = {
+    "rpi-audio/slots.json": 0o664,
+    "rpi-audio/presets.json": 0o664,
+    "rpi-audio/hosts.json": 0o664,
+    "rpi-audio-ui/settings.json": 0o644,
+}
+MAX_FILE = 1 << 20
+SETTLE_S = 2.0    # a save waits this long for a burst of changes to end, and checks again after writing
+ROUNDS = 10
+
+
+def log(text):
+    print(f"rpi-audio-persist: {text}", flush=True)
+
+
+def mountpoint(path):
+    path = Path(os.path.realpath(path))
+    while not path.exists():
+        path = path.parent
+    while not os.path.ismount(path):
+        path = path.parent
+    return path
+
+
+@contextlib.contextmanager
+def writable(path):
+    """The filesystem that holds path, writable for the length of the block: remounted read-write when it is
+    read-only, then synced and remounted read-only again (the boot partition with install.sh --read-only)."""
+    mnt = mountpoint(path)
+    if not os.statvfs(mnt).f_flag & os.ST_RDONLY:
+        yield
+        return
+    subprocess.run(["mount", "-o", "remount,rw", str(mnt)], check=True, timeout=30)
+    try:
+        yield
+    finally:
+        os.sync()
+        done = subprocess.run(["mount", "-o", "remount,ro", str(mnt)], capture_output=True, text=True, timeout=30)
+        if done.returncode:
+            log(f"could not make {mnt} read-only again: {done.stderr.strip()}")
+
+
+@contextlib.contextmanager
+def exclusive(path):
+    """One restore or save at a time (the path unit's save and the shutdown save may meet)."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd = os.open(path, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        yield
+    finally:
+        os.close(fd)
+
+
+@contextlib.contextmanager
+def shared(path):
+    """rpi-audiod's own lock around slots.json and presets.json, held only while they are read, so the snapshot
+    never has one file from before an edit and the other from after it. Not created when missing."""
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+    except OSError:
+        yield
+        return
+    try:
+        fcntl.flock(fd, fcntl.LOCK_SH)
+        yield
+    finally:
+        os.close(fd)
+
+
+def read_regular(path):
+    """The bytes of a regular file, or None. Never follows a link: this runs as root, and the folders are
+    writable by the audio group, while the boot partition is readable by everyone."""
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    except OSError:
+        return None
+    try:
+        info = os.fstat(fd)
+        if not stat.S_ISREG(info.st_mode) or info.st_size > MAX_FILE:
+            return None
+        with os.fdopen(os.dup(fd), "rb") as f:
+            data = f.read(MAX_FILE + 1)
+        return data if len(data) <= MAX_FILE else None
+    finally:
+        os.close(fd)
+
+
+def snapshot(root):
+    with shared(root / "rpi-audio" / "slots.lock"):
+        files = {name: read_regular(root / name) for name in TRACKED}
+    return {name: data for name, data in files.items() if data is not None}
+
+
+def put(root, name, data):
+    """Writes one restored file through a new temporary file and a rename (a link in its place is replaced, not
+    followed), with the tracked mode and the owner of the file it replaces, or else of its folder."""
+    path = root / name
+    folder = path.parent
+    folder.mkdir(parents=True, exist_ok=True)
+    if read_regular(path) == data:
+        return False
+    try:
+        old = os.lstat(path)
+        owner = (old.st_uid, old.st_gid) if stat.S_ISREG(old.st_mode) else None
+    except OSError:
+        owner = None
+    if owner is None:
+        info = os.stat(folder)
+        owner = (info.st_uid, info.st_gid)
+    tmp = folder / f".{path.name}.restore.{os.getpid()}"
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+    try:
+        with os.fdopen(fd, "wb") as f:
+            f.write(data)
+            f.flush()
+            if os.geteuid() == 0:
+                os.fchown(f.fileno(), *owner)
+            os.fchmod(f.fileno(), TRACKED.get(name, 0o644))
+        os.replace(tmp, path)
+    except BaseException:
+        with contextlib.suppress(OSError):
+            os.unlink(tmp)
+        raise
+    return True
+
+
+def cmd_restore(store, root):
+    slots = store.slots()
+    for s in slots:
+        if not s.valid and s.error != "missing":
+            log(f"{s.name} skipped: {s.error}")
+    last = store.newest(slots)
+    if last is None:
+        log(f"no saved state in {store.folder}; keeping the files of the image")
+        return 0
+    changed = [name for name, data in sorted(last.files.items()) if name in TRACKED and put(root, name, data)]
+    log(f"restored {last.name} (save {last.seq}): " + (", ".join(changed) if changed else "nothing differed"))
+    return 0
+
+
+def cmd_save(store, root, lock, settle):
+    """Stores the state until two looks in a row agree: the path unit does not start this again for changes
+    made while it runs."""
+    for _ in range(ROUNDS):
+        if settle:
+            time.sleep(settle)
+        with exclusive(lock):
+            written = store.save(snapshot(root))
+        if written is None:
+            return 0
+        log(f"saved {', '.join(sorted(written.files)) or 'nothing'} as {written.name} (save {written.seq})")
+        if not settle:
+            return 0
+    log(f"the state still changes after {ROUNDS} saves; the next change saves it again")
+    return 0
+
+
+def cmd_status(store, root):
+    slots = store.slots()
+    last = store.newest(slots)
+    for s in slots:
+        mark = " <- newest" if last is s else ""
+        if s.valid:
+            log(f"{s.name}: save {s.seq}, {', '.join(sorted(s.files)) or 'no files'}{mark}")
+        else:
+            log(f"{s.name}: {s.error}")
+    mnt = mountpoint(store.folder)
+    log(f"{mnt} is mounted {'read-only' if os.statvfs(mnt).f_flag & os.ST_RDONLY else 'read-write'}")
+    if last is not None:
+        current = snapshot(root)
+        log("the live state matches it" if current == last.files else "the live state differs (not saved yet)")
+    return 0 if last is not None else 1
+
+
+def main():
+    p = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
+    p.add_argument("--store", type=Path, default=STORE, help=f"folder of the two slots (default {STORE})")
+    p.add_argument("--root", type=Path, default=ROOT, help=f"where the tracked files live (default {ROOT})")
+    p.add_argument("--lock", type=Path, default=LOCK, help=f"lock file (default {LOCK})")
+    sub = p.add_subparsers(dest="cmd", required=True)
+    sub.add_parser("restore")
+    s = sub.add_parser("save")
+    s.add_argument("--now", action="store_true", help="no wait for the changes to settle, one save")
+    sub.add_parser("status")
+    args = p.parse_args()
+    store = persist.Store(args.store, writable=lambda: writable(args.store))
+    try:
+        if args.cmd == "restore":
+            with exclusive(args.lock):
+                return cmd_restore(store, args.root)
+        if args.cmd == "save":
+            return cmd_save(store, args.root, args.lock, 0 if args.now else SETTLE_S)
+        return cmd_status(store, args.root)
+    except (OSError, subprocess.SubprocessError) as e:
+        log(f"{args.cmd} failed: {e}")
+        return 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())

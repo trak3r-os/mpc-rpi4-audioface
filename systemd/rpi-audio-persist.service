@@ -1,0 +1,11 @@
+[Unit]
+Description=rpi-audio: save the state to /boot/firmware/rpi-audio (started by rpi-audio-persist.path)
+# Never saves when the restore at boot did not succeed: the state of the image would then be saved as
+# the newest one.
+Requisite=rpi-audio-persist-restore.service
+After=rpi-audio-persist-restore.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/lib/rpi-audio/rpi-audio-persist save
+TimeoutSec=120

@@ -4,6 +4,7 @@ all in a temporary root (RPI_AUDIO_ROOT: nothing but file operations runs)."""
 
 import os
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -55,6 +56,7 @@ def test_fresh_install_lays_out_files(root):
     assert (lib / "network/network.cpp").is_file()
     assert (lib / "audio/gain.c").is_file()
     assert os.readlink(root / "usr/local/bin/rpi-audiod") == "/usr/local/lib/rpi-audio/rpi-audiod"
+    assert os.readlink(root / "usr/local/bin/rpi-audio-persist") == "/usr/local/lib/rpi-audio/rpi-audio-persist"
     etc = root / "etc/rpi-audio"
     assert (etc / "gadget.env").read_bytes() == (REPO / "config/gadget.env").read_bytes()
     assert (etc / "rpi-audio.toml").is_file()
@@ -224,6 +226,7 @@ def test_uninstall_and_purge(root):
     assert r.returncode == 0, r.stderr
     assert not (root / "usr/local/lib/rpi-audio").exists()
     assert not (root / "usr/local/bin/rpi-audiod").is_symlink()
+    assert not (root / "usr/local/bin/rpi-audio-persist").is_symlink()
     assert not list((root / "etc/systemd/system").glob("rpi-audio*"))
     assert not (root / "etc/modules-load.d/rpi-audio.conf").exists()
     assert not (root / "etc/systemd/journald.conf.d/rpi-audio.conf").exists()
@@ -389,3 +392,153 @@ def test_gadget_takes_low_usb_latency_from_the_saved_state(tmp_path, saved, requ
     done = subprocess.run([str(Path(__file__).resolve().parent.parent / "gadget" / "rpi-audio-gadget"), "check"],
                           env={**env, "GADGET_STATE": str(state)}, capture_output=True, text=True, check=True)
     assert f"req_number {requests}" in done.stdout
+
+
+# --- F5: watchdogs and the read-only root --------------------------------------------------------------------
+
+FSTAB = ("proc            /proc           proc    defaults          0       0\n"
+         "PARTUUID=0a1b2c3d-01  /boot/firmware  vfat    defaults          0       2\n"
+         "PARTUUID=0a1b2c3d-02  /               ext4    defaults,noatime  0       1\n")
+CMDLINE = "console=serial0,115200 console=tty1 root=PARTUUID=0a1b2c3d-02 rootfstype=ext4 fsck.repair=yes rootwait\n"
+
+
+def appliance(root, state=b'{"usb_latency": "low"}\n'):
+    """A Raspberry Pi OS boot partition, fstab and saved state, laid out as on the bench Pi."""
+    boot(root, "auto_initramfs=1\n[all]\n" + OVERLAY + "\n")
+    cl = cmdline(root, CMDLINE)
+    fstab = root / "etc/fstab"
+    fstab.parent.mkdir(parents=True, exist_ok=True)
+    fstab.write_text(FSTAB)
+    saved = root / "var/lib/rpi-audio/slots.json"
+    saved.parent.mkdir(parents=True, exist_ok=True)
+    saved.write_bytes(state)
+    return cl, fstab
+
+
+def sed(path, expression):
+    subprocess.run(["sed", "-i", "-e", expression, str(path)], check=True)
+
+
+def newest_slot(root):
+    sys.path.insert(0, str(REPO / "bridge" / "rpi-audiod"))
+    import persist
+    return persist.Store(root / "boot/firmware/rpi-audio").newest()
+
+
+def test_new_modules_and_persist_units_are_installed_but_not_enabled(root):
+    r = run(root, "--no-boot-config")
+    assert r.returncode == 0, r.stderr
+    lib = root / "usr/local/lib/rpi-audio"
+    assert (lib / "sdnotify.py").is_file() and (lib / "persist.py").is_file()
+    assert os.access(lib / "rpi-audio-persist", os.X_OK)
+    for unit in ("rpi-audio-persist-restore.service", "rpi-audio-persist.path", "rpi-audio-persist.service"):
+        assert (root / "etc/systemd/system" / unit).is_file(), unit
+    assert "rpi-audio-persist" not in r.stdout   # enabled only by --read-only
+    unit = (root / "etc/systemd/system/rpi-audiod.service").read_text()
+    assert "Type=notify" in unit and "WatchdogSec=30s" in unit
+    gadget = (root / "etc/systemd/system/rpi-audio-gadget.service").read_text()
+    assert "Watchdog" not in gadget and "Restart=" not in gadget
+
+
+def test_read_only_only_when_asked(root):
+    cl, fstab = appliance(root)
+    assert run(root, "-y").returncode == 0
+    assert cl.read_text() == CMDLINE and fstab.read_text() == FSTAB
+    assert not (root / "boot/firmware/rpi-audio").exists()
+    assert "Storage=persistent" in (root / "etc/systemd/journald.conf.d/rpi-audio.conf").read_text()
+    assert not (root / "etc/systemd/system.conf.d").exists()
+
+
+def test_read_only_edits_like_raspi_config_with_backups_and_saves_the_state(root):
+    cl, fstab = appliance(root)
+    r = run(root, "-y", "--read-only")
+    assert r.returncode == 0, r.stderr
+    assert cl.read_text() == "overlayroot=tmpfs " + CMDLINE
+    assert fstab.read_text() == FSTAB.replace("vfat    defaults ", "vfat    defaults,ro ")
+    assert len(list(cl.parent.glob("cmdline.txt.rpi-audio-*"))) == 1
+    assert [p.read_text() for p in fstab.parent.glob("fstab.rpi-audio-*")] == [FSTAB]
+    slot = newest_slot(root)
+    assert slot and slot.files == {"rpi-audio/slots.json": b'{"usb_latency": "low"}\n'}
+    assert "Storage=volatile" in (root / "etc/systemd/journald.conf.d/rpi-audio.conf").read_text()
+    assert "skipped: systemctl enable rpi-audio-persist-restore.service rpi-audio-persist.path" in r.stdout
+    assert "read-only root takes effect at the next reboot" in r.stdout
+    assert "raspi-config nonint disable_overlayfs" in r.stdout and "disable_bootro" in r.stdout
+
+    # Again (deploy.sh after a change): nothing edited twice, no new backups, the journal stays in RAM even
+    # without the option, and an unchanged state is not written again.
+    r = run(root, "-y", "--read-only")
+    assert r.returncode == 0, r.stderr
+    assert cl.read_text().count("overlayroot=tmpfs") == 1 and fstab.read_text().count(",ro") == 1
+    assert len(list(cl.parent.glob("cmdline.txt.rpi-audio-*"))) == 1
+    assert len(list(fstab.parent.glob("fstab.rpi-audio-*"))) == 1
+    assert newest_slot(root).seq == 1 and "takes effect at the next reboot" not in r.stdout
+    assert run(root, "-y").returncode == 0
+    assert "Storage=volatile" in (root / "etc/systemd/journald.conf.d/rpi-audio.conf").read_text()
+
+    # raspi-config's own disable_overlayfs and disable_bootro give the files back as they were.
+    sed(cl, r"s/\(.*\)overlayroot=tmpfs \(.*\)/\1\2/")
+    sed(fstab, r"s#\(.*/boot/firmware.*\)defaults,ro\(.*\)#\1defaults\2#")
+    assert cl.read_text() == CMDLINE and fstab.read_text() == FSTAB
+
+
+def test_read_only_needs_the_bookworm_boot_partition_and_goes_with_boot_config(root):
+    boot(root, "[all]\n" + OVERLAY + "\n", new_style=False)
+    r = run(root, "--read-only")
+    assert r.returncode == 1 and "needs" in r.stderr and "cmdline.txt" in r.stderr
+    assert run(root, "--read-only", "--no-boot-config").returncode == 2
+    for flag in (["--read-only"], ["--volatile"], ["--hw-watchdog", "10"]):
+        assert run(root, "--uninstall", *flag).returncode == 2, flag
+
+
+def test_an_active_overlay_refuses_to_install_unless_volatile(root):
+    appliance(root)
+    (root / "proc").mkdir()
+    (root / "proc/cmdline").write_text("overlayroot=tmpfs " + CMDLINE)
+    r = run(root, "-y")
+    assert r.returncode == 1 and "disable_overlayfs" in r.stderr
+    assert not (root / "usr/local/lib/rpi-audio").exists()
+    r = run(root, "-y", "--volatile")
+    assert r.returncode == 0, r.stderr
+    assert "gone at the next reboot" in r.stderr
+
+
+def test_read_only_with_an_active_overlay_leaves_fstab(root):
+    cl, fstab = appliance(root)
+    cl.write_text("overlayroot=tmpfs " + CMDLINE)
+    (root / "proc").mkdir()
+    (root / "proc/cmdline").write_text("overlayroot=tmpfs " + CMDLINE)
+    r = run(root, "-y", "--read-only", "--volatile")
+    assert r.returncode == 0, r.stderr
+    assert fstab.read_text() == FSTAB and "cannot be changed now" in r.stderr
+    assert cl.read_text().count("overlayroot=tmpfs") == 1
+
+
+def test_uninstall_keeps_the_read_only_root_but_says_how_to_leave_it(root):
+    appliance(root)
+    assert run(root, "-y", "--read-only").returncode == 0
+    r = run(root, "--uninstall")
+    assert r.returncode == 0, r.stderr
+    assert "raspi-config nonint disable_overlayfs" in r.stdout
+    assert (root / "boot/firmware/rpi-audio/slot0/state.bin").is_file()
+    assert not list((root / "etc/systemd/system").glob("rpi-audio-persist*"))
+    r = run(root, "--uninstall", "--purge")
+    assert r.returncode == 0, r.stderr
+    assert not (root / "boot/firmware/rpi-audio").exists()
+
+
+def test_hw_watchdog_only_when_asked_and_undone_by_uninstall(root):
+    conf = root / "etc/systemd/system.conf.d/60-rpi-audio-watchdog.conf"
+    assert run(root, "--no-boot-config").returncode == 0 and not conf.exists()
+    r = run(root, "--no-boot-config", "--hw-watchdog", "15")
+    assert r.returncode == 0, r.stderr
+    assert conf.read_text().endswith("[Manager]\nRuntimeWatchdogSec=15s\n")
+    assert "rpi-audio-gadget down" in r.stderr and f"sudo rm {conf}" in r.stdout
+    r = run(root, "--no-boot-config", "--hw-watchdog", "off")
+    assert r.returncode == 0 and conf.read_text().endswith("RuntimeWatchdogSec=off\n")
+    assert "rpi-audio-gadget down" not in r.stderr
+    assert run(root, "--uninstall").returncode == 0 and not conf.exists()
+
+
+@pytest.mark.parametrize("value", ["4", "301", "abc", "-1", "1m", "0100000"])
+def test_hw_watchdog_takes_seconds_or_off(root, value):
+    assert run(root, "--no-boot-config", "--hw-watchdog", value).returncode == 2

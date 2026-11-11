@@ -66,6 +66,7 @@ import incidents
 import readiness
 import outputs
 import routing
+import sdnotify
 import sdpserver
 import usb
 from audiod import IN, OUT
@@ -923,6 +924,7 @@ class Daemon:
         self.next_scan = self.next_routes = self.next_status = self.next_midi = self.next_midi_routes = 0.0
         self.stopping = False
         self.restart_requested = False
+        self.heartbeat = lambda now: None   # main() points it at systemd's watchdog (sdnotify.py)
         self.output_state = load_slots()  # initial gain must be correct before any source is connected
         self.output_workers, self.output_metrics = {}, {}
         self.output_retry = {}
@@ -1748,6 +1750,7 @@ class Daemon:
             log(f"rpi-audiod: gadget {self.card}, {self.channels} ch, sample size {self.ssize}")
         while not self.stopping:
             now = time.monotonic()
+            self.heartbeat(now)
             if not (self.standalone or self.hub):
                 self.follow_host(now)
             if self.target != self.mode or (self.target and not (self.jackd or self.player)):
@@ -2045,6 +2048,7 @@ def main():
         return cmd_change(" ".join(["preset", args.action, args.slot, *args.words]))
     stopping = False
     daemon = None
+    notify = sdnotify.Notifier(log=log)   # rpi-audiod.service is Type=notify, with WatchdogSec=
 
     def stop(*_):
         nonlocal stopping
@@ -2056,6 +2060,8 @@ def main():
     signal.signal(signal.SIGINT, stop)
     while not stopping:
         daemon = Daemon(load_config())
+        daemon.heartbeat = notify.watchdog
+        notify.ready()
         daemon.loop()
         if not daemon.restart_requested:
             break

@@ -517,6 +517,59 @@ nmcli radio wifi
 
 These query the system except for the explicit time-zone change. Do not put passwords in screenshots, public notes or this guide.
 
+### Read-only appliance mode
+
+A box that is switched off at the wall can lose power while a file is being written, and the SD card's file system can be damaged. Appliance mode guards against that. It is off by default; turn it on from this checkout:
+
+```sh
+sudo ./install.sh --read-only
+sudo reboot
+```
+
+It makes three changes, each with a backup next to the original (`*.rpi-audio-DATE`):
+
+- **The root file system becomes a RAM overlay.** It installs `overlayroot` and adds `overlayroot=tmpfs` to `/boot/firmware/cmdline.txt`. This is the same change as Raspberry Pi OS's own "overlay file system" in `raspi-config`. Nothing is written to the root partition any more, and everything written in a session is gone at the next boot.
+- **The boot partition is mounted read-only.** It adds `,ro` to the `/boot/firmware` line in `/etc/fstab`, as `raspi-config` does.
+- **The settings you change are saved on the boot partition.** These are the channel assignments, outputs, engine and USB latency (`slots.json`), the scenes (`presets.json`), the host profiles (`hosts.json`) and the display settings. They go to `/boot/firmware/rpi-audio/` and are put back at every boot, before the services start. Each save remounts the boot partition writable for a moment and then read-only again. The save alternates between two copies, each with a checksum. If the power is cut mid-save, the next boot uses the previous copy, so you lose at most the last change.
+
+The journal is kept in RAM in this mode, so `journalctl -b -1` (the previous boot) shows nothing. Everything under `/etc/rpi-audio/` is part of the image: edit it through the maintenance steps below.
+
+Check the saved state:
+
+```sh
+sudo rpi-audio-persist status
+findmnt / /boot/firmware
+```
+
+`status` lists both copies and says whether the live settings match the newest one. `findmnt` should show an `overlay` file system for `/` and `ro` among the options of `/boot/firmware`.
+
+**To update or change the configuration,** turn the overlay off first. Otherwise the update is gone at the next boot, and `tools/deploy.sh` refuses for that reason.
+
+```sh
+sudo raspi-config nonint disable_overlayfs && sudo reboot
+git pull && sudo ./install.sh --read-only    # or, from another machine: tools/deploy.sh --read-only
+sudo reboot
+```
+
+`--volatile` installs into the overlay anyway, for a test that the next reboot undoes.
+
+**To leave appliance mode:** run `sudo raspi-config nonint disable_overlayfs` and reboot, then run `sudo raspi-config nonint disable_bootro`. Next, run `sudo systemctl disable rpi-audio-persist-restore.service rpi-audio-persist.path`. Finally, run `sudo ./install.sh` without `--read-only`, which puts the journal back on disk. The installer prints these steps too. `/boot/firmware/rpi-audio/` can stay, since nothing reads it then; `sudo ./install.sh --uninstall --purge` removes it.
+
+Not yet tested on hardware: whether the boot partition's file system needs a check after a power cut during a save, how much RAM the overlay uses during a long session, and how much the frequent saves wear the card.
+
+### Watchdogs
+
+`rpi-audiod` reports to systemd while it runs (`WatchdogSec=30s`). If its main loop stops for 30 seconds, systemd stops it and starts it again. A normal pass takes about a tenth of a second, and the slowest normal ones take a few seconds, so only a hang trips it. `systemctl show rpi-audiod -p WatchdogUSec` shows the setting. The USB gadget service deliberately has no watchdog and is never restarted automatically, because repeated rebinds can lock up the USB controller.
+
+The hardware watchdog restarts the whole Pi if systemd itself stops responding. Raspberry Pi OS already turns it on with a 1-minute timeout. `--hw-watchdog` changes that timeout from the next reboot:
+
+```sh
+sudo ./install.sh --hw-watchdog 30     # 5 to 300 seconds
+sudo ./install.sh --hw-watchdog off
+```
+
+**Risk:** a hardware reset skips the gadget's orderly shutdown (`rpi-audio-gadget down`, which first disconnects cleanly from the host). The host sees the interface vanish mid-stream, as with a power cut. Some hosts take that badly. In one test, a reboot without that clean disconnect took down the host's whole internal USB hub, together with its disks (`docs/hw/2026-10-30-boot-soak.md`, in Spanish). Use a timeout no shorter than you need. The setting is in `/etc/systemd/system.conf.d/60-rpi-audio-watchdog.conf`; delete that file and reboot to go back to the system's default. `install.sh --uninstall` deletes it too.
+
 ## 15. Wiring and plain-language glossary
 
 ![Pins used by this assembly](manual/img/13-pins.png)
