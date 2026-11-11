@@ -21,7 +21,9 @@ La primera entrada en Hub convierte una sola vez los mapas USB guardados en ruta
 
 Las escenas nuevas guardan mapas de canales, nombres, rutas, niveles, mute y activación de salidas. Las escenas antiguas sin nombres conservan los actuales. Los perfiles de host pueden guardar solo reservas, una copia completa independiente o un vínculo a una escena; los perfiles de usuario se conservan en hosts.json y los usuarios del grupo audio pueden editarlos sin root. El modo de motor y los parámetros de transporte no cambian al cargar una escena.
 
-## Puente nativo del gadget (opcional, sin medir con un host)
+## Puente nativo del gadget (opcional)
+
+Medido con un portátil como host, sin probar con la Force. Con el margen por defecto, la parte de la Pi en el viaje de ida y vuelta es unos 5–6 ms menor que con zita, y el puente usa unas 4 veces menos CPU. Detalle en [hw/2026-11-11-native-bridge.md](hw/2026-11-11-native-bridge.md).
 
 `[usb] host_bridge = "native"` sustituye en Hub los dos zita del gadget por `rpi-audio-hostbridge` (`bridge/audio/hostbridge.c`, núcleo sin hardware en `hostbridge_core.h`), un proceso por sentido con los mismos clientes y puertos (`usb_host_in:capture_N`, `usb_host_out:playback_N`). Por defecto sigue `zita`; si el programa no está compilado, también.
 
