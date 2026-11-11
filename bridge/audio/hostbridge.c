@@ -52,8 +52,19 @@ static atomic_uint resyncs, alsa_errors, cycles;
 static atomic_int state, fill_min = INT32_MAX, fill_max = INT32_MIN, late_max, ppm10;
 static atomic_long fill_sum;
 
+static jack_latency_range_t added;       // what this bridge adds, in JACK frames
+
 static void on_signal(int sig) { (void)sig; stopping = 1; }
 static void on_shutdown(void *arg) { (void)arg; atomic_store(&server_alive, 0); }
+
+// JACK keeps a port's latency only when it is set from this callback; set anywhere else, the
+// next graph change overwrites it. Our ports are terminal, so only our own direction is ours.
+static void on_latency(jack_latency_callback_mode_t mode, void *arg) {
+    (void)arg;
+    if ((mode == JackCaptureLatency) != (capture != 0)) return;
+    for (unsigned c = 0; c < channels; ++c)
+        if (ports[c]) jack_port_set_latency_range(ports[c], mode, &added);
+}
 static int on_change(jack_nframes_t value, void *arg) {
     (void)arg;
     if (value != *(unsigned *)arg) atomic_store(&failed, -1);
@@ -381,9 +392,9 @@ int main(int argc, char **argv) {
     hb_loop_init(&loop);
 
     // What this bridge adds, for JACK's latency reports: the margin and the filter, in JACK frames.
-    const double added = capture ? (margin + quality) * (double)jack_rate / rate
+    const double extra = capture ? (margin + quality) * (double)jack_rate / rate
                                  : margin * (double)jack_rate / rate + quality;
-    jack_latency_range_t range = {.min = (jack_nframes_t)lrint(added), .max = (jack_nframes_t)lrint(added)};
+    added.min = added.max = (jack_nframes_t)lrint(extra);
     for (unsigned c = 0; c < channels; ++c) {
         char port[32];
         snprintf(port, sizeof port, capture ? "capture_%u" : "playback_%u", c + 1);
@@ -395,8 +406,8 @@ int main(int argc, char **argv) {
             jack_client_close(client);
             return 1;
         }
-        jack_port_set_latency_range(ports[c], capture ? JackCaptureLatency : JackPlaybackLatency, &range);
     }
+    jack_set_latency_callback(client, on_latency, NULL);
     jack_on_shutdown(client, on_shutdown, NULL);
     jack_set_buffer_size_callback(client, on_change, &period);
     jack_set_sample_rate_callback(client, on_change, &jack_rate);
