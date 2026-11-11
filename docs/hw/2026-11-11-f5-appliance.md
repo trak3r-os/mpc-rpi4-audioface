@@ -157,7 +157,7 @@ Sin el host transmitiendo, o aceptando el riesgo del hub (incidente del 2026-10-
 3. **Persistencia:** cambiar un ajuste, por ejemplo la latencia USB baja en Outputs.
    - Ver el guardado en `journalctl -u rpi-audio-persist`.
    - Reiniciar y comprobar que sigue, y que el gadget sale con ese ajuste.
-4. **Watchdog del servicio:** `kill -STOP` al proceso principal de `rpi-audiod`. A los 30 s systemd lo aborta y lo reinicia.
+4. **Watchdog del servicio:** `kill -STOP` al proceso principal de `rpi-audiod`. A los 30 s systemd lo aborta y lo reinicia. *Hecho el 2026-11-11 sin `--read-only`: salta a los 30 s y el gadget no se reenlaza ([sesión](2026-11-11-native-bridge.md#f5-desplegado-por-defecto)).*
    - El gadget no se reenlaza.
    - Para ver los estados y los mensajes, `journalctl -u rpi-audiod`.
 5. **20 cortes de corriente** en momentos al azar, varios durante un guardado (cambiar ajustes justo antes de cortar). Tras cada arranque, comprobar:

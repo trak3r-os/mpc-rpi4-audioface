@@ -80,6 +80,7 @@ Referencia del 2026-11-08 con el mismo método: Hub con zita 11,7–13,7 ms; mod
 ## F5 desplegado (por defecto)
 
 - [Pi] `rpi-audiod.service` es ahora `Type=notify`, con `NotifyAccess=main` y `WatchdogUSec=30s`. Tras reiniciarlo, a los 55 s seguía `active/running` con `NRestarts=0`, el mismo instante de arranque y ningún mensaje de watchdog. El latido llega.
+- [Pi] **El watchdog salta** (punto 4 de la lista de F5, una vez, sin host transmitiendo): `kill -STOP` al proceso principal a las 18:57:08. A los 30 s, `Watchdog timeout (limit 30s)!`, SIGABRT y SIGKILL a sus hijos (jackd, zita, medidores), `Failed with result 'watchdog'` y reinicio. A las 18:57:39 estaba otra vez `active/running`, con `NRestarts=1`. El gadget no se tocó: sigue activo desde el 2026-11-09 a la 01:31.
 - [Pi] `RuntimeWatchdogUSec=1min`: Raspberry Pi OS ya arma de serie el watchdog hardware.
 - **No aplicado:** `--read-only` ni `--hw-watchdog`. Cambian el arranque y necesitan el visto bueno del usuario. Detalle en [2026-11-11-f5-appliance.md](2026-11-11-f5-appliance.md).
 - `deploy.sh` volvió a sobrescribir `/etc/rpi-audio/rpi-audio.toml`; se repuso desde `rpi-audio.toml.bak-20261111`, que es idéntico al de antes (comprobado con `cmp`).
