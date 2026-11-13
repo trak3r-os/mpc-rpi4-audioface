@@ -1,11 +1,14 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """rpi-audiod's USB bandwidth logic: the isochronous load of a full-speed device from its
-descriptors, and the per-bus budget (docs/PLAN.md, "Presupuesto USB Full-Speed"). Nothing
+descriptors, and the budget per root port (docs/PLAN.md, "Presupuesto USB Full-Speed"). Nothing
 here touches the system, so tests/test_usb.py checks it on any machine."""
 
 from typing import NamedTuple
 
-FS_BUDGET = 1099   # B per frame the Pi 4's VL805 accepted (docs/hw/2026-10-29-f2-usb-devices.md); not measured on a Pi 5
+# B per frame the Pi 4's VL805 accepted for the full-speed devices behind its internal hub
+# (docs/hw/2026-10-29-f2-usb-devices.md). Not measured per root port on a Pi 5, whose RP1 carried
+# 1108 B on one bus split over two root ports without an error (docs/hw/2026-11-13-perf-fan.md).
+FS_BUDGET = 1099
 ISOCHRONOUS = 1
 LABEL_MAX = 20   # longest port label kept, in characters: one line of the display
 
@@ -62,6 +65,24 @@ def bus_number(bus):
     return int(bus) if isinstance(bus, str) and bus.isdigit() else None
 
 
+def root_port(port, bus=""):
+    """The root port a device hangs off, "1-2" for the sysfs port path "1-2" or "1-2.4.1": what shares a
+    full-speed budget. An xHCI controller schedules each root port on its own, so devices on two ports
+    of one bus do not compete; everything behind one hub does (its transaction translator splits one
+    1 ms frame, and a hub's per-port translators are not counted on). Only the bus ("3") when the port
+    is not known, "" when neither is."""
+    port = port or ""
+    if "-" in port:
+        bus_part, rest = port.split("-", 1)
+        return f"{bus_part}-{rest.split('.', 1)[0]}"
+    return str(bus or "")
+
+
+def port_order(port):
+    """Sort key of a sysfs port path: "1-2" < "1-10" < "3-1.4", numbers compared as numbers."""
+    return [int(n) for n in str(port).replace("-", ".").split(".") if n.isdigit()]
+
+
 def port_labels(table):
     """The `[usb] port_labels` table ({sysfs port path: short label}) with only its usable entries."""
     if not isinstance(table, dict):
@@ -94,10 +115,11 @@ def direction_load(speed, altsets, plan, interfaces):
     return max(loads) if loads else None
 
 
-def budget_reason(load, used, budget, bus):
-    """Why a bridge of `load` B cannot start with `used` B taken on its bus, or None when it
-    fits (or the check is off: budget 0, or no known load)."""
+def budget_reason(load, used, budget, port):
+    """Why a bridge of `load` B cannot start with `used` B taken on its root port (root_port()), or
+    None when it fits (or the check is off: budget 0, or no known load)."""
     if not budget or not load or load <= budget - used:
         return None
     free = max(budget - used, 0)
-    return f"USB full-speed budget: needs {load} B, {free} B of {budget} B free on bus {bus}"
+    where = f"port {port}" if "-" in port else f"bus {port or '?'}"
+    return f"USB full-speed budget: needs {load} B, {free} B of {budget} B free on {where}"

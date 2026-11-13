@@ -158,6 +158,8 @@ def test_budget_reason():
     assert usb.budget_reason(200, 903, 1099, "1") == "USB full-speed budget: needs 200 B, 196 B of 1099 B free on bus 1"
     assert usb.budget_reason(192, 1000, 1099, "1") == "USB full-speed budget: needs 192 B, 99 B of 1099 B free on bus 1"
     assert usb.budget_reason(192, 1200, 1099, "1").startswith("USB full-speed budget: needs 192 B, 0 B of")
+    assert usb.budget_reason(192, 1000, 1099, "1-2").endswith("99 B of 1099 B free on port 1-2")
+    assert usb.budget_reason(192, 1000, 1099, "").endswith("free on bus ?")
     assert usb.budget_reason(192, 1000, 0, "1") is None   # check off
     assert usb.budget_reason(0, 1099, 1099, "1") is None  # nothing to open (high speed)
 
@@ -208,7 +210,7 @@ def bridges(monkeypatch, *specs):
 def tick(d, budget, now=0.0):
     cfg = {"bridge": {}}
     for b in d.bridges.values():
-        b.tick(cfg, now, d.bus_used(b), budget)
+        b.tick(cfg, now, d.port_used(b), budget)
 
 
 def test_bridges_share_the_budget_in_order(monkeypatch):
@@ -459,6 +461,9 @@ def test_speed_bus_and_port_labels_from_sysfs_text():
     assert [usb.speed_mbit(v) for v in ("12", "480", "1.5", "5000", "", None, "x")] == \
         [12, 480, 1.5, 5000, None, None, None]
     assert [usb.bus_number(v) for v in ("3", "003", "", None, "x")] == [3, 3, None, None, None]
+    cases = (("1-2", "1"), ("1-2.4.1", "1"), ("3-1.3", ""), ("", "3"), ("", ""), (None, None))
+    assert [usb.root_port(p, b) for p, b in cases] == ["1-2", "1-2", "3-1", "3", "", ""]
+    assert sorted(["3-1.4", "1-10", "1-2", "3"], key=usb.port_order) == ["1-2", "1-10", "3", "3-1.4"]
     assert usb.port_labels({"1-1": " top blue ", "1-2": "", " ": "x", 3: "y", "1-3": "z" * 40}) == {
         "1-1": "top blue", "3": "y", "1-3": "z" * usb.LABEL_MAX}
     assert usb.port_labels(None) == usb.port_labels("1-1") == usb.port_labels(["a"]) == {}
@@ -471,28 +476,46 @@ def plugged(d, **where):
     d.rates, d.mode, d.jack_ready, d.channels, d.midi = (0, 0), None, False, 26, None
     d.devices = {b.dev.identity: b.dev for b in d.bridges.values()}
     d.muted, d.volumes, d.route_state, d.standalone, d.midi_state = {IN: set(), OUT: set()}, {}, {}, False, {}
-    return {e["identity"]: e for e in d.status_data()["devices"]}, d.status_data()["usb_buses"]
+    return {e["identity"]: e for e in d.status_data()["devices"]}, d.status_data()["usb_ports"]
 
 
 def test_status_says_which_port_and_bus_each_device_is_on(monkeypatch):
-    # the mixer and the tracker on the same bus: the second mixer direction does not fit
-    d, _ = bridges(monkeypatch, ("tracker", "3", 903), ("3-2-08bb:2902", "3", 196), ("3-3-08bb:2903", "3", 192),
+    # behind one hub on root port 3-1 (the Pi 4's VL805 layout): the second mixer direction does not fit
+    d, _ = bridges(monkeypatch, ("tracker", "3", 903), ("3-1.2-08bb:2902", "3", 196), ("3-1.3-08bb:2903", "3", 192),
                    ("gp", "1", 0))
-    tick(d, 1099)
-    d.cfg = {"usb": {"port_labels": {"3-2": "top black"}}}
-    where = {"tracker": ("3-1", "12"), "3-2-08bb:2902": ("3-2", "12"), "3-3-08bb:2903": ("3-3", "12"),
+    d.cfg = {"usb": {"port_labels": {"3-1.2": "top black"}}}
+    where = {"tracker": ("3-1.1", "12"), "3-1.2-08bb:2902": ("3-1.2", "12"), "3-1.3-08bb:2903": ("3-1.3", "12"),
              "gp": ("1-1", "480")}
-    devices, buses = plugged(d, **where)
-    assert devices["usb-tracker"]["usb"] == {"bus": 3, "port": "3-1", "speed": 12, "by_port": False}
-    assert devices["usb-3-2-08bb:2902"]["usb"] == {"bus": 3, "port": "3-2", "speed": 12, "label": "top black",
-                                                   "by_port": True}
+    plugged(d, **where)
+    tick(d, 1099)
+    devices, ports = plugged(d, **where)
+    assert devices["usb-tracker"]["usb"] == {"bus": 3, "port": "3-1.1", "speed": 12, "by_port": False}
+    assert devices["usb-3-1.2-08bb:2902"]["usb"] == {"bus": 3, "port": "3-1.2", "speed": 12, "label": "top black",
+                                                     "by_port": True}
     assert devices["usb-gp"]["usb"] == {"bus": 1, "port": "1-1", "speed": 480, "by_port": False}
-    assert devices["usb-3-3-08bb:2903"][IN]["blocked"].startswith("USB full-speed budget")
+    assert devices["usb-3-1.3-08bb:2903"][IN]["blocked"] == \
+        "USB full-speed budget: needs 192 B, 0 B of 1099 B free on port 3-1"
     # the load is what the budget check counts as held, the demand also what waits for it
-    assert buses == [{"bus": 1, "fs_load": 0, "fs_demand": 0, "fs_budget": 1099},
-                     {"bus": 3, "fs_load": 1099, "fs_demand": 1291, "fs_budget": 1099}]
+    assert ports == [{"port": "1-1", "bus": 1, "fs_load": 0, "fs_demand": 0, "fs_budget": 1099},
+                     {"port": "3-1", "bus": 3, "fs_load": 1099, "fs_demand": 1291, "fs_budget": 1099}]
     d.bridges[("usb-tracker", IN)].stop()   # it stops holding its share; what everyone wants stays the same
-    assert d.usb_buses()[1]["fs_load"] == 196 and d.usb_buses()[1]["fs_demand"] == 1291
+    assert d.usb_ports()[1]["fs_load"] == 196 and d.usb_ports()[1]["fs_demand"] == 1291
+
+
+def test_root_ports_of_one_bus_have_a_budget_each(monkeypatch):
+    # the Pi 5: the tracker and the mixer straight into the two root ports of one RP1 controller, 1108 B in all,
+    # which the controller carried without an error (docs/hw/2026-11-13-perf-fan.md)
+    d, _ = bridges(monkeypatch, ("tracker", "1", 720), ("1-2-08bb:2902", "1", 196), ("1-2-08bb:2903", "1", 192))
+    plugged(d, tracker=("1-1", "12"), **{"1-2-08bb:2902": ("1-2", "12"), "1-2-08bb:2903": ("1-2", "12")})
+    tick(d, 1099)
+    assert all(b.child and not b.blocked for b in d.bridges.values())
+    assert [(e["port"], e["fs_load"]) for e in d.usb_ports()] == [("1-1", 720), ("1-2", 388)]
+    # a device moved behind a hub on the same root port shares it again
+    d.bridges[("usb-tracker", IN)].dev.port = "1-2.1"
+    d.bridges[("usb-tracker", IN)].stop()
+    tick(d, 1099, 100.0)
+    assert d.bridges[("usb-tracker", IN)].blocked == \
+        "USB full-speed budget: needs 720 B, 711 B of 1099 B free on port 1-2"
 
 
 def test_status_leaves_out_what_sysfs_did_not_say(monkeypatch):

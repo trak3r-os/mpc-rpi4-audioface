@@ -1311,42 +1311,61 @@ def usb_blocked(dev):
             dev[side].get("blocked")}
 
 
+def usb_root_port(info):
+    """The root port a device hangs off ("1-2" for the path "1-2" or "1-2.4"), which is what shares a
+    full-speed budget (bridge/rpi-audiod/usb.py, root_port()); only the bus ("3") when the path is not
+    known, None when neither is."""
+    port = info.get("port") or ""
+    if "-" in port:
+        bus, rest = port.split("-", 1)
+        return f"{bus}-{rest.split('.', 1)[0]}"
+    return None if info.get("bus") is None else str(info["bus"])
+
+
+def usb_order(key):
+    """Sort key of a port path or bus number as text, numbers compared as numbers; unknown last."""
+    return (key is None, [int(n) for n in re.findall(r"\d+", key or "")])
+
+
 def usb_groups(status):
-    """[(bus number or None, summary, [device, ...])] of the USB audio devices by bus, buses and ports in
-    order. summary is the status's usb_buses entry for the bus ({} when it has none)."""
-    summaries = {b.get("bus"): b for b in status.get("usb_buses", []) if isinstance(b, dict)}
+    """[(root port or None, summary, [device, ...])] of the USB audio devices by the root port they hang off,
+    ports in order. summary is the status's usb_ports entry for that port ({} when it has none)."""
+    summaries = {b.get("port"): b for b in status.get("usb_ports", []) if isinstance(b, dict)}
     groups = {}
     for dev in status.get("devices", []):
         info = dev.get("usb")
         if isinstance(info, dict) and not dev.get("virtual") and not dev.get("local"):
-            groups.setdefault(info.get("bus"), []).append(dev)
-    order = sorted(groups, key=lambda b: (b is None, b if isinstance(b, int) else 0))
-    return [(bus, summaries.get(bus, {}),
-             sorted(groups[bus], key=lambda d: [int(n) for n in re.findall(r"\d+", d["usb"].get("port") or "")]))
-            for bus in order]
+            groups.setdefault(usb_root_port(info), []).append(dev)
+    return [(key, summaries.get(key, {}), sorted(groups[key], key=lambda d: usb_order(d["usb"].get("port"))[1]))
+            for key in sorted(groups, key=usb_order)]
 
 
-def usb_bus_over(summary):
-    """True when a bus has no full-speed budget left, or a bridge waits for it."""
+def usb_over(summary):
+    """True when a root port has no full-speed budget left, or a bridge waits for it."""
     budget = summary.get("fs_budget") or 0
     return bool(budget) and max(summary.get("fs_load", 0), summary.get("fs_demand", 0)) >= budget
 
 
-def usb_bus_load(summary):
-    """388/1099: the full-speed bytes per frame held on a bus against its budget (/off when the check is off)."""
+def usb_load(summary):
+    """388/1099: the full-speed bytes per frame held on a root port against its budget (/off when the check
+    is off)."""
     if "fs_load" not in summary:
         return "?"
     return f"{summary['fs_load']}/{summary.get('fs_budget') or 'off'}"
 
 
-def usb_bus_header(bus, summary):
-    """Bus 1  FS 388/1099, with ! after it when the bus is out of budget."""
-    return f"Bus {'?' if bus is None else bus}  FS {usb_bus_load(summary)}" + ("!" if usb_bus_over(summary) else "")
+def usb_group_header(key, summary):
+    """Port 1-2  FS 388/1099, with ! after it when the port is out of budget; Bus 3 when only the bus is
+    known. Narrower when the line would not fit: one space, then without "Port"."""
+    tail = f"FS {usb_load(summary)}" + ("!" if usb_over(summary) else "")
+    names = [f"Port {key}", key] if key and "-" in key else [f"Bus {key or '?'}"]
+    lines = [f"{name}{gap}{tail}" for name in names for gap in ("  ", " ")]
+    return next((line for line in lines if len(line) <= COLS), lines[-1])
 
 
 class USBPorts(Menu):
-    """Every USB audio device under the bus (controller) and port it is plugged into, with each bus's
-    full-speed load against its budget: why a device was refused, and which port to move it to."""
+    """Every USB audio device under the root port it hangs off, with each root port's full-speed load
+    against its budget: why a device was refused, and which port to move it to."""
     title = "USB ports"
     icon = "usb"
 
@@ -1364,9 +1383,9 @@ class USBPorts(Menu):
     def rows(self, ui, status, now):
         visible = BODY - (1 if ui.message or ui.notice else 2 if ui.notification else 0)
         lines, cursor_line, header, n = [], 0, 0, 0
-        for bus, summary, devices in usb_groups(status):
+        for key, summary, devices in usb_groups(status):
             head = len(lines)
-            lines.append(Row(fit(usb_bus_header(bus, summary))))
+            lines.append(Row(fit(usb_group_header(key, summary))))
             for dev in devices:
                 if n == self.cursor:
                     cursor_line, header = len(lines), head
@@ -1379,7 +1398,7 @@ class USBPorts(Menu):
         self.cursor = min(self.cursor, max(n - 1, 0))
         self.top = min(max(self.top, cursor_line - visible + 1), cursor_line)
         if self.top > header and cursor_line - header < visible:
-            self.top = header   # show the cursor's bus header with it when both fit
+            self.top = header   # show the cursor's port header with it when both fit
         scroll = (self.top, len(lines), visible) if len(lines) > visible else ()
         out = [Row(fit(self.title), True, icon=self.icon, scroll=scroll, label=self.title)]
         out += lines[self.top:self.top + visible] or [Row(fit(" No USB audio devices"))]
@@ -1417,7 +1436,8 @@ class USBPortInfo(Info):
         speed = info.get("speed")
         rows += [f"Path: {info.get('port') or 'unknown'}",
                  f"Speed: {speed:g} Mbit/s" if isinstance(speed, (int, float)) else "Speed: unknown"]
-        summary = next((b for b in status.get("usb_buses", []) if b.get("bus") == bus), {})
+        key = usb_root_port(info)
+        summary = next((b for b in status.get("usb_ports", []) if key and b.get("port") == key), {})
         fast = isinstance(info.get("speed"), (int, float)) and info["speed"] > 12
         loads = [(label, dev[side].get("fs_load")) for side, label in SIDES if isinstance(dev.get(side), dict)]
         if fast:
@@ -1425,7 +1445,7 @@ class USBPortInfo(Info):
         else:
             rows += [f"FS {label}: {f'{load} B' if load else 'none'}" for label, load in loads]
         if summary:
-            rows.append(f"Bus FS: {usb_bus_load(summary)} B")
+            rows.append(f"Port FS: {usb_load(summary)} B")
         identity = dev["identity"]
         rows += ["ID:", *[identity[n:n + 20] for n in range(0, len(identity), 20)]]
         if info.get("by_port") is True:

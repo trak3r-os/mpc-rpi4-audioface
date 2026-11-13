@@ -372,7 +372,7 @@ def status_reply(data, limit=STATUS_LIMIT):
     data.pop("host_profiles", None)
     data.pop("host_profile_details", None)
     data.pop('active_scene', None)
-    data.pop("usb_buses", None)
+    data.pop("usb_ports", None)
     data.pop("outputs", None)  # adapter diagnostics stay in the full local status file
     data.pop("time", None)
     data["devices"] = [dev for dev in data.get("devices", []) if not dev.get("virtual")]

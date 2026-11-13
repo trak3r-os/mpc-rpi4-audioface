@@ -558,23 +558,31 @@ def test_profile_readiness_and_session_history_have_human_readable_details():
 
 # --- USB ports --------------------------------------------------------------------------------
 
-def usb_status(mixer_bus=3):
-    """The real two-controller layout: a high-speed device and the mixer, and the tracker on the other bus."""
-    mixer = {"identity": "usb-3-2-08bb:2902", "card": "CODEC", "name": "Mixer",
-             "usb": {"bus": mixer_bus, "port": f"{mixer_bus}-2", "speed": 12, "by_port": True},
+def usb_status(mixer_port="3-1.2"):
+    """A high-speed device on bus 1, and the tracker with the mixer either behind one hub on root port 3-1 (the
+    Pi 4's layout: they share its full-speed budget) or the mixer on a root port of its own."""
+    root = mixer_port.split(".")[0]
+    bus = int(mixer_port.split("-")[0])
+    mixer = {"identity": f"usb-{mixer_port}-08bb:2902", "card": "CODEC", "name": "Mixer",
+             "usb": {"bus": bus, "port": mixer_port, "speed": 12, "by_port": True},
              "in": {"channels": 2, "fs_load": 196}, "out": {"channels": 2, "fs_load": 192}}
-    full = {"bus": 3, "fs_load": 1099, "fs_demand": 1291, "fs_budget": 1099}
-    if mixer_bus == 3:
-        mixer["out"]["blocked"] = "USB full-speed budget: needs 192 B, 0 B of 1099 B free on bus 3"
-    buses = [{"bus": 1, "fs_load": 0, "fs_demand": 0, "fs_budget": 1099}, full] if mixer_bus == 3 else \
-        [{"bus": 1, "fs_load": 388, "fs_demand": 388, "fs_budget": 1099},
-         {"bus": 3, "fs_load": 903, "fs_demand": 903, "fs_budget": 1099}]
+    gp = {"port": "1-1", "bus": 1, "fs_load": 0, "fs_demand": 0, "fs_budget": 1099}
+    if root == "3-1":
+        mixer["out"]["blocked"] = "USB full-speed budget: needs 192 B, 0 B of 1099 B free on port 3-1"
+        ports = [gp, {"port": "3-1", "bus": 3, "fs_load": 1099, "fs_demand": 1291, "fs_budget": 1099}]
+    else:
+        ports = [gp, {"port": root, "bus": bus, "fs_load": 388, "fs_demand": 388, "fs_budget": 1099},
+                 {"port": "3-1", "bus": 3, "fs_load": 903, "fs_demand": 903, "fs_budget": 1099}]
     return {"devices": [
         {"identity": GP, "card": "GP150", "name": "Guitar Rig", "usb": {"bus": 1, "port": "1-1", "speed": 480}},
-        {"identity": TRK, "card": "Tracker", "name": "Tracker", "usb": {"bus": 3, "port": "3-1", "speed": 12},
+        {"identity": TRK, "card": "Tracker", "name": "Tracker", "usb": {"bus": 3, "port": "3-1.1", "speed": 12},
          "in": {"channels": 8, "fs_load": 720}, "out": {"channels": 2, "fs_load": 183}},
         mixer, {"identity": "local-dac", "card": "dac", "name": "pHAT DAC", "local": True, "out": {"channels": 2}},
-        {"identity": "usb-host", "name": "USB host", "virtual": True}], "usb_buses": buses}
+        {"identity": "usb-host", "name": "USB host", "virtual": True}], "usb_ports": ports}
+
+
+def usb_groups_keys(st):
+    return [key for key, _, _ in display.usb_groups(st)]
 
 
 def usb_screen(st):
@@ -585,47 +593,47 @@ def usb_screen(st):
     return u
 
 
-def test_usb_ports_is_a_status_item_and_groups_devices_by_bus():
-    st = usb_status(mixer_bus=1)
+def test_usb_ports_is_a_status_item_and_groups_devices_by_root_port():
+    st = usb_status(mixer_port="1-2")
     u = usb_screen(st)
     assert [r.rstrip() for r in text(u, st)[:7]] == [
-        "USB ports", "Bus 1  FS 388/1099", ">p1 Guitar Rig   480M", " p2 Mixer         12M",
-        "Bus 3  FS 903/1099", " p1 Tracker       12M", ""]
+        "USB ports", "Port 1-1  FS 0/1099", ">p1 Guitar Rig   480M", "Port 1-2  FS 388/1099", " p2 Mixer         12M",
+        "Port 3-1  FS 903/1099", " p1.1 Tracker     12M"]
     assert all(len(r.text) == display.COLS for r in u.render(st))
-    # only the devices can be selected, not the bus headers
+    # only the devices can be selected, not the port headers
     press(u, st, "cw", "cw")
-    assert text(u, st)[5].startswith(">p1 Tracker") and text(u, st)[4].startswith("Bus 3")
+    assert text(u, st)[6].startswith(">p1.1 Tracker") and text(u, st)[5].startswith("Port 3-1")
     press(u, st, "cw", "cw")
-    assert text(u, st)[5].startswith(">p1 Tracker")
+    assert text(u, st)[6].startswith(">p1.1 Tracker")
 
 
-def test_usb_ports_marks_a_bus_out_of_budget_and_the_device_refused_for_it():
-    st = usb_status(mixer_bus=3)
+def test_usb_ports_marks_a_port_out_of_budget_and_the_device_refused_for_it():
+    st = usb_status()
     u = usb_screen(st)
     rows = text(u, st)
-    assert rows[1].rstrip() == "Bus 1  FS 0/1099"        # no mark where there is room
-    assert rows[3].rstrip() == "Bus 3  FS 1099/1099!"
-    assert rows[5].startswith(" p2!Mixer") and rows[4].startswith(" p1 Tracker")
-    # a bus whose load fits but a bridge still waits is marked too, and one exactly at budget
-    st["usb_buses"][1].update(fs_load=903)
-    assert text(u, st)[3].rstrip() == "Bus 3  FS 903/1099!"
-    st["usb_buses"][1].update(fs_load=1099, fs_demand=1099)
-    assert text(u, st)[3].rstrip() == "Bus 3  FS 1099/1099!"
-    st["usb_buses"][1].update(fs_load=903, fs_demand=903)
-    assert text(u, st)[3].rstrip() == "Bus 3  FS 903/1099"
+    assert rows[1].rstrip() == "Port 1-1  FS 0/1099"        # no mark where there is room
+    assert rows[3].rstrip() == "3-1  FS 1099/1099!"           # "Port" gives way to the mark
+    assert rows[5].startswith(" p1.2!Mixer") and rows[4].startswith(" p1.1 Tracker")
+    # a port whose load fits but a bridge still waits is marked too, and one exactly at budget
+    st["usb_ports"][1].update(fs_load=903)
+    assert text(u, st)[3].rstrip() == "Port 3-1 FS 903/1099!"     # one space less first
+    st["usb_ports"][1].update(fs_load=1099, fs_demand=1099)
+    assert text(u, st)[3].rstrip() == "3-1  FS 1099/1099!"
+    st["usb_ports"][1].update(fs_load=903, fs_demand=903)
+    assert text(u, st)[3].rstrip() == "Port 3-1  FS 903/1099"
 
 
 def test_usb_ports_detail_says_why_a_direction_was_refused_and_what_moving_does():
-    st = usb_status(mixer_bus=3)
+    st = usb_status()
     u = usb_screen(st)
     press(u, st, "cw", "cw", "confirm")
     lines = [r.strip("> ") for r in text(u, st)]
     assert lines[0] == "Mixer" and lines[1] == "OUT refused:"
     assert "needs 192 B," in lines[3]
     details = [t for t, _ in u.screen.items(u, st, 0)]
-    assert details[1:5] == ["USB full-speed", "budget: needs 192 B,", "0 B of 1099 B free", "on bus 3"]
-    assert details[5:] == ["Bus 3 port 2", "Path: 3-2", "Speed: 12 Mbit/s", "FS In: 196 B", "FS Out: 192 B",
-                           "Bus FS: 1099/1099 B", "ID:", "usb-3-2-08bb:2902", "No serial: ID is port",
+    assert details[1:5] == ["USB full-speed", "budget: needs 192 B,", "0 B of 1099 B free", "on port 3-1"]
+    assert details[5:] == ["Bus 3 port 1.2", "Path: 3-1.2", "Speed: 12 Mbit/s", "FS In: 196 B", "FS Out: 192 B",
+                           "Port FS: 1099/1099 B", "ID:", "usb-3-1.2-08bb:2902", "No serial: ID is port",
                            "Moved = routes lost"]
     # a device with a serial number keeps its identity on any port; a fast one takes no full-speed budget
     st["devices"][0]["usb"]["by_port"] = False
@@ -639,25 +647,27 @@ def test_usb_ports_detail_says_why_a_direction_was_refused_and_what_moving_does(
 
 
 def test_usb_ports_uses_labels_scrolls_and_survives_missing_fields():
-    st = usb_status(mixer_bus=1)
+    st = usb_status(mixer_port="1-2")
     st["devices"][0]["usb"]["label"] = "top blue"
-    st["devices"][2]["usb"] = {"port": "1-2"}                   # no bus, no speed
-    st["devices"][1]["usb"] = {"bus": 3, "port": "3-1", "speed": "x"}
-    del st["usb_buses"][0]["fs_load"]
+    st["devices"][2]["usb"] = {"bus": 1}                          # no port path, no speed
+    st["devices"][1]["usb"] = {"bus": 3, "port": "3-1.1", "speed": "x"}
+    st["devices"].append({"identity": "usb-y", "card": "y", "name": "Y", "usb": {"speed": 12}})   # nothing known
+    del st["usb_ports"][0]["fs_load"]
     u = usb_screen(st)
     rows = [r.rstrip() for r in text(u, st)]
-    assert rows[1:7] == ["Bus 1  FS ?", ">top blue Guitar 480M", "Bus 3  FS 903/1099", " p1 Tracker         ?",
-                         "Bus ?  FS ?", " p2 Mixer           ?"]
-    st["usb_buses"][1]["fs_budget"] = 0                          # the check is off: nothing can be over it
-    assert text(u, st)[3].rstrip() == "Bus 3  FS 903/off"
-    # more devices than rows: the cursor stays in view with its bus header, and the title counts lines
+    assert rows[1:7] == ["Bus 1  FS ?", ">p? Mixer           ?", "Port 1-1  FS ?", " top blue Guitar 480M",
+                         "Port 3-1  FS 903/1099", " p1.1 Tracker       ?"]
+    assert usb_groups_keys(st) == ["1", "1-1", "3-1", None]   # the one with nothing known goes last
+    st["usb_ports"][2]["fs_budget"] = 0                          # the check is off: nothing can be over it
+    assert text(u, st)[5].rstrip() == "Port 3-1  FS 903/off"
+    # more devices than rows: the cursor stays in view with its port header, and the title counts lines
     for k in range(6):
         st["devices"].append({"identity": f"usb-x{k}", "card": f"x{k}", "name": f"X{k}",
-                              "usb": {"bus": 1, "port": f"1-{k + 3}", "speed": 12}})
+                              "usb": {"bus": 1, "port": f"1-1.{k + 3}", "speed": 12}})
     press(u, st, *("cw",) * 9)
     rows = u.render(st)
     assert any(r.selected for r in rows) and rows[0].scroll[1] > rows[0].scroll[2]
-    st["devices"], st["usb_buses"] = [], []
+    st["devices"], st["usb_ports"] = [], []
     assert text(u, st)[1].strip() == "No USB audio devices"
     assert u.handle("confirm", st, 0) == [] and u.screen.title == "USB ports"
 

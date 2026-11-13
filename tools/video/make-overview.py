@@ -50,23 +50,25 @@ def render_usb_ports(mixer_bus):
     import render
     import sh1106
     import ui
-    mixer = {"identity": "usb-1-2-0000:0001", "card": "CODEC", "name": "Mixer",
+    mixer = {"identity": f"usb-{mixer_bus}-2-0000:0001", "card": "CODEC", "name": "Mixer",
              "usb": {"bus": mixer_bus, "port": f"{mixer_bus}-2", "speed": 12, "by_port": True},
              "in": {"channels": 2, "fs_load": 196}, "out": {"channels": 2, "fs_load": 192}}
-    if mixer_bus == 3:
-        mixer["out"]["blocked"] = "USB full-speed budget: needs 192 B, 0 B of 1099 B free on bus 3"
-        buses = [{"bus": 1, "fs_load": 0, "fs_demand": 0, "fs_budget": 1099},
-                 {"bus": 3, "fs_load": 1099, "fs_demand": 1291, "fs_budget": 1099}]
+    tracker = {"identity": "usb-3-1-0000:0003", "card": "Tracker", "name": "Tracker",
+               "usb": {"bus": 3, "port": "3-1", "speed": 12}, "in": {"channels": 8, "fs_load": 720},
+               "out": {"channels": 2, "fs_load": 183}}
+    if mixer_bus == 3:   # the mixer behind the same hub as the tracker: they share one root port's budget
+        mixer["usb"]["port"], tracker["usb"]["port"] = "3-1.2", "3-1.1"
+        mixer["out"]["blocked"] = "USB full-speed budget: needs 192 B, 0 B of 1099 B free on port 3-1"
+        ports = [{"port": "1-1", "bus": 1, "fs_load": 0, "fs_demand": 0, "fs_budget": 1099},
+                 {"port": "3-1", "bus": 3, "fs_load": 1099, "fs_demand": 1291, "fs_budget": 1099}]
     else:
-        buses = [{"bus": 1, "fs_load": 388, "fs_demand": 388, "fs_budget": 1099},
-                 {"bus": 3, "fs_load": 903, "fs_demand": 903, "fs_budget": 1099}]
-    status = {"usb_buses": buses, "devices": [
+        ports = [{"port": "1-1", "bus": 1, "fs_load": 0, "fs_demand": 0, "fs_budget": 1099},
+                 {"port": "1-2", "bus": 1, "fs_load": 388, "fs_demand": 388, "fs_budget": 1099},
+                 {"port": "3-1", "bus": 3, "fs_load": 903, "fs_demand": 903, "fs_budget": 1099}]
+    status = {"usb_ports": ports, "devices": [
         {"identity": "usb-1-1-0000:0002", "card": "GP150", "name": "Guitar Rig",
          "usb": {"bus": 1, "port": "1-1", "speed": 480}},
-        {"identity": "usb-3-1-0000:0003", "card": "Tracker", "name": "Tracker",
-         "usb": {"bus": 3, "port": "3-1", "speed": 12}, "in": {"channels": 8, "fs_load": 720},
-         "out": {"channels": 2, "fs_load": 183}},
-        mixer]}
+        tracker, mixer]}
     interface = ui.UI()
     interface.stack = [ui.USBPorts()]
     interface.hardware = {"wifi": {"state": "up", "signal": 88, "name": "Studio", "ip": "192.0.2.10"},

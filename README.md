@@ -86,7 +86,7 @@ The Pi 4's USB-A ports share one controller with a limited budget for periodic (
 | Full-speed, stereo (cheap USB sound cards, mixers with a PCM2902) | about 200–400 bytes per frame | About one medium device fits on a Pi 4 |
 | Full-speed with many channels (e.g. a Tracker in "10 OUT / 2 IN") | over 1000 bytes | Does not fit next to anything else |
 
-`rpi-audiod` works out each full-speed device's load before opening it. If it does not fit, the device waits and `rpi-audiod status` says why. Details are in `docs/PLAN.md`.
+`rpi-audiod` works out each full-speed device's load before opening it, and counts the budget per **root port**: the port on the Pi a device is plugged into, with everything behind a hub on that port sharing it. If a device does not fit, it waits and `rpi-audiod status` says why. Details are in `docs/PLAN.md`.
 
 The same controller (a VIA VL805) also **drops packets from full-speed multichannel inputs**. It happens whenever a packet exactly fills the buffer the controller was given for it: a Tracker sending 8 channels lost about one packet in 150. On a Pi 4, `install.sh` therefore installs a small kernel module, `fs_isoc_pad` (`tools/kernel/fs-isoc-pad/`). It adds one byte to the maximum packet size the host uses for those inputs.
 - **What changes:** each card behind the VL805 disappears and comes back once when it is plugged in.
@@ -95,7 +95,7 @@ The same controller (a VIA VL805) also **drops packets from full-speed multichan
 
 Details are in `docs/hw/2026-11-04-pi-usb-host.md`.
 
-The **Pi 5** has no VL805: its USB-A ports hang off two USB host controllers in its RP1 chip, and `rpi-audiod` counts the budget separately for each. The 1099-byte figure was measured on the Pi 4 and has not been checked on a Pi 5. `install.sh` does not install `fs_isoc_pad` there.
+The **Pi 5** has no VL805: its USB-A ports hang off two USB host controllers in its RP1 chip, with no hub in between, so each port gets its own budget. A Tracker sending 8 channels (720 bytes) and a stereo mixer (388 bytes) on two ports of the same controller ran for 60 seconds without a single bad packet [Pi]. On the Pi 4 the budget was shared, because all its ports sit behind one internal hub. The 1099-byte figure per port was measured on the Pi 4 and has not been checked on a Pi 5. `install.sh` does not install `fs_isoc_pad` there.
 
 ## Install on the Pi
 

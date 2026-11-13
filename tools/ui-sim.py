@@ -67,11 +67,13 @@ class Service:
                     entry[side] = {"channels": channels, "muted": identity in self.state.get("mute", {}).get(side, []),
                                    "level": self.state.get("volume", {}).get(side, {}).get(identity)}
             devices.append(entry)
-        buses = {}
+        fs_ports = {}
         for identity, *_ in self.devices:
             if identity in USB:
-                bus, _, _, load_in, load_out = USB[identity]
-                found = buses.setdefault(bus, {"bus": bus, "fs_load": 0, "fs_demand": 0, "fs_budget": 1099})
+                bus, path, _, load_in, load_out = USB[identity]
+                root = display.usb_root_port({"bus": bus, "port": path})
+                found = fs_ports.setdefault(root, {"port": root, "bus": bus, "fs_load": 0, "fs_demand": 0,
+                                                   "fs_budget": 1099})
                 found["fs_load"] += load_in + load_out
                 found["fs_demand"] += load_in + load_out
         routes = [{**routing.entry(r), "waiting": None if {r.src, r.dst} <= present else "not here"}
@@ -79,7 +81,7 @@ class Service:
         ports = [{"identity": i, "port": port, "name": name, "in": sends, "out": gets}
                  for i, name, port, sends, gets in MIDI_PORTS]
         links = [{**midiroute.entry(k), "waiting": None} for k in midiroute.from_state(self.state)]
-        return {"devices": devices, "usb_buses": [buses[b] for b in sorted(buses)],
+        return {"devices": devices, "usb_ports": [fs_ports[k] for k in sorted(fs_ports, key=display.usb_order)],
                 "presets": presets.summary(self.store), "midi_ports": ports,
                 **({"routes": routes} if routes else {}), **({"midi_routes": links} if links else {})}
 

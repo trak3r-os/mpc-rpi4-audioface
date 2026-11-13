@@ -34,7 +34,7 @@ the device-to-device routes (docs/MIDI.md). The gadget and its slots are not tou
 
 Gadget channels are sticky per device identity (/var/lib/rpi-audio/slots.json, which also holds
 the names); presets are in presets.json next to it. A full-speed
-device is only bridged while its isochronous load fits [usb] fs_budget on its bus. Settings:
+device is only bridged while its isochronous load fits [usb] fs_budget on its root port. Settings:
 /etc/rpi-audio/rpi-audio.toml, then /etc/rpi-audio/rpi-audio.d/*.toml; optional per-device
 profiles in /etc/rpi-audio/devices.d/*.toml (config/devices.d/); the gadget's own
 come from the GADGET_* environment, or from gadget.env.
@@ -464,6 +464,11 @@ class Device:
         self.kept = {d: audiod.kept_channels(p[1], profile.get("ignore", d) if profile else ()) if p else []
                      for d, p in plans.items()}   # the device channels that get a gadget slot
 
+    @property
+    def fs_port(self):
+        """The root port whose full-speed budget the device takes from (usb.root_port())."""
+        return usb.root_port(self.port, self.bus)
+
 
 def usb_dir(card):
     """sysfs directory of the USB device a sound card hangs off, "" when there is none."""
@@ -565,14 +570,14 @@ class Bridge:
 
     def check_budget(self, used, budget):
         """True when zita may start; otherwise records why, logging when that starts or ends."""
-        why = usb.budget_reason(self.load, used, budget, self.dev.bus)
+        why = usb.budget_reason(self.load, used, budget, self.dev.fs_port)
         if bool(why) != bool(self.blocked):
             log(f"rpi-audiod: {self.client} " + (f"waits, {why}" if why else "has USB budget again, starting"))
         self.blocked = why
         return why is None
 
     def tick(self, cfg, now, used=0, budget=0):
-        """used: full-speed B per frame the other running bridges take on this device's bus."""
+        """used: full-speed B per frame the other running bridges take on this device's root port."""
         if self.child and not self.child.alive():
             lived = now - self.child.started
             log(f"rpi-audiod: {self.client} exited after {lived:.1f} s (code {self.child.proc.returncode})")
@@ -1269,27 +1274,31 @@ class Daemon:
         if changed or slots_stamp() != self.slots_stamp:
             self.reassign()
 
-    def bus_used(self, bridge):
-        """Full-speed B per frame the other bridges hold on this bridge's USB bus: running, or waiting to restart
-        after a crash, so a bridge that was blocked behind one does not take its place in the meantime."""
+    def port_used(self, bridge):
+        """Full-speed B per frame the other bridges hold on this bridge's root port: running, or waiting to
+        restart after a crash, so a bridge that was blocked behind one does not take its place in the meantime."""
         return sum(b.load for b in self.bridges.values()
-                   if b is not bridge and b.dev.bus == bridge.dev.bus and b.holding)
+                   if b is not bridge and b.dev.fs_port == bridge.dev.fs_port and b.holding)
 
-    def usb_buses(self):
-        """[{bus, fs_load, fs_demand, fs_budget}] for each USB bus with an audio device: fs_load is what
-        bus_used() counts there (bridges holding their share), fs_demand what every bridge of that bus
-        would take, so a bridge held back for the budget shows as demand above the load."""
+    def usb_ports(self):
+        """[{port, bus, fs_load, fs_demand, fs_budget}] for each root port with an audio device (port "1-2",
+        or only the bus "3" when sysfs did not give the path): fs_load is what port_used() counts there
+        (bridges holding their share), fs_demand what every bridge there would take, so a bridge held
+        back for the budget shows as demand above the load."""
         found = {}
         for dev in self.devices.values():
-            bus = usb.bus_number(dev.bus)
-            if bus is not None:
-                found.setdefault(bus, {"bus": bus, "fs_load": 0, "fs_demand": 0, "fs_budget": self.fs_budget})
+            port = dev.fs_port
+            if port:
+                entry = found.setdefault(port, {"port": port, "fs_load": 0, "fs_demand": 0,
+                                                "fs_budget": self.fs_budget})
+                if usb.bus_number(dev.bus) is not None:
+                    entry["bus"] = usb.bus_number(dev.bus)
         for b in self.bridges.values():
-            entry = found.get(usb.bus_number(b.dev.bus))
+            entry = found.get(b.dev.fs_port)
             if entry:
                 entry["fs_demand"] += b.load
                 entry["fs_load"] += b.load if b.holding else 0
-        return [found[bus] for bus in sorted(found)]
+        return [found[k] for k in sorted(found, key=usb.port_order)]
 
     def usb_entry(self, dev, labels):
         """What status.json says of where a device is plugged in; fields that are not known are left out."""
@@ -1683,7 +1692,7 @@ class Daemon:
                 "usb_latency": usb_latency(load_slots()),
                 "host_profile_details": host_summary(self.cfg, hosts),
                 "host_profile_selection": load_slots().get("host_profile"),
-                "outputs": self.output_status(), "devices": devices, "usb_buses": self.usb_buses(),
+                "outputs": self.output_status(), "devices": devices, "usb_ports": self.usb_ports(),
                 "presets": presets.summary(load_presets()),
                 "midi": self.midi.status() if self.midi else None,
                 **({"routes": [{**routing.entry(r), "waiting": why or None} for r, why in self.route_state.items()]}
@@ -1773,7 +1782,7 @@ class Daemon:
                     if b.child and not b.child.alive():
                         self.note('bridge_failures', f'{b.client}: bridge exited', severity='warning')
                     was_blocked = bool(b.blocked)
-                    b.tick(self.cfg, now, self.bus_used(b), self.fs_budget)
+                    b.tick(self.cfg, now, self.port_used(b), self.fs_budget)
                     if b.blocked and not was_blocked:
                         self.note('bandwidth_blocks', f'{b.client}: {b.blocked}', severity='warning')
                 if now >= self.next_routes:
