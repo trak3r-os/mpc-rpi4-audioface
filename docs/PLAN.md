@@ -202,6 +202,8 @@ Consecuencias:
   - páginas de 16 KiB: el periodo del gadget es 4 veces mayor (16 ch en S32 → 256 frames; 26 ch → 128);
   - una CPU unas 2–3 veces más rápida para los remuestreadores.
 
+  **Pi 5, 2026-11-13 [Pi]:** el Tracker a 8 canales (720 B) y el mezclador en dúplex (388 B), en los dos puertos raíz del mismo controlador del RP1 (bus 1), suman 1108 B y van 60 s sin un paquete malo. El presupuesto por bus los rechazaba. [ext] Un xHCI planifica cada puerto raíz por separado, y en la Pi 4 todo iba detrás del hub interno del VL805, en un solo puerto raíz. Desde `2ba1f27`, `rpi-audiod` cuenta el presupuesto **por puerto raíz**: todo lo que cuelga de un hub en ese puerto lo comparte. Sigue sin medirse el límite de un puerto del RP1; se mantiene 1099 B.
+
   Hay que verificarlo en F2b: el modo gadget en su USB-C, el presupuesto FS de cada controlador y la alimentación (con una fuente que no sea de 5 A, la Pi 5 limita los USB a 600 mA salvo con `usb_max_current_enable=1`; el hub alimentado lo resuelve). **El código no depende del modelo**: F1 y F2 siguen en la Pi 4.
 
 ### Ejemplo de reparto con tus dispositivos

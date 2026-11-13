@@ -1,4 +1,18 @@
-# Estado: 2026-11-11
+# Estado: 2026-11-13
+
+## Actualización del 13 de noviembre: pruebas de rendimiento con ventilador
+
+- [Pi] **La Pi 5 tiene ventilador.** Soak de 62 min con la Force, el puente nativo (1,5 ms), el Tracker a 8 canales y el mezclador en dúplex: **49–53 °C** (antes, 72–81 °C), sin recorte de frecuencia, **0 xruns, 0 resyncs** y 0 errores en 60 s de usbmon. MPC no cerró el stream (visto desde la Pi). Queda hecho el soak pendiente del puente nativo con la Force.
+- [Pi] 10 min con los 4 núcleos cargados (CPU y copias de memoria, `nice 19`): máximo 67,5 °C, 0 xruns, 0 resyncs; el retraso dentro del ciclo llega a 734 µs de 2,7 ms.
+- [Pi, código] **Arreglado: presupuesto USB por puerto raíz, no por bus** (`2ba1f27`, desplegado). En la Pi 5 el mezclador y el Tracker están en los dos puertos raíz del mismo controlador del RP1. Sumaban 1108 B en el bus 1 y el Tracker se quedaba esperando, aunque el RP1 los lleva sin un paquete malo. `status.json` pasa de `usb_buses` a `usb_ports`.
+- [Pi] Los ajustes de periodo de esta Pi van ahora en `/etc/rpi-audio/rpi-audio.d/10-local-tuning.toml`, que `deploy.sh` no sobrescribe.
+- [Pi] Pruebas cortas de latencia: jackd del pHAT a 64×3 da 0 xruns en 3 min (sin ventilador, +8 en 2 min). El margen del puente a 0,75 ms da 0 resyncs en 10,5 min con la Force. Falta un soak de cada uno; la Pi queda en 128×3 y 1,5 ms.
+- [?] Abierto: algunos reinicios de `rpi-audiod` dan 1–2 resyncs, y una vez 2 xruns, a los ~10 s de arrancar (3 de 6). Solo pasa al arrancar.
+- La suite pasa entera con Python 3.12: 541 pasan, 13 se saltan.
+- La Pi queda en Hub con el puente nativo (`rpi-audio.d/zz-force-test.toml`), margen 1,5 ms, jackd 128×3 y puentes de dispositivo 64×2.
+- **Falta:** la vista de MPC (sin `FORCE_PASS` en esta sesión); medir latencia con la Force; decidir si el puente nativo pasa a ser el de por defecto.
+
+[Sesión](hw/2026-11-13-perf-fan.md).
 
 ## Actualización del 11 de noviembre (tarde): puente nativo medido con el portátil, y F5
 
