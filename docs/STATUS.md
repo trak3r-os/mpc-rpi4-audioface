@@ -1,4 +1,10 @@
-# Estado: 2026-11-13
+# Estado: 2026-11-14
+
+## Actualización del 14 de noviembre: el puente nativo, por defecto
+
+- [código] `[usb] host_bridge` vale `"native"` por defecto (`6660350`): en Hub, el gadget se puentea con `rpi-audio-hostbridge`. `host_bridge = "zita"` vuelve a zita, y zita se sigue usando si el programa no está compilado. Tests nuevos de las dos cosas; la suite pasa (543, Python 3.12).
+- [Pi] Desplegado. Se quitó `rpi-audio.d/zz-force-test.toml`, que forzaba el nativo: el `rpi-audiod` instalado elige `native` por defecto, el puente se compiló y no hay avisos de vuelta a zita.
+- **Sin ver todavía:** el puente nativo en marcha con esta configuración. La Force no transmitía al desplegar (gadget `waiting`, `Capture Rate` 0). Al volver a conectarla, `rpi-audiod status` debe mostrar «native bridge running» en los dos sentidos.
 
 ## Actualización del 13 de noviembre: pruebas de rendimiento con ventilador
 
