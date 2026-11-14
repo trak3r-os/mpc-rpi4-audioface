@@ -63,16 +63,17 @@ reserve_in = []
 reserve_out = [1, 2]
 
 [usb]
-# Frames per period of the bridges to the USB host (4 periods each way, 32-256). Smaller is
-# lower latency: 256 -> 128 -> 64 measured 65 -> 47 -> 39 ms host round trip through the Pi 5
-# with a laptop host (docs/hw/2026-11-07-pi5-migration.md).
+# Frames per period of the zita bridges to the USB host (host_bridge = "zita" below; 4 periods
+# each way, 32-256). Smaller is lower latency: 256 -> 128 -> 64 measured 65 -> 47 -> 39 ms host
+# round trip through the Pi 5 with a laptop host (docs/hw/2026-11-07-pi5-migration.md).
 # host_period = 256
-# What bridges the gadget to JACK in hub mode. "zita" (the default): zita-a2j / zita-j2a, which
-# host_period above sizes. "native": rpi-audio-hostbridge, which works inside JACK's callback on
-# the gadget's buffer in place, with no thread or queue of its own. Each direction then adds
-# host_margin_ms plus the filter (host_quality frames, 0.7 ms at 32) instead of zita's ~5 ms.
-# Not measured against a host yet; if its program is missing, zita is used.
-# host_bridge = "zita"
+# What bridges the gadget to JACK in hub mode. "native" (the default): rpi-audio-hostbridge, which
+# works inside JACK's callback on the gadget's buffer in place, with no thread or queue of its own.
+# Each direction adds host_margin_ms plus the filter (host_quality frames, 0.7 ms at 32) instead
+# of zita's ~5 ms: 5-6 ms less round trip than zita with a laptop host, and a 62-minute soak with
+# a host without a resync (docs/hw/2026-11-13-perf-fan.md). "zita": zita-a2j / zita-j2a, which
+# host_period above sizes; also used when rpi-audio-hostbridge is not built.
+# host_bridge = "native"
 # Native bridge: the audio kept buffered per direction, in ms (0.25-20). It has to cover how
 # late in a cycle the bridge runs: `rpi-audiod status` shows the buffer's min/avg/max and the
 # resyncs (the times it ran out). Lower it while the minimum stays well above 0.
@@ -80,12 +81,13 @@ reserve_out = [1, 2]
 # Native bridge: half the resampling filter's length in frames (8-96). 32 is ~86 dB of
 # stopband; 24 is ~67 dB and 0.2 ms less per direction; 16 is ~47 dB.
 # host_quality = 32
-# The most periodic (isochronous) full-speed bytes per frame one USB bus takes. A full-speed
-# device direction whose load does not fit what the running bridges leave is not started
-# (it waits, with the reason in `rpi-audiod status`) until another device leaves.
-# High-speed devices cost nothing. 1099 is what the Pi 4's VL805 accepted
-# (docs/hw/2026-10-29-f2-usb-devices.md); a Pi 5 has two buses, each with its own budget,
-# not measured yet. 0 turns the check off.
+# The most periodic (isochronous) full-speed bytes per frame one USB root port takes, shared by
+# everything behind a hub on it. A full-speed device direction whose load does not fit what the
+# running bridges leave is not started (it waits, with the reason in `rpi-audiod status`) until
+# another device leaves. High-speed devices cost nothing. 1099 is what the Pi 4's VL805 accepted
+# behind its internal hub (docs/hw/2026-10-29-f2-usb-devices.md); a Pi 5's root port is not
+# measured, but two of them on one controller carried 1108 B (docs/hw/2026-11-13-perf-fan.md).
+# 0 turns the check off.
 fs_budget = 1099
 # Optional short names for the USB ports, shown on the display's "USB ports" screen in place
 # of "p2". The key is the sysfs port path: the USB port of the device under /sys/bus/usb/devices

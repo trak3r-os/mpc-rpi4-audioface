@@ -9,7 +9,7 @@ El modo `hub` usa el pHAT como reloj local a 48 kHz. El grafo JACK continúa aun
 | Destino | Adaptador | Estado |
 |---|---|---|
 | pHAT DAC | Puertos JACK `system:playback_N` | Salida local del motor Hub/Standalone |
-| Host USB | `zita-j2a`; retorno independiente `zita-a2j`. Opcional: `rpi-audio-hostbridge` (`[usb] host_bridge = "native"`) | Puentes por sentido y frecuencia del gadget; conservan su número de canales |
+| Host USB | `rpi-audio-hostbridge`, un proceso por sentido. Opcional: `zita-j2a` y retorno `zita-a2j` (`[usb] host_bridge = "zita"`) | Puentes por sentido y frecuencia del gadget; conservan su número de canales |
 | Network RTP | Adaptador nativo JACK → RTP L16 estéreo | Envío UDP, RTCP y descripción SDP; desactivado inicialmente |
 | Link Audio | Adaptador nativo con SDK oficial Ableton Link 4.1.1 fijado por commit | Envío estéreo con descubrimiento y suscripción; desactivado inicialmente |
 
@@ -21,11 +21,11 @@ La primera entrada en Hub convierte una sola vez los mapas USB guardados en ruta
 
 Las escenas nuevas guardan mapas de canales, nombres, rutas, niveles, mute y activación de salidas. Las escenas antiguas sin nombres conservan los actuales. Los perfiles de host pueden guardar solo reservas, una copia completa independiente o un vínculo a una escena; los perfiles de usuario se conservan en hosts.json y los usuarios del grupo audio pueden editarlos sin root. El modo de motor y los parámetros de transporte no cambian al cargar una escena.
 
-## Puente nativo del gadget (opcional)
+## Puente nativo del gadget (por defecto)
 
-Medido con un portátil como host, sin probar con la Force. Con el margen por defecto, la parte de la Pi en el viaje de ida y vuelta es unos 5–6 ms menor que con zita, y el puente usa unas 4 veces menos CPU. Detalle en [hw/2026-11-11-native-bridge.md](hw/2026-11-11-native-bridge.md).
+Por defecto desde el 2026-11-14. Con un portátil como host y el margen por defecto, la parte de la Pi en el viaje de ida y vuelta es unos 5–6 ms menor que con zita, y el puente usa unas 4 veces menos CPU ([hw/2026-11-11-native-bridge.md](hw/2026-11-11-native-bridge.md)). Con la Force: 62 min de soak y 10 min con los 4 núcleos cargados, sin un resync ([hw/2026-11-13-perf-fan.md](hw/2026-11-13-perf-fan.md)).
 
-`[usb] host_bridge = "native"` sustituye en Hub los dos zita del gadget por `rpi-audio-hostbridge` (`bridge/audio/hostbridge.c`, núcleo sin hardware en `hostbridge_core.h`), un proceso por sentido con los mismos clientes y puertos (`usb_host_in:capture_N`, `usb_host_out:playback_N`). Por defecto sigue `zita`; si el programa no está compilado, también.
+En Hub, el gadget se puentea con `rpi-audio-hostbridge` (`bridge/audio/hostbridge.c`, núcleo sin hardware en `hostbridge_core.h`), un proceso por sentido con los clientes y puertos `usb_host_in:capture_N` y `usb_host_out:playback_N`. `[usb] host_bridge = "zita"` vuelve a los dos zita, con los mismos clientes y puertos; también se usan si el programa no está compilado.
 
 - **Sin hilo ni cola propios.** Todo ocurre en la callback de tiempo real de JACK: lee o escribe el buffer ALSA del gadget en su sitio (mmap, sin bloquear) y remuestrea entre el reloj del host y el local. El único buffer es el de ALSA, mantenido en `host_margin_ms` (1,5 ms por defecto) ajustando la relación del remuestreador con un lazo PI de 0,1 Hz.
 - **Retardo añadido por sentido:** el margen más el filtro (`host_quality` tramas; 32 = 0,7 ms y ~86 dB), además del periodo de JACK. zita añade ~5 ms por sentido (periodo ALSA + periodo JACK + filtro, y 4 periodos en reproducción).

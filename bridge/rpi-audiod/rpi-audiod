@@ -4,8 +4,8 @@
 
 While the host streams both ways, it runs jackd on the gadget (mode A) and, for every USB
 audio card, a zita-a2j / zita-j2a bridge per direction, connected to that device's gadget
-channels. In hub mode the gadget itself is bridged the same way, or by rpi-audio-hostbridge
-([usb] host_bridge = "native": lower latency, bridge/audio/hostbridge.c). While the host only
+channels. In hub mode the gadget itself is bridged by rpi-audio-hostbridge (bridge/audio/hostbridge.c,
+lower latency), or by zita like the devices with [usb] host_bridge = "zita". While the host only
 records from the Pi, it plays silence instead: some hosts drop the gadget when nothing plays
 into it (docs/hw/2026-10-29-f1-force.md). When the gadget has USB MIDI ports, every MIDI port
 of a USB device gets one of them, and the control port takes the commands below from the host too (docs/MIDI.md).
@@ -913,10 +913,10 @@ class Daemon:
             log(f"rpi-audiod: [usb] host_period {cfg['usb']['host_period']!r} is not a number; using 256")
             self.host_period = 256
         # Hub: what bridges the gadget to JACK. "native" is rpi-audio-hostbridge (bridge/audio/hostbridge.c).
-        self.host_bridge = cfg["usb"].get("host_bridge", "zita")
+        self.host_bridge = cfg["usb"].get("host_bridge", "native")
         if self.host_bridge not in ("zita", "native"):
-            log(f"rpi-audiod: [usb] host_bridge {self.host_bridge!r} is not zita or native; using zita")
-            self.host_bridge = "zita"
+            log(f"rpi-audiod: [usb] host_bridge {self.host_bridge!r} is not zita or native; using native")
+            self.host_bridge = "native"
         self.host_bridge_missing = False   # native asked for, helper not built: said once
         self.host_margin_us = self.usb_number("host_margin_ms", 1.5, 0.25, 20.0, lambda v: round(v * 1000))
         self.host_quality = self.usb_number("host_quality", 32, 8, 96, int)

@@ -407,7 +407,7 @@ if ((!staging)); then
   chmod 755 "$LIB/audio/rpi-audio-gain.new"
   mv -f "$LIB/audio/rpi-audio-gain.new" "$LIB/audio/rpi-audio-gain"
 fi
-# The hub's native bridge to the gadget ([usb] host_bridge = "native"). -O3: its filter loop is vectorised.
+# The hub's native bridge to the gadget, the default ([usb] host_bridge). -O3: its filter loop is vectorised.
 install -m 644 "$here"/bridge/audio/{hostbridge.c,hostbridge_core.h} "$LIB/audio/"
 if ((!staging)); then
   cc -O3 -std=c11 -Wall -Wextra -Werror "$here/bridge/audio/hostbridge.c" -lasound -ljack -lm -o "$LIB/audio/rpi-audio-hostbridge.new"

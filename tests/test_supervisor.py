@@ -1520,6 +1520,28 @@ def test_replies_fall_back_to_aplaymidi(monkeypatch, tmp_path):
     assert len(ran) == 2 and logged(w, "goes through aplaymidi")
 
 
+def test_hub_bridges_the_gadget_natively_by_default(monkeypatch, tmp_path):
+    w, d = make(monkeypatch, tmp_path, channels=26, engine={"mode": "hub"})
+    monkeypatch.setattr(daemon.os, "access", lambda path, mode: True)   # rpi-audio-hostbridge is built
+    cmd = d.host_bridge_command("zita-j2a", "usb_host_out", 44100)
+    assert d.host_bridge == "native" and cmd[0].endswith("audio/rpi-audio-hostbridge")
+    assert cmd[cmd.index("--client") + 1] == "usb_host_out" and cmd[cmd.index("--direction") + 1] == "playback"
+    assert cmd[cmd.index("--rate") + 1] == "44100" and cmd[cmd.index("--margin-us") + 1] == "1500"
+    cmd = d.host_bridge_command("zita-a2j", "usb_host_in", 48000)
+    assert cmd[cmd.index("--direction") + 1] == "capture"
+
+
+def test_hub_uses_zita_for_the_gadget_when_asked_or_when_the_native_bridge_is_not_built(monkeypatch, tmp_path):
+    w, d = make(monkeypatch, tmp_path, channels=26, engine={"mode": "hub"}, usb={"host_bridge": "zita"})
+    monkeypatch.setattr(daemon.os, "access", lambda path, mode: True)
+    assert d.host_bridge_command("zita-a2j", "usb_host_in", 44100)[:3] == ["zita-a2j", "-j", "usb_host_in"]
+    d.host_bridge = "native"
+    monkeypatch.setattr(daemon.os, "access", lambda path, mode: False)
+    assert d.host_bridge_command("zita-j2a", "usb_host_out", 44100)[:3] == ["zita-j2a", "-j", "usb_host_out"]
+    d.host_bridge_command("zita-a2j", "usb_host_in", 44100)
+    assert len(logged(w, "is not built; using zita")) == 1
+
+
 def test_hub_keeps_local_clock_running_when_host_leaves(monkeypatch, tmp_path):
     w, d = make(monkeypatch, tmp_path, channels=26, engine={"mode": "hub"})
     w.devices = [usb_device(2, 'Keys')]
